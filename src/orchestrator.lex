@@ -84,38 +84,61 @@ fn cache_put(cache :: ArtifactCache, node_id :: Str, artifact :: Str) -> Artifac
 }
 
 # ── Node invocation ───────────────────────────────────────────────────────────
+fn max_node_retries() -> Int { 1 }
+
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+  invoke_node_attempt(n, input, cfg, 1, "")
+}
+
+fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   let agent_cfg_opt := roles.for_role(n.role, cfg.model)
   match agent_cfg_opt {
     None => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
     Some(agent_cfg) => {
-      let handler := runner.make_handler(cfg.db, agent_cfg)
-      let in_msg := msg.user_text(if str.is_empty(input) {
-        cfg.request
+      let handler  := runner.make_handler(cfg.db, agent_cfg)
+      # On retry: append the denial reason so the agent knows what to fix
+      let prompt := if str.is_empty(prior_denial) {
+        if str.is_empty(input) { cfg.request } else { input }
       } else {
-        input
-      })
-      let __ts := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\"}"], ""))
-      let outcome := handler(in_msg)
-      let output := extract_text(outcome.reply)
+        str.join([if str.is_empty(input) { cfg.request } else { input },
+          "\n\nYour previous output was rejected by the gate \"", n.gate,
+          "\" with reason: ", prior_denial,
+          "\nPlease fix your output to satisfy the gate."], "")
+      }
+      let __ts    := tr.trail(cfg.db, cfg.id, "node_started",
+        str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+      let outcome := handler(msg.user_text(prompt))
+      let output  := extract_text(outcome.reply)
+      # Producer self-check
       match evaluate_gate(n.gate, output) {
         GateDeny(reason) => {
-          let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\"}"], ""))
-          { node_id: n.id, accepted: false, artifact: "", reason: reason }
+          let __td := tr.trail(cfg.db, cfg.id, "node_denied",
+            str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+          if attempt > max_node_retries() {
+            { node_id: n.id, accepted: false, artifact: "", reason: reason }
+          } else {
+            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying",
+              str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+            invoke_node_attempt(n, input, cfg, attempt + 1, reason)
+          }
         },
-        GateAllow => match evaluate_gate(n.gate, output) {
-          GateDeny(reason) => {
-            let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
-            { node_id: n.id, accepted: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
-          },
-          GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-            Err(e) => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("artifact store failed: ", e) },
-            Ok(hash) => {
-              let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-              { node_id: n.id, accepted: true, artifact: hash, reason: "" }
+        GateAllow =>
+          # Orchestrator re-check (evaluate-at-both-ends)
+          match evaluate_gate(n.gate, output) {
+            GateDeny(reason) => {
+              let __td := tr.trail(cfg.db, cfg.id, "node_denied",
+                str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+              { node_id: n.id, accepted: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
+            },
+            GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+              Err(err) => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+              Ok(hash) => {
+                let __ta := tr.trail(cfg.db, cfg.id, "node_accepted",
+                  str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                { node_id: n.id, accepted: true, artifact: hash, reason: "" }
+              },
             },
           },
-        },
       }
     },
   }
@@ -332,6 +355,51 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
 
 # ── run_sprint ────────────────────────────────────────────────────────────────
 #
+fn max_qa_bounces() -> Int { 2 }
+
+# Run QA; if it fails, bounce back to Implementation and retry (up to max_qa_bounces).
+# Returns both the final QA result and the latest impl result (possibly updated).
+type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
+
+fn run_qa_with_bounce(
+  qa_graph   :: graph.SprintGraph,
+  impl_graph :: graph.SprintGraph,
+  impl_ref   :: Str,
+  cfg        :: SprintCfg,
+  bounce     :: Int,
+) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
+  let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
+  let qa_passed := list.fold(qa_result.outcomes, false, fn (found :: Bool, o :: NodeOutcome) -> Bool {
+    if found { true } else { o.accepted }
+  })
+  if qa_passed {
+    { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
+  } else {
+    if bounce > max_qa_bounces() {
+      # Exhausted bounces — return the failed QA result
+      { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
+    } else {
+      let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced",
+        str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
+      let __tt := tr.record_transition(cfg.db, cfg.id, "QA", "Implementation", "QaFailed")
+      # Re-run Implementation with the QA denial reason as context
+      let qa_denial := list.fold(qa_result.outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
+        if str.is_empty(acc) { o.reason } else { acc }
+      })
+      let bounce_input := str.join([
+        resolve_input(cfg.db, impl_ref),
+        "\n\nQA feedback (your previous output did not pass): ", qa_denial,
+      ], "")
+      let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
+      let new_impl_ref := match new_impl_ref_result { Ok(h) => h, Err(_) => impl_ref }
+      let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
+      let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
+      let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
+      run_qa_with_bounce(qa_graph, impl_graph, new_impl_ref2, cfg, bounce + 1)
+    }
+  }
+}
+
 # Full Intake → Design → Implementation → QA → Demo pass.
 # M3: Design produces a real SprintGraph used for all subsequent phases.
 # Re-planning: if the Architect emits a refined graph after Design, semantic
@@ -372,8 +440,11 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       } else {
         sprint_graph
       }
-      let qa_result := run_phase(qa_demo_graph, graph.QA, impl_ref, [], cfg)
-      let demo_ref := first_accepted_artifact(qa_result.outcomes)
+      # QA + bounce-back loop: if QA fails, re-run Implementation up to max_bounces times.
+      let qa_impl_result := run_qa_with_bounce(qa_demo_graph, sprint_graph, impl_ref, cfg, 1)
+      let qa_result  := qa_impl_result.qa
+      let impl_result2 := qa_impl_result.impl   # may be updated after bounce
+      let demo_ref   := first_accepted_artifact(qa_result.outcomes)
       let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
       let retro_graph := { id: str.concat(cfg.id, "-retro"), phase: graph.Retro, nodes: [{ id: "retro-scribe", role: "scribe", gate: "spec non-empty" }], edges: [] }
       let retro_result := run_phase(retro_graph, graph.Retro, demo_ref, [], cfg)
@@ -385,7 +456,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         DigestOk(d) => str.join([" Digest: ", int.to_str(list.len(d.tightened_specs)), " spec(s) tightened."], ""),
         DigestFailed(e) => str.join([" Digest failed: ", e], ""),
       }
-      let all_phases := [intake_result, impl_result, qa_result, retro_result]
+      let all_phases := [intake_result, impl_result2, qa_result, retro_result]
       let overall_ok := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
         if not ok {
           false

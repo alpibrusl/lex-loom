@@ -45,7 +45,7 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
 
 fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
-  let model := get_env("MODEL", "claude-haiku-4-5-20251001")
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
   let request := get_env("REQUEST", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
   let __p1 := io.print(str.join(["[loom] sprint=", sprint_id, " db=", db_path], ""))

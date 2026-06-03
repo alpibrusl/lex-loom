@@ -361,10 +361,30 @@ fn from_json(j :: jv.Json) -> Result[SprintGraph, Str] {
   }
 }
 
+# Strip markdown code fences that models often wrap around JSON output.
+fn strip_fences(s :: Str) -> Str {
+  let trimmed := str.trim(s)
+  let after_open := if str.starts_with(trimmed, "```json") {
+    str.trim(str.slice(trimmed, 7, str.len(trimmed)))
+  } else {
+    if str.starts_with(trimmed, "```") {
+      str.trim(str.slice(trimmed, 3, str.len(trimmed)))
+    } else {
+      trimmed
+    }
+  }
+  if str.ends_with(after_open, "```") {
+    str.trim(str.slice(after_open, 0, str.len(after_open) - 3))
+  } else {
+    after_open
+  }
+}
+
 fn from_json_str(s :: Str) -> Result[SprintGraph, Str] {
-  match jv.parse(s) {
+  let clean := strip_fences(s)
+  match jv.parse(clean) {
     Err(e) => Err(str.join(["JSON parse error at pos ", int.to_str(e.pos), ": ", e.message], "")),
-    Ok(j) => from_json(j),
+    Ok(j)  => from_json(j),
   }
 }
 

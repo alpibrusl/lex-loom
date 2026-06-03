@@ -9,6 +9,7 @@
 # M3: Architect gains graph-emit tool; roles gain lex-code worker tools.
 
 import "std.str" as str
+import "std.env" as env
 
 import "lex-llm/src/provider" as prov
 
@@ -18,8 +19,12 @@ import "lex-llm/src/tool" as t
 
 import "lex-soft/src/runner" as runner
 
+# Use OLLAMA if ANTHROPIC_API_KEY is absent; Anthropic otherwise.
 fn make_provider() -> [env] prov.Provider {
-  providers.anthropic()
+  match env.get("ANTHROPIC_API_KEY") {
+    Some(k) => if str.is_empty(k) { providers.ollama_local() } else { providers.anthropic() },
+    None    => providers.ollama_local(),
+  }
 }
 
 fn architect(model :: Str) -> [env] runner.AgentConfig {

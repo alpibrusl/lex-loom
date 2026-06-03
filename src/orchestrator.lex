@@ -25,6 +25,7 @@ import "./transport" as tr
 import "./roles"     as roles
 import "./diff"      as diff
 import "./digest"    as digest
+import "./tenant"    as tenant
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -333,6 +334,8 @@ fn run_design(
           metaspec.Valid => {
             let __tv := tr.trail(cfg.db, cfg.id, "graph_validated", str.join(["{\"graph_id\":\"", g.id, "\",\"nodes\":", int.to_str(list.len(g.nodes)), "}"], ""))
             let __tg := tr.record_transition(cfg.db, cfg.id, "Design", "Implementation", "GraphValidated")
+            # Persist graph JSON so distributed workers can look up node roles
+            let __sg := tr.save_sprint_graph(cfg.db, cfg.id, "Design", graph.to_json_str(g))
             DesignOk(g)
           },
         },
@@ -349,7 +352,9 @@ fn run_design(
 # diff identifies which nodes need re-running.
 
 fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] SprintResult {
-  let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
+  # Register this sprint as an active tenant in lex-soft's registry
+  let __reg := tenant.register(cfg.db, cfg.id, cfg.request, "")
+  let __ti  := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
 
   # ── Intake: log the request, produce an intake artifact
   let intake_graph := {
@@ -442,6 +447,8 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       }
 
       let __tc := tr.trail(cfg.db, cfg.id, "sprint_complete", str.join(["{\"success\":", if overall_ok { "true" } else { "false" }, "}"], ""))
+      # Update tenant status so external agents see the final state
+      let __ts := if overall_ok { tenant.complete(cfg.db, cfg.id) } else { tenant.fail(cfg.db, cfg.id) }
 
       { sprint_id: cfg.id, phases: all_phases, success: overall_ok, summary: summary }
     },

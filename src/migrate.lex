@@ -41,6 +41,15 @@ fn ddl_tightened_specs_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_tspec_sprint ON tightened_specs(sprint_id)"
 }
 
+# Node results written by durable-queue workers; read by the orchestrator join.
+fn ddl_node_results() -> Str {
+  "CREATE TABLE IF NOT EXISTS node_results (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, phase TEXT NOT NULL, accepted INTEGER NOT NULL DEFAULT 0, artifact TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)"
+}
+
+fn ddl_node_results_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_nr_sprint_phase ON node_results(sprint_id, phase)"
+}
+
 fn exec_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Result[Unit, Str] {
   match sql.exec(db, stmt, []) {
     Err(e) => Err(e.message),
@@ -65,7 +74,13 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
                 Err(e) => Err(e),
                 Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
                   Err(e) => Err(e),
-                  Ok(_) => exec_ddl(db, ddl_tightened_specs_idx()),
+                  Ok(_) => match exec_ddl(db, ddl_tightened_specs_idx()) {
+                  Err(e) => Err(e),
+                  Ok(_) => match exec_ddl(db, ddl_node_results()) {
+                    Err(e) => Err(e),
+                    Ok(_) => exec_ddl(db, ddl_node_results_idx()),
+                  },
+                },
                 },
               },
             },

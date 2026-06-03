@@ -8,6 +8,8 @@
 # M2: system prompts are minimal; tools list is empty (LLM text output only).
 # M3: Architect gains graph-emit tool; roles gain lex-code worker tools.
 
+import "std.str" as str
+
 import "lex-llm/src/provider" as prov
 import "lex-llm/src/tool"     as t
 import "lex-soft/src/runner"  as runner
@@ -17,10 +19,20 @@ fn make_provider() -> prov.Provider {
 }
 
 fn architect(model :: Str) -> runner.AgentConfig {
+  architect_with_context(model, "")
+}
+
+# Architect variant carrying tightened-spec context from a prior Digest.
+# The extra context is appended to the system prompt so prior learning
+# is encoded in the substrate, not re-discovered from scratch.
+fn architect_with_context(model :: Str, specs_context :: Str) -> runner.AgentConfig {
   {
     id:           "loom-architect",
     kind:         "architect",
-    system_prompt: "You are the Architect for a software sprint. Given a project request, produce a JSON sprint graph describing the agent nodes and edges needed to complete the work. Each node needs an id, a role, and a gate (a predicate the output must satisfy). Each edge needs from, to, and a handoff schema. Keep the graph minimal and executable.",
+    system_prompt: str.concat(
+      "You are the Architect for a software sprint. Given a project request, produce a JSON sprint graph describing the agent nodes and edges needed to complete the work. Each node needs an id, a role, and a gate (a predicate the output must satisfy). Each edge needs from, to, and a handoff schema. Keep the graph minimal and executable.",
+      specs_context,
+    ),
     model_name:   model,
     provider:     make_provider(),
     tools:        [],

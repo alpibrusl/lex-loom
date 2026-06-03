@@ -1,11 +1,9 @@
 # orchestrator.lex — run_phase / run_sprint with an honest effect row (§VI).
 #
-# M3 additions over M2:
-#   - Design phase uses real Architect output: LLM emits SprintGraph JSON,
-#     orchestrator parses + validates, retries up to 3× with error feedback.
-#   - All subsequent phases run against the Architect-derived graph (not stubs).
-#   - Re-planning: if Design refines the graph, semantic diff identifies which
-#     nodes need re-running; unchanged nodes reuse their existing artifacts.
+# M3: Design phase uses real Architect output with retry; all phases use the
+#     derived SprintGraph; re-planning via semantic diff.
+# M4: Retro + Digest phases added; tightened specs from the Digest are fed
+#     into the next sprint's Architect, closing the learning loop (§12).
 #
 # Effect row: the honest union of every effect this body touches.
 # A dishonest twin that omits, say, [llm] or [sql] is rejected at lex check.
@@ -26,6 +24,7 @@ import "./phase"     as phase
 import "./transport" as tr
 import "./roles"     as roles
 import "./diff"      as diff
+import "./digest"    as digest
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -294,10 +293,11 @@ type DesignResult =
   | DesignFailed(Str)
 
 fn run_design(
-  request  :: Str,
-  attempts :: Int,
-  errors   :: Str,
-  cfg      :: SprintCfg,
+  request       :: Str,
+  specs_context :: Str,
+  attempts      :: Int,
+  errors        :: Str,
+  cfg           :: SprintCfg,
 ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DesignResult {
   if attempts > max_design_retries() {
     DesignFailed(str.join(["Architect failed after ", int.to_str(max_design_retries()), " attempts. Last errors: ", errors], ""))
@@ -307,7 +307,7 @@ fn run_design(
     } else {
       design_retry_prompt(request, errors)
     }
-    let agent_cfg := roles.architect(cfg.model)
+    let agent_cfg := roles.architect_with_context(cfg.model, specs_context)
     let handler   := runner.make_handler(cfg.db, agent_cfg)
     let outcome   := handler(msg.user_text(prompt))
     let output    := extract_text(outcome.reply)
@@ -315,12 +315,12 @@ fn run_design(
     match graph.from_json_str(output) {
       Err(parse_err) => {
         let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", parse_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-        run_design(request, attempts + 1, str.join(["JSON parse error: ", parse_err], ""), cfg)
+        run_design(request, specs_context, attempts + 1, str.join(["JSON parse error: ", parse_err], ""), cfg)
       },
       Ok(g) => match graph.validate(g) {
         Err(struct_err) => {
           let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-          run_design(request, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
+          run_design(request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
         },
         Ok(_) => match metaspec.check(g) {
           metaspec.Invalid(vs) => {
@@ -328,7 +328,7 @@ fn run_design(
               str.join([acc, v.rule, ": ", v.message, "; "], "")
             })
             let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"metaspec: ", error_str, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-            run_design(request, attempts + 1, str.join(["metaspec violations: ", error_str], ""), cfg)
+            run_design(request, specs_context, attempts + 1, str.join(["metaspec violations: ", error_str], ""), cfg)
           },
           metaspec.Valid => {
             let __tv := tr.trail(cfg.db, cfg.id, "graph_validated", str.join(["{\"graph_id\":\"", g.id, "\",\"nodes\":", int.to_str(list.len(g.nodes)), "}"], ""))
@@ -361,8 +361,12 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
   let intake_ref    := first_accepted_artifact(intake_result.outcomes)
   let __tph1 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Intake\",\"to\":\"Design\"}")
 
+  # ── Load tightened specs from prior sprint's Digest (§12 learning loop)
+  let prior_specs   := digest.load_tightened_specs(cfg.db, cfg.id)
+  let specs_context := digest.specs_context(prior_specs)
+
   # ── Design: Architect derives the sprint graph (with retry)
-  let design_dr := run_design(cfg.request, 1, "", cfg)
+  let design_dr := run_design(cfg.request, specs_context, 1, "", cfg)
   match design_dr {
     DesignFailed(reason) => {
       let __tf := tr.trail(cfg.db, cfg.id, "sprint_failed", str.join(["{\"reason\":\"", reason, "\"}"], ""))
@@ -408,14 +412,33 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let demo_ref    := first_accepted_artifact(qa_result.outcomes)
       let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
 
-      let all_phases   := [intake_result, impl_result, qa_result]
+      # ── Retro: single scribe node reflects on what happened
+      let retro_graph := {
+        id: str.concat(cfg.id, "-retro"), phase: graph.Retro,
+        nodes: [{ id: "retro-scribe", role: "scribe", gate: "spec non-empty" }],
+        edges: [],
+      }
+      let retro_result := run_phase(retro_graph, graph.Retro, demo_ref, [], cfg)
+      let __tph5 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Retro\",\"to\":\"Digest\"}")
+
+      # ── Digest: Scribe reads full trail, emits tightened specs + seed graph
+      let next_sprint_id := str.concat(cfg.id, "-next")
+      let digest_result  := digest.run_digest(cfg.id, next_sprint_id, cfg.model, cfg.db)
+      let __tph6 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Digest\",\"to\":\"Intake\"}")
+
+      let digest_summary := match digest_result {
+        digest.DigestOk(d)    => str.join([" Digest: ", int.to_str(list.len(d.tightened_specs)), " spec(s) tightened."], ""),
+        digest.DigestFailed(e) => str.join([" Digest failed: ", e], ""),
+      }
+
+      let all_phases   := [intake_result, impl_result, qa_result, retro_result]
       let overall_ok   := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
         if !ok { false } else { pr.success }
       })
       let summary := if overall_ok {
-        str.join(["Sprint ", cfg.id, " complete. Demo artifact: ", demo_ref], "")
+        str.join(["Sprint ", cfg.id, " complete. Demo: ", demo_ref, ".", digest_summary], "")
       } else {
-        str.join(["Sprint ", cfg.id, " failed. Check trail for node denials."], "")
+        str.join(["Sprint ", cfg.id, " failed. Check trail for node denials.", digest_summary], "")
       }
 
       let __tc := tr.trail(cfg.db, cfg.id, "sprint_complete", str.join(["{\"success\":", if overall_ok { "true" } else { "false" }, "}"], ""))

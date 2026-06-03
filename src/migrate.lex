@@ -2,7 +2,8 @@
 #
 # Calls soft_migrate.run first so the full lex-soft schema
 # (agents, relationships, agent_state, traces) is always present.
-# Loom adds: sprint_graphs, phase_transitions, artifacts.
+# Loom adds: sprint_graphs, phase_transitions, artifacts,
+#            digests, tightened_specs.
 
 import "std.sql" as sql
 
@@ -24,6 +25,22 @@ fn ddl_artifacts() -> Str {
   "CREATE TABLE IF NOT EXISTS artifacts (hash TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)"
 }
 
+fn ddl_digests() -> Str {
+  "CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, lessons TEXT NOT NULL, seed_graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+}
+
+fn ddl_digests_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_digests_sprint ON digests(sprint_id, created_at)"
+}
+
+fn ddl_tightened_specs() -> Str {
+  "CREATE TABLE IF NOT EXISTS tightened_specs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_role TEXT NOT NULL, spec_src TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL)"
+}
+
+fn ddl_tightened_specs_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_tspec_sprint ON tightened_specs(sprint_id)"
+}
+
 fn exec_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Result[Unit, Str] {
   match sql.exec(db, stmt, []) {
     Err(e) => Err(e.message),
@@ -40,7 +57,19 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
         Err(e) => Err(e),
         Ok(_) => match exec_ddl(db, ddl_phase_transitions()) {
           Err(e) => Err(e),
-          Ok(_) => exec_ddl(db, ddl_artifacts()),
+          Ok(_) => match exec_ddl(db, ddl_artifacts()) {
+            Err(e) => Err(e),
+            Ok(_) => match exec_ddl(db, ddl_digests()) {
+              Err(e) => Err(e),
+              Ok(_) => match exec_ddl(db, ddl_digests_idx()) {
+                Err(e) => Err(e),
+                Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
+                  Err(e) => Err(e),
+                  Ok(_) => exec_ddl(db, ddl_tightened_specs_idx()),
+                },
+              },
+            },
+          },
         },
       },
     },

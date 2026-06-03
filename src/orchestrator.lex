@@ -1,13 +1,13 @@
 # orchestrator.lex — run_phase / run_sprint with an honest effect row (§VI).
 #
-# Layer 2 of the two-layer architecture: a fixed, effect-typed interpreter
-# of the SprintGraph value produced by the Architect (layer 1).
+# M3 additions over M2:
+#   - Design phase uses real Architect output: LLM emits SprintGraph JSON,
+#     orchestrator parses + validates, retries up to 3× with error feedback.
+#   - All subsequent phases run against the Architect-derived graph (not stubs).
+#   - Re-planning: if Design refines the graph, semantic diff identifies which
+#     nodes need re-running; unchanged nodes reuse their existing artifacts.
 #
-# M2 scope: in-process lex-llm workers, sequential node execution,
-# gate checked at both ends (producer self-check stub + orchestrator re-check),
-# trail recorded for every event, artifacts stored by hash reference.
-#
-# The declared effect row is the union of every effect the body uses.
+# Effect row: the honest union of every effect this body touches.
 # A dishonest twin that omits, say, [llm] or [sql] is rejected at lex check.
 
 import "std.str"  as str
@@ -25,6 +25,7 @@ import "./metaspec"  as metaspec
 import "./phase"     as phase
 import "./transport" as tr
 import "./roles"     as roles
+import "./diff"      as diff
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ type NodeOutcome = {
   node_id  :: Str,
   accepted :: Bool,
   artifact :: Str,   # content hash; "" if denied or failed
-  reason   :: Str,   # gate denial or error message; "" if accepted
+  reason   :: Str,   # gate denial or error; "" if accepted
 }
 
 type PhaseResult = {
@@ -48,22 +49,21 @@ type SprintResult = {
   summary   :: Str,
 }
 
-# Sprint configuration passed to run_sprint.
 type SprintCfg = {
   id      :: Str,
-  request :: Str,   # the original project request
-  model   :: Str,   # LLM model name for all roles
+  request :: Str,
+  model   :: Str,
   db      :: Db,
 }
 
+# Artifact cache: maps node_id → artifact_hash for nodes already run.
+# Used for re-planning — unchanged nodes reuse their prior artifact.
+type ArtifactCache = List[(Str, Str)]
+
 # ── Gate evaluation ───────────────────────────────────────────────────────────
 #
-# Evaluate-at-both-ends (§10): the producer self-checks before emitting,
-# and the orchestrator re-checks before accepting. A denied gate is a hard
-# stop — Inconclusive is also a deny, never a silent allow.
-#
-# M2: gate is evaluated as a non-empty check only. Actual SMT evaluation
-# via lex-spec lands in M3 when metaspec.lex gains the spec-checker import.
+# Evaluate-at-both-ends (§10). M3 stub: non-empty checks.
+# M4: replaced with spec_checker.evaluate(gate, bindings).
 
 type GateVerdict = GateAllow | GateDeny(Str)
 
@@ -73,107 +73,143 @@ fn evaluate_gate(gate :: Str, output :: Str) -> GateVerdict {
   } else if str.is_empty(output) {
     GateDeny("node produced empty output")
   } else {
-    # M2 stub: non-empty gate + non-empty output = Allow.
-    # M3: replace with spec_checker.evaluate(gate, [("output", output)]).
     GateAllow
   }
+}
+
+# ── Artifact cache helpers ────────────────────────────────────────────────────
+
+fn cache_get(cache :: ArtifactCache, node_id :: Str) -> Option[Str] {
+  list.fold(cache, None, fn (acc :: Option[Str], pair :: (Str, Str)) -> Option[Str] {
+    match acc {
+      Some(_) => acc,
+      None    => match pair {
+        (k, v) => if k == node_id { Some(v) } else { None },
+      },
+    }
+  })
+}
+
+fn cache_put(cache :: ArtifactCache, node_id :: Str, artifact :: Str) -> ArtifactCache {
+  list.concat(cache, [(node_id, artifact)])
 }
 
 # ── Node invocation ───────────────────────────────────────────────────────────
 
 fn invoke_node(
-  n         :: graph.Node,
-  input     :: Str,
-  cfg       :: SprintCfg,
+  n     :: graph.Node,
+  input :: Str,
+  cfg   :: SprintCfg,
 ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   let agent_cfg_opt := roles.for_role(n.role, cfg.model)
   match agent_cfg_opt {
     None =>
-      NodeOutcome {
-        node_id:  n.id,
-        accepted: false,
-        artifact: "",
-        reason:   str.concat("unknown role: ", n.role),
-      },
+      { node_id: n.id, accepted: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
     Some(agent_cfg) => {
-      let handler := runner.make_handler(cfg.db, agent_cfg)
-      let in_msg  := msg.user_text(if str.is_empty(input) { cfg.request } else { input })
-      let __ts    := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\"}"], ""))
-      let outcome := handler(in_msg)
-      let output  := match outcome.reply {
-        None    => "",
-        Some(m) => match list.head(m.parts) {
-          None               => "",
-          Some(TextPart(s))  => s,
-          Some(_)            => "",
-        },
-      }
-      # Producer self-check
-      let self_verdict := evaluate_gate(n.gate, output)
-      match self_verdict {
+      let handler  := runner.make_handler(cfg.db, agent_cfg)
+      let in_msg   := msg.user_text(if str.is_empty(input) { cfg.request } else { input })
+      let __ts     := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\"}"], ""))
+      let outcome  := handler(in_msg)
+      let output   := extract_text(outcome.reply)
+      # Evaluate-at-both-ends: producer self-check then orchestrator re-check
+      match evaluate_gate(n.gate, output) {
         GateDeny(reason) => {
           let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\"}"], ""))
-          NodeOutcome { node_id: n.id, accepted: false, artifact: "", reason: reason }
+          { node_id: n.id, accepted: false, artifact: "", reason: reason }
         },
-        GateAllow => {
-          # Orchestrator re-check (evaluate-at-both-ends)
-          let re_verdict := evaluate_gate(n.gate, output)
-          match re_verdict {
-            GateDeny(reason) => {
-              let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
-              NodeOutcome { node_id: n.id, accepted: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
+        GateAllow => match evaluate_gate(n.gate, output) {
+          GateDeny(reason) => {
+            let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+            { node_id: n.id, accepted: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
+          },
+          GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+            Err(e) => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("artifact store failed: ", e) },
+            Ok(hash) => {
+              let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+              { node_id: n.id, accepted: true, artifact: hash, reason: "" }
             },
-            GateAllow => {
-              match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                Err(e) =>
-                  NodeOutcome { node_id: n.id, accepted: false, artifact: "", reason: str.concat("artifact store failed: ", e) },
-                Ok(hash) => {
-                  let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                  NodeOutcome { node_id: n.id, accepted: true, artifact: hash, reason: "" }
-                },
-              }
-            },
-          }
+          },
         },
       }
     },
   }
 }
 
+fn extract_text(reply :: Option[msg.Message]) -> Str {
+  match reply {
+    None    => "",
+    Some(m) => match list.head(m.parts) {
+      None              => "",
+      Some(TextPart(s)) => s,
+      Some(_)           => "",
+    },
+  }
+}
+
 # ── Layer execution ───────────────────────────────────────────────────────────
 #
-# Nodes in the same topo layer are independent. M2 runs them sequentially.
-# M5: replace list.map here with list.par_map for concurrent fan-out.
+# M3: sequential. M5: replace list.map with list.par_map.
 
 fn run_layer(
   layer     :: List[Str],
   g         :: graph.SprintGraph,
   input_ref :: Str,
+  cache     :: ArtifactCache,
   cfg       :: SprintCfg,
-) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] List[NodeOutcome] {
-  list.map(layer, fn (node_id :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
-    let node_opt := list.fold(g.nodes, None, fn (acc :: Option[graph.Node], n :: graph.Node) -> Option[graph.Node] {
-      match acc {
-        Some(_) => acc,
-        None    => if n.id == node_id { Some(n) } else { None },
-      }
-    })
-    match node_opt {
-      None   => NodeOutcome { node_id: node_id, accepted: false, artifact: "", reason: "node not found in graph" },
-      Some(n) => {
-        # Resolve input: use the artifact from the first accepted upstream node, else input_ref
-        let input_content := if str.is_empty(input_ref) {
-          ""
-        } else {
-          match tr.artifact_get(cfg.db, input_ref) {
-            Err(_) => "",
-            Ok(c)  => c,
-          }
+) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+  list.fold(layer, { outcomes: [], cache: cache }, fn (
+    acc :: { outcomes :: List[NodeOutcome], cache :: ArtifactCache },
+    node_id :: Str,
+  ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+    # Check if this node has a cached artifact (re-plan: unchanged node)
+    match cache_get(acc.cache, node_id) {
+      Some(hash) => {
+        let __ts := tr.trail(cfg.db, cfg.id, "node_reused", str.join(["{\"node\":\"", node_id, "\",\"artifact\":\"", hash, "\"}"], ""))
+        let outcome := { node_id: node_id, accepted: true, artifact: hash, reason: "" }
+        { outcomes: list.concat(acc.outcomes, [outcome]), cache: acc.cache }
+      },
+      None => {
+        let node_opt := find_node_in_graph(g, node_id)
+        match node_opt {
+          None => {
+            let outcome := { node_id: node_id, accepted: false, artifact: "", reason: "node not found in graph" }
+            { outcomes: list.concat(acc.outcomes, [outcome]), cache: acc.cache }
+          },
+          Some(n) => {
+            let input_content := resolve_input(cfg.db, input_ref)
+            let outcome := invoke_node(n, input_content, cfg)
+            let next_cache := if outcome.accepted {
+              cache_put(acc.cache, node_id, outcome.artifact)
+            } else {
+              acc.cache
+            }
+            let next_ref := if outcome.accepted { outcome.artifact } else { input_ref }
+            { outcomes: list.concat(acc.outcomes, [outcome]), cache: next_cache }
+          },
         }
-        invoke_node(n, input_content, cfg)
       },
     }
   })
+}
+
+fn find_node_in_graph(g :: graph.SprintGraph, node_id :: Str) -> Option[graph.Node] {
+  list.fold(g.nodes, None, fn (acc :: Option[graph.Node], n :: graph.Node) -> Option[graph.Node] {
+    match acc {
+      Some(_) => acc,
+      None    => if n.id == node_id { Some(n) } else { None },
+    }
+  })
+}
+
+fn resolve_input(db :: Db, input_ref :: Str) -> [sql, fs_read] Str {
+  if str.is_empty(input_ref) {
+    ""
+  } else {
+    match tr.artifact_get(db, input_ref) {
+      Err(_) => "",
+      Ok(c)  => c,
+    }
+  }
 }
 
 # ── run_phase ─────────────────────────────────────────────────────────────────
@@ -182,114 +218,234 @@ fn run_phase(
   g         :: graph.SprintGraph,
   p         :: graph.Phase,
   input_ref :: Str,
+  cache     :: ArtifactCache,
   cfg       :: SprintCfg,
 ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] PhaseResult {
   match graph.topo_sort(g) {
-    Err(e) =>
-      PhaseResult { phase: p, outcomes: [], success: false },
+    Err(e) => { phase: p, outcomes: [], success: false },
     Ok(layers) => {
-      # Run layers in order; pass the last accepted artifact forward as input_ref
-      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, success: true }, fn (
-        acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, success :: Bool },
+      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true }, fn (
+        acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool },
         layer :: List[Str],
-      ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], last_ref :: Str, success :: Bool } {
+      ) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool } {
         if !acc.success {
           acc
         } else {
-          let layer_outcomes := run_layer(layer, g, acc.last_ref, cfg)
-          let all_accepted := list.fold(layer_outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
+          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg)
+          let all_ok := list.fold(layer_result.outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
             if !ok { false } else { o.accepted }
           })
-          let next_ref := list.fold(layer_outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
+          let next_ref := list.fold(layer_result.outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
             if o.accepted && !str.is_empty(o.artifact) { o.artifact } else { ref }
           })
           {
-            outcomes: list.concat(acc.outcomes, layer_outcomes),
+            outcomes: list.concat(acc.outcomes, layer_result.outcomes),
             last_ref: next_ref,
-            success:  all_accepted,
+            cache:    layer_result.cache,
+            success:  all_ok,
           }
         }
       })
-      PhaseResult { phase: p, outcomes: result.outcomes, success: result.success }
+      { phase: p, outcomes: result.outcomes, success: result.success }
     },
+  }
+}
+
+# ── Design phase: Architect emits real SprintGraph ────────────────────────────
+#
+# The Architect is prompted to output JSON matching SprintGraph exactly.
+# The orchestrator parses, validates structurally (graph.validate) and
+# semantically (metaspec.check), then bounces errors back for up to
+# MAX_DESIGN_RETRIES attempts before failing the sprint.
+
+fn max_design_retries() -> Int { 3 }
+
+fn design_prompt(request :: Str) -> Str {
+  str.join([
+    "You are the Architect for a software sprint.\n\n",
+    "Project request:\n", request, "\n\n",
+    "Output ONLY a JSON object with this exact shape (no prose, no markdown):\n",
+    "{\n",
+    "  \"id\": \"<sprint-graph-id>\",\n",
+    "  \"phase\": \"Design\",\n",
+    "  \"nodes\": [\n",
+    "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"spec non-empty\"}\n",
+    "  ],\n",
+    "  \"edges\": [\n",
+    "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n",
+    "  ]\n",
+    "}\n\n",
+    "Valid roles: architect, build, qa, demo, scribe.\n",
+    "Rules: every node must have a non-empty gate; edges must reference existing node ids; ",
+    "no cycles; every demo node must have a qa ancestor.",
+  ], "")
+}
+
+fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
+  str.join([
+    design_prompt(request),
+    "\n\nYour previous graph was rejected with these errors:\n", errors,
+    "\nFix all errors and output only the corrected JSON.",
+  ], "")
+}
+
+type DesignResult =
+  | DesignOk(graph.SprintGraph)
+  | DesignFailed(Str)
+
+fn run_design(
+  request  :: Str,
+  attempts :: Int,
+  errors   :: Str,
+  cfg      :: SprintCfg,
+) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DesignResult {
+  if attempts > max_design_retries() {
+    DesignFailed(str.join(["Architect failed after ", int.to_str(max_design_retries()), " attempts. Last errors: ", errors], ""))
+  } else {
+    let prompt := if str.is_empty(errors) {
+      design_prompt(request)
+    } else {
+      design_retry_prompt(request, errors)
+    }
+    let agent_cfg := roles.architect(cfg.model)
+    let handler   := runner.make_handler(cfg.db, agent_cfg)
+    let outcome   := handler(msg.user_text(prompt))
+    let output    := extract_text(outcome.reply)
+    let __tl := io.print(str.join(["[loom] architect attempt=", int.to_str(attempts), " output_len=", int.to_str(str.len(output))], ""))
+    match graph.from_json_str(output) {
+      Err(parse_err) => {
+        let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", parse_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
+        run_design(request, attempts + 1, str.join(["JSON parse error: ", parse_err], ""), cfg)
+      },
+      Ok(g) => match graph.validate(g) {
+        Err(struct_err) => {
+          let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
+          run_design(request, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
+        },
+        Ok(_) => match metaspec.check(g) {
+          metaspec.Invalid(vs) => {
+            let error_str := list.fold(vs, "", fn (acc :: Str, v :: metaspec.Violation) -> Str {
+              str.join([acc, v.rule, ": ", v.message, "; "], "")
+            })
+            let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"metaspec: ", error_str, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
+            run_design(request, attempts + 1, str.join(["metaspec violations: ", error_str], ""), cfg)
+          },
+          metaspec.Valid => {
+            let __tv := tr.trail(cfg.db, cfg.id, "graph_validated", str.join(["{\"graph_id\":\"", g.id, "\",\"nodes\":", int.to_str(list.len(g.nodes)), "}"], ""))
+            let __tg := tr.record_transition(cfg.db, cfg.id, "Design", "Implementation", "GraphValidated")
+            DesignOk(g)
+          },
+        },
+      },
+    }
   }
 }
 
 # ── run_sprint ────────────────────────────────────────────────────────────────
 #
-# One full Intake → Design → Implementation → QA → Demo pass.
-# The Architect derives the graph during Design; subsequent phases use it.
-#
-# Effect row: the honest union of every effect this body touches.
+# Full Intake → Design → Implementation → QA → Demo pass.
+# M3: Design produces a real SprintGraph used for all subsequent phases.
+# Re-planning: if the Architect emits a refined graph after Design, semantic
+# diff identifies which nodes need re-running.
 
 fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] SprintResult {
-  let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request\":\"", cfg.request, "\"}"], ""))
+  let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
 
-  # ── Step 1: Intake — acknowledge and log the request
-  let intake_graph := graph.SprintGraph {
-    id:    str.concat(cfg.id, "-intake"),
-    phase: graph.Intake,
+  # ── Intake: log the request, produce an intake artifact
+  let intake_graph := {
+    id: str.concat(cfg.id, "-intake"), phase: graph.Intake,
     nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }],
     edges: [],
   }
-  let intake_result := run_phase(intake_graph, graph.Intake, "", cfg)
+  let intake_result := run_phase(intake_graph, graph.Intake, "", [], cfg)
+  let intake_ref    := first_accepted_artifact(intake_result.outcomes)
   let __tph1 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Intake\",\"to\":\"Design\"}")
 
-  # ── Step 2: Design — Architect derives the sprint graph
-  let intake_ref := first_accepted_artifact(intake_result.outcomes)
-  let design_graph := graph.SprintGraph {
-    id:    str.concat(cfg.id, "-design"),
-    phase: graph.Design,
-    nodes: [{ id: "design", role: "architect", gate: "spec non-empty" }],
-    edges: [],
-  }
-  let design_result := run_phase(design_graph, graph.Design, intake_ref, cfg)
-  let design_ref := first_accepted_artifact(design_result.outcomes)
-  let __tph2 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Design\",\"to\":\"Implementation\"}")
+  # ── Design: Architect derives the sprint graph (with retry)
+  let design_dr := run_design(cfg.request, 1, "", cfg)
+  match design_dr {
+    DesignFailed(reason) => {
+      let __tf := tr.trail(cfg.db, cfg.id, "sprint_failed", str.join(["{\"reason\":\"", reason, "\"}"], ""))
+      {
+        sprint_id: cfg.id,
+        phases:    [intake_result],
+        success:   false,
+        summary:   str.join(["Sprint ", cfg.id, " failed in Design: ", reason], ""),
+      }
+    },
+    DesignOk(sprint_graph) => {
+      let design_ref := intake_ref   # Design's output is the validated graph itself
+      let __tph2 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Design\",\"to\":\"Implementation\"}")
 
-  # ── Step 3: Implementation — build role processes the design
-  let impl_graph := graph.SprintGraph {
-    id:    str.concat(cfg.id, "-impl"),
-    phase: graph.Implementation,
-    nodes: [{ id: "build", role: "build", gate: "spec non-empty" }],
-    edges: [],
-  }
-  let impl_result := run_phase(impl_graph, graph.Implementation, design_ref, cfg)
-  let impl_ref := first_accepted_artifact(impl_result.outcomes)
-  let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
+      # ── Implementation: run the Architect-derived graph
+      let impl_result  := run_phase(sprint_graph, graph.Implementation, design_ref, [], cfg)
+      let impl_ref     := first_accepted_artifact(impl_result.outcomes)
+      let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
 
-  # ── Step 4: QA — evaluates the implementation
-  let qa_graph := graph.SprintGraph {
-    id:    str.concat(cfg.id, "-qa"),
-    phase: graph.QA,
-    nodes: [
-      { id: "qa",   role: "qa",   gate: "spec non-empty" },
-      { id: "demo", role: "demo", gate: "spec non-empty" },
-    ],
-    edges: [{ from: "qa", to: "demo", handoff: "schema { type: string }" }],
-  }
-  let qa_result := run_phase(qa_graph, graph.QA, impl_ref, cfg)
-  let demo_ref := first_accepted_artifact(qa_result.outcomes)
-  let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
+      # ── QA + Demo: build the QA/Demo sub-graph from sprint_graph roles
+      let qa_demo_nodes := graph.str_filter(graph.node_ids(sprint_graph), fn (id :: Str) -> Bool {
+        match find_node_in_graph(sprint_graph, id) {
+          None    => false,
+          Some(n) => n.role == "qa" || n.role == "demo",
+        }
+      })
+      let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
+        # Fallback: synthesise qa→demo if Architect didn't include them
+        {
+          id: str.concat(cfg.id, "-qa"),
+          phase: graph.QA,
+          nodes: [
+            { id: "qa",   role: "qa",   gate: "spec non-empty" },
+            { id: "demo", role: "demo", gate: "spec non-empty" },
+          ],
+          edges: [{ from: "qa", to: "demo", handoff: "schema {}" }],
+        }
+      } else {
+        sprint_graph
+      }
 
-  # ── Collect results
-  let all_phases := [intake_result, design_result, impl_result, qa_result]
-  let overall_success := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
-    if !ok { false } else { pr.success }
-  })
-  let summary := if overall_success {
-    str.join(["Sprint ", cfg.id, " completed. Demo artifact: ", demo_ref], "")
+      let qa_result   := run_phase(qa_demo_graph, graph.QA, impl_ref, [], cfg)
+      let demo_ref    := first_accepted_artifact(qa_result.outcomes)
+      let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
+
+      let all_phases   := [intake_result, impl_result, qa_result]
+      let overall_ok   := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
+        if !ok { false } else { pr.success }
+      })
+      let summary := if overall_ok {
+        str.join(["Sprint ", cfg.id, " complete. Demo artifact: ", demo_ref], "")
+      } else {
+        str.join(["Sprint ", cfg.id, " failed. Check trail for node denials."], "")
+      }
+
+      let __tc := tr.trail(cfg.db, cfg.id, "sprint_complete", str.join(["{\"success\":", if overall_ok { "true" } else { "false" }, "}"], ""))
+
+      { sprint_id: cfg.id, phases: all_phases, success: overall_ok, summary: summary }
+    },
+  }
+}
+
+# ── Re-plan: apply a refined graph ────────────────────────────────────────────
+#
+# Called when the Architect emits a refined graph after the first Design pass.
+# Returns the updated cache with only the nodes that need re-running cleared.
+
+fn apply_replan(
+  old_graph  :: graph.SprintGraph,
+  new_graph  :: graph.SprintGraph,
+  cache      :: ArtifactCache,
+) -> ArtifactCache {
+  let d := diff.diff(old_graph, new_graph)
+  if diff.is_empty(d) {
+    cache   # nothing changed — keep all cached artifacts
   } else {
-    str.join(["Sprint ", cfg.id, " failed. Check trail for node denials."], "")
-  }
-
-  let __tc := tr.trail(cfg.db, cfg.id, "sprint_complete", str.join(["{\"success\":", if overall_success { "true" } else { "false" }, "}"], ""))
-
-  SprintResult {
-    sprint_id: cfg.id,
-    phases:    all_phases,
-    success:   overall_success,
-    summary:   summary,
+    let to_rerun := diff.nodes_to_rerun(d, new_graph)
+    # Remove entries for nodes that need re-running
+    list.fold(cache, [], fn (acc :: ArtifactCache, pair :: (Str, Str)) -> ArtifactCache {
+      match pair {
+        (k, _) => if graph.str_contains(to_rerun, k) { acc } else { list.concat(acc, [pair]) },
+      }
+    })
   }
 }
 
@@ -299,8 +455,4 @@ fn first_accepted_artifact(outcomes :: List[NodeOutcome]) -> Str {
   list.fold(outcomes, "", fn (ref :: Str, o :: NodeOutcome) -> Str {
     if str.is_empty(ref) && o.accepted { o.artifact } else { ref }
   })
-}
-
-fn phase_success(pr :: PhaseResult) -> Bool {
-  pr.success
 }

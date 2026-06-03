@@ -1,5 +1,8 @@
 import "std.list" as list
 import "std.str"  as str
+import "std.int"  as int
+
+import "lex-schema/json_value" as jv
 
 # ── Types ────────────────────────────────────────────────────────────────────
 
@@ -168,6 +171,165 @@ fn validate(g :: SprintGraph) -> Result[Unit, Str] {
       },
     },
   }
+}
+
+# ── JSON serialisation ────────────────────────────────────────────────────────
+
+fn phase_to_str(p :: Phase) -> Str {
+  match p {
+    Intake         => "Intake",
+    Design         => "Design",
+    Implementation => "Implementation",
+    QA             => "QA",
+    Demo           => "Demo",
+    Retro          => "Retro",
+    Digest         => "Digest",
+  }
+}
+
+fn phase_from_str(s :: Str) -> Result[Phase, Str] {
+  if s == "Intake"         { Ok(Intake) }
+  else if s == "Design"    { Ok(Design) }
+  else if s == "Implementation" { Ok(Implementation) }
+  else if s == "QA"        { Ok(QA) }
+  else if s == "Demo"      { Ok(Demo) }
+  else if s == "Retro"     { Ok(Retro) }
+  else if s == "Digest"    { Ok(Digest) }
+  else { Err(str.concat("unknown phase: ", s)) }
+}
+
+fn node_to_json(n :: Node) -> jv.Json {
+  JObj([("id", JStr(n.id)), ("role", JStr(n.role)), ("gate", JStr(n.gate))])
+}
+
+fn edge_to_json(e :: Edge) -> jv.Json {
+  JObj([("from", JStr(e.from)), ("to", JStr(e.to)), ("handoff", JStr(e.handoff))])
+}
+
+fn to_json(g :: SprintGraph) -> jv.Json {
+  JObj([
+    ("id",    JStr(g.id)),
+    ("phase", JStr(phase_to_str(g.phase))),
+    ("nodes", JList(list.map(g.nodes, fn (n :: Node) -> jv.Json { node_to_json(n) }))),
+    ("edges", JList(list.map(g.edges, fn (e :: Edge) -> jv.Json { edge_to_json(e) }))),
+  ])
+}
+
+fn node_from_json(j :: jv.Json) -> Result[Node, Str] {
+  let id := match jv.get_field(j, "id") {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+  let role := match jv.get_field(j, "role") {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+  let gate := match jv.get_field(j, "gate") {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+  if str.is_empty(id) {
+    Err("node missing id field")
+  } else {
+    Ok({ id: id, role: role, gate: gate })
+  }
+}
+
+fn edge_from_json(j :: jv.Json) -> Result[Edge, Str] {
+  let from := match jv.get_field(j, "from") {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+  let to := match jv.get_field(j, "to") {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+  let handoff := match jv.get_field(j, "handoff") {
+    Some(JStr(s)) => s,
+    _ => "schema {}",
+  }
+  if str.is_empty(from) || str.is_empty(to) {
+    Err("edge missing from or to field")
+  } else {
+    Ok({ from: from, to: to, handoff: handoff })
+  }
+}
+
+fn nodes_from_json(j :: jv.Json) -> Result[List[Node], Str] {
+  match j {
+    JList(items) => list.fold(items, Ok([]), fn (acc :: Result[List[Node], Str], item :: jv.Json) -> Result[List[Node], Str] {
+      match acc {
+        Err(e) => Err(e),
+        Ok(ns) => match node_from_json(item) {
+          Err(e)  => Err(e),
+          Ok(n)   => Ok(list.concat(ns, [n])),
+        },
+      }
+    }),
+    _ => Ok([]),
+  }
+}
+
+fn edges_from_json(j :: jv.Json) -> Result[List[Edge], Str] {
+  match j {
+    JList(items) => list.fold(items, Ok([]), fn (acc :: Result[List[Edge], Str], item :: jv.Json) -> Result[List[Edge], Str] {
+      match acc {
+        Err(e) => Err(e),
+        Ok(es) => match edge_from_json(item) {
+          Err(e) => Err(e),
+          Ok(e2) => Ok(list.concat(es, [e2])),
+        },
+      }
+    }),
+    _ => Ok([]),
+  }
+}
+
+fn from_json(j :: jv.Json) -> Result[SprintGraph, Str] {
+  match j {
+    JObj(_) => {
+      let id := match jv.get_field(j, "id") {
+        Some(JStr(s)) => s,
+        _ => "graph-1",
+      }
+      let phase_str := match jv.get_field(j, "phase") {
+        Some(JStr(s)) => s,
+        _ => "Intake",
+      }
+      match phase_from_str(phase_str) {
+        Err(e) => Err(e),
+        Ok(p) => {
+          let nodes_j := match jv.get_field(j, "nodes") {
+            Some(v) => v,
+            None    => JList([]),
+          }
+          let edges_j := match jv.get_field(j, "edges") {
+            Some(v) => v,
+            None    => JList([]),
+          }
+          match nodes_from_json(nodes_j) {
+            Err(e) => Err(e),
+            Ok(nodes) => match edges_from_json(edges_j) {
+              Err(e) => Err(e),
+              Ok(edges) => Ok({ id: id, phase: p, nodes: nodes, edges: edges }),
+            },
+          }
+        },
+      }
+    },
+    _ => Err("SprintGraph must be a JSON object"),
+  }
+}
+
+fn from_json_str(s :: Str) -> Result[SprintGraph, Str] {
+  match jv.parse(s) {
+    Err(e) => Err(str.join(["JSON parse error at pos ", int.to_str(e.pos), ": ", e.message], "")),
+    Ok(j)  => from_json(j),
+  }
+}
+
+fn to_json_str(g :: SprintGraph) -> Str {
+  jv.stringify(to_json(g))
 }
 
 examples {

@@ -109,6 +109,16 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
       let outcome := handler(msg.user_text(prompt))
       let output  := extract_text(outcome.reply)
+      # Empty output = model cold-start or transient failure — retry silently (no feedback)
+      if str.is_empty(output) {
+        if attempt > max_node_retries() {
+          { node_id: n.id, accepted: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
+        } else {
+          let __tr := tr.trail(cfg.db, cfg.id, "node_retrying",
+            str.join(["{\"node\":\"", n.id, "\",\"reason\":\"empty output\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+          invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial)
+        }
+      } else {
       # Producer self-check
       match evaluate_gate(n.gate, output) {
         GateDeny(reason) => {
@@ -140,6 +150,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
             },
           },
       }
+      } # end else (non-empty output)
     },
   }
 }

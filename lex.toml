@@ -6,6 +6,6 @@ license = "EUPL-1.2"
 description = "Multi-agent sprint cycles built on lex-soft (design stage)"
 
 [dependencies]
-"lex-soft"   = { git = "https://github.com/alpibrusl/lex-soft" }
-"lex-spec"   = { git = "https://github.com/alpibrusl/lex-spec" }
-"lex-schema" = { git = "https://github.com/alpibrusl/lex-schema" }
+"lex-soft"   = { path = "../lex-soft" }
+"lex-spec"   = { path = "../lex-spec" }
+"lex-schema" = { path = "../lex-schema" }

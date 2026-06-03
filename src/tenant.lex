@@ -15,12 +15,16 @@
 # lex-hub can sit in front of the lex-soft platform server for
 # cross-org HTTP isolation when needed.
 
-import "std.str"  as str
+import "std.str" as str
+
 import "std.list" as list
 
 import "lex-soft/src/registry" as registry
 
-fn loom_kind() -> Str { "loom-sprint" }
+fn loom_kind() -> Str {
+  "loom-sprint"
+}
+
 fn loom_inbox_url(base_url :: Str, sprint_id :: Str) -> Str {
   str.join([base_url, "/sprints/", sprint_id, "/a2a"], "")
 }
@@ -51,9 +55,13 @@ fn heartbeat(db :: Db, sprint_id :: Str) -> [sql, fs_write, time] Result[Unit, S
 # List all currently active sprints.
 fn active_sprints(db :: Db) -> [sql, fs_read] List[registry.AgentRef] {
   match registry.find_by_kind(db, loom_kind()) {
-    Err(_)  => [],
+    Err(_) => [],
     Ok(refs) => list.fold(refs, [], fn (acc :: List[registry.AgentRef], r :: registry.AgentRef) -> List[registry.AgentRef] {
-      if r.status == "active" { list.concat(acc, [r]) } else { acc }
+      if r.status == "active" {
+        list.concat(acc, [r])
+      } else {
+        acc
+      }
     }),
   }
 }
@@ -61,8 +69,9 @@ fn active_sprints(db :: Db) -> [sql, fs_read] List[registry.AgentRef] {
 # Look up a single sprint by id.
 fn find(db :: Db, sprint_id :: Str) -> [sql, fs_read] Option[registry.AgentRef] {
   match registry.find_by_id(db, sprint_id) {
-    Err(_)        => None,
-    Ok(None)      => None,
+    Err(_) => None,
+    Ok(None) => None,
     Ok(Some(ref)) => Some(ref),
   }
 }
+

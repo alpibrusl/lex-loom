@@ -1,105 +1,78 @@
 import "std.str" as str
 
 # ── Types ────────────────────────────────────────────────────────────────────
-
 # Re-exported so callers import only this module.
-type Phase =
-  Intake | Design | Implementation | QA | Demo | Retro | Digest
+type Phase = Intake | Design | Implementation | QA | Demo | Retro | Digest
 
-# Evidence required to consume a transition. The transition gate checks this
-# before accepting the move — same discipline as lex-agent's tk.advance.
-type Evidence =
-  | GraphValidated   # Architect emitted a graph that passed metaspec
-  | GraphRefined     # Architect emitted a refined graph (re-plan)
-  | QaAttested       # QA gate produced an attestation of passing
-  | QaFailed         # QA gate produced an attestation of failure
-  | DigestComplete   # Scribe emitted tightened specs + seed graph
-  | NoEvidence       # Used for transitions that need no artifact
+type Evidence = GraphValidated | GraphRefined | QaAttested | QaFailed | DigestComplete | NoEvidence
 
-type TransitionError =
-  | InvalidTransition(Str)
-  | WrongEvidence(Str)
+type TransitionError = IllegalMove(Str) | WrongEvidence(Str)
 
-# ── Legal transition table ────────────────────────────────────────────────────
-#
-# Every legal move and the evidence it consumes. Any other (from, to) pair
-# raises InvalidTransition — there is no back-door Phase construction.
-#
-#   Intake         → Design             (NoEvidence)
-#   Design         → Implementation     (GraphValidated)
-#   Design         → Design             (GraphRefined)    re-plan
-#   Implementation → QA                 (NoEvidence)
-#   QA             → Implementation     (QaFailed)        bounce back
-#   QA             → Demo               (QaAttested)
-#   Demo           → Retro              (NoEvidence)
-#   Retro          → Digest             (NoEvidence)
-#   Digest         → Intake             (DigestComplete)  next sprint
-
-fn advance(from :: Phase, to :: Phase, ev :: Evidence) -> Result[Phase, TransitionError] {
+fn advance(from :: Phase, to :: Phase, ev :: Evidence) -> Result[Phase, TransitionError]
+  examples {
+    advance(Intake, Design, NoEvidence) => Ok(Design),
+    advance(Design, Implementation, GraphValidated) => Ok(Implementation),
+    advance(Design, Design, GraphRefined) => Ok(Design),
+    advance(Implementation, QA, NoEvidence) => Ok(QA),
+    advance(QA, Implementation, QaFailed) => Ok(Implementation),
+    advance(QA, Demo, QaAttested) => Ok(Demo),
+    advance(Demo, Retro, NoEvidence) => Ok(Retro),
+    advance(Retro, Digest, NoEvidence) => Ok(Digest),
+    advance(Digest, Intake, DigestComplete) => Ok(Intake),
+    advance(Design, Implementation, NoEvidence) => Err(WrongEvidence("Design → Implementation requires GraphValidated")),
+    advance(QA, Demo, NoEvidence) => Err(WrongEvidence("QA → Demo requires QaAttested")),
+    advance(Digest, Intake, NoEvidence) => Err(WrongEvidence("Digest → Intake requires DigestComplete")),
+    advance(Intake, QA, NoEvidence) => Err(IllegalMove("illegal transition: Intake → QA")),
+    advance(Demo, Design, NoEvidence) => Err(IllegalMove("illegal transition: Demo → Design")),
+    advance(QA, Intake, NoEvidence) => Err(IllegalMove("illegal transition: QA → Intake"))
+  }
+{
   match from {
-    Intake =>
-      match to {
-        Design => Ok(Design),
-        _      => Err(InvalidTransition(illegal_msg(from, to))),
+    Intake => match to {
+      Design => Ok(Design),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    Design => match to {
+      Implementation => match ev {
+        GraphValidated => Ok(Implementation),
+        _ => Err(WrongEvidence("Design → Implementation requires GraphValidated")),
       },
-
-    Design =>
-      match to {
-        Implementation =>
-          match ev {
-            GraphValidated => Ok(Implementation),
-            _              => Err(WrongEvidence("Design → Implementation requires GraphValidated")),
-          },
-        Design =>
-          match ev {
-            GraphRefined => Ok(Design),
-            _            => Err(WrongEvidence("Design → Design (re-plan) requires GraphRefined")),
-          },
-        _ => Err(InvalidTransition(illegal_msg(from, to))),
+      Design => match ev {
+        GraphRefined => Ok(Design),
+        _ => Err(WrongEvidence("Design → Design (re-plan) requires GraphRefined")),
       },
-
-    Implementation =>
-      match to {
-        QA => Ok(QA),
-        _  => Err(InvalidTransition(illegal_msg(from, to))),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    Implementation => match to {
+      QA => Ok(QA),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    QA => match to {
+      Implementation => match ev {
+        QaFailed => Ok(Implementation),
+        _ => Err(WrongEvidence("QA → Implementation requires QaFailed")),
       },
-
-    QA =>
-      match to {
-        Implementation =>
-          match ev {
-            QaFailed => Ok(Implementation),
-            _        => Err(WrongEvidence("QA → Implementation requires QaFailed")),
-          },
-        Demo =>
-          match ev {
-            QaAttested => Ok(Demo),
-            _          => Err(WrongEvidence("QA → Demo requires QaAttested")),
-          },
-        _ => Err(InvalidTransition(illegal_msg(from, to))),
+      Demo => match ev {
+        QaAttested => Ok(Demo),
+        _ => Err(WrongEvidence("QA → Demo requires QaAttested")),
       },
-
-    Demo =>
-      match to {
-        Retro => Ok(Retro),
-        _     => Err(InvalidTransition(illegal_msg(from, to))),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    Demo => match to {
+      Retro => Ok(Retro),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    Retro => match to {
+      Digest => Ok(Digest),
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
+    Digest => match to {
+      Intake => match ev {
+        DigestComplete => Ok(Intake),
+        _ => Err(WrongEvidence("Digest → Intake requires DigestComplete")),
       },
-
-    Retro =>
-      match to {
-        Digest => Ok(Digest),
-        _      => Err(InvalidTransition(illegal_msg(from, to))),
-      },
-
-    Digest =>
-      match to {
-        Intake =>
-          match ev {
-            DigestComplete => Ok(Intake),
-            _              => Err(WrongEvidence("Digest → Intake requires DigestComplete")),
-          },
-        _ => Err(InvalidTransition(illegal_msg(from, to))),
-      },
+      _ => Err(IllegalMove(illegal_msg(from, to))),
+    },
   }
 }
 
@@ -109,58 +82,39 @@ fn illegal_msg(from :: Phase, to :: Phase) -> Str {
 
 fn phase_name(p :: Phase) -> Str {
   match p {
-    Intake         => "Intake",
-    Design         => "Design",
+    Intake => "Intake",
+    Design => "Design",
     Implementation => "Implementation",
-    QA             => "QA",
-    Demo           => "Demo",
-    Retro          => "Retro",
-    Digest         => "Digest",
+    QA => "QA",
+    Demo => "Demo",
+    Retro => "Retro",
+    Digest => "Digest",
   }
 }
 
 # ── Convenience predicates (pure) ─────────────────────────────────────────────
-
-fn is_terminal(p :: Phase) -> Bool {
+fn is_terminal(p :: Phase) -> Bool
+  examples {
+    is_terminal(Digest) => true,
+    is_terminal(Intake) => false
+  }
+{
   match p {
     Digest => true,
-    _      => false,
+    _ => false,
   }
 }
 
-fn requires_graph(p :: Phase) -> Bool {
+fn requires_graph(p :: Phase) -> Bool
+  examples {
+    requires_graph(Design) => true,
+    requires_graph(QA) => false
+  }
+{
   match p {
-    Design         => true,
+    Design => true,
     Implementation => true,
-    _              => false,
+    _ => false,
   }
 }
 
-examples {
-  # Legal transitions succeed
-  advance(Intake, Design, NoEvidence)                    == Ok(Design)
-  advance(Design, Implementation, GraphValidated)        == Ok(Implementation)
-  advance(Design, Design, GraphRefined)                  == Ok(Design)
-  advance(Implementation, QA, NoEvidence)                == Ok(QA)
-  advance(QA, Implementation, QaFailed)                  == Ok(Implementation)
-  advance(QA, Demo, QaAttested)                          == Ok(Demo)
-  advance(Demo, Retro, NoEvidence)                       == Ok(Retro)
-  advance(Retro, Digest, NoEvidence)                     == Ok(Digest)
-  advance(Digest, Intake, DigestComplete)                == Ok(Intake)
-
-  # Wrong evidence is rejected
-  advance(Design, Implementation, NoEvidence)            == Err(WrongEvidence("Design → Implementation requires GraphValidated"))
-  advance(QA, Demo, NoEvidence)                          == Err(WrongEvidence("QA → Demo requires QaAttested"))
-  advance(Digest, Intake, NoEvidence)                    == Err(WrongEvidence("Digest → Intake requires DigestComplete"))
-
-  # Illegal moves are rejected
-  advance(Intake, QA, NoEvidence)                        == Err(InvalidTransition("illegal transition: Intake → QA"))
-  advance(Demo, Design, NoEvidence)                      == Err(InvalidTransition("illegal transition: Demo → Design"))
-  advance(QA, Intake, NoEvidence)                        == Err(InvalidTransition("illegal transition: QA → Intake"))
-
-  # Predicates
-  is_terminal(Digest)         == true
-  is_terminal(Intake)         == false
-  requires_graph(Design)      == true
-  requires_graph(QA)          == false
-}

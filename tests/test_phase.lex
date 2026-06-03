@@ -1,101 +1,157 @@
-import "std.io"  as io
+import "std.list" as list
+
 import "std.str" as str
+
+import "std.int" as int
 
 import "../src/phase" as phase
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn pass(name :: Str) -> Unit {
-  let __p := io.print(str.join(["  PASS  ", name], ""))
-  ()
-}
-
-fn fail(name :: Str, detail :: Str) -> Unit {
-  let __p := io.print(str.join(["  FAIL  ", name, " — ", detail], ""))
-  ()
-}
-
-fn assert_phase(name :: Str, expected :: phase.Phase, r :: Result[phase.Phase, phase.TransitionError]) -> Unit {
+fn ok_phase(expected :: phase.Phase, r :: Result[phase.Phase, phase.TransitionError]) -> Result[Unit, Str] {
   match r {
-    Err(phase.InvalidTransition(msg)) => fail(name, str.join(["InvalidTransition: ", msg], "")),
-    Err(phase.WrongEvidence(msg))     => fail(name, str.join(["WrongEvidence: ", msg], "")),
-    Ok(p) =>
-      if phase.phase_name(p) == phase.phase_name(expected) {
-        pass(name)
-      } else {
-        fail(name, str.join(["expected ", phase.phase_name(expected), " got ", phase.phase_name(p)], ""))
-      },
+    Err(IllegalMove(msg)) => Err(str.concat("unexpected InvalidTransition: ", msg)),
+    Err(WrongEvidence(msg)) => Err(str.concat("unexpected WrongEvidence: ", msg)),
+    Ok(p) => if phase.phase_name(p) == phase.phase_name(expected) {
+      Ok(())
+    } else {
+      Err(str.join(["expected ", phase.phase_name(expected), " got ", phase.phase_name(p)], ""))
+    },
   }
 }
 
-fn assert_invalid(name :: Str, r :: Result[phase.Phase, phase.TransitionError]) -> Unit {
+fn expect_wrong_ev(r :: Result[phase.Phase, phase.TransitionError]) -> Result[Unit, Str] {
   match r {
-    Err(_) => pass(name),
-    Ok(p)  => fail(name, str.join(["expected error but got Ok(", phase.phase_name(p), ")"], "")),
+    Err(WrongEvidence(_)) => Ok(()),
+    Err(IllegalMove(msg)) => Err(str.concat("expected WrongEvidence, got InvalidTransition: ", msg)),
+    Ok(p) => Err(str.concat("expected error, got Ok: ", phase.phase_name(p))),
   }
 }
 
-fn assert_wrong_ev(name :: Str, r :: Result[phase.Phase, phase.TransitionError]) -> Unit {
+fn expect_invalid(r :: Result[phase.Phase, phase.TransitionError]) -> Result[Unit, Str] {
   match r {
-    Err(phase.WrongEvidence(_)) => pass(name),
-    Err(phase.InvalidTransition(msg)) => fail(name, str.join(["expected WrongEvidence but got InvalidTransition: ", msg], "")),
-    Ok(p) => fail(name, str.join(["expected error but got Ok(", phase.phase_name(p), ")"], "")),
+    Err(IllegalMove(_)) => Ok(()),
+    Err(WrongEvidence(msg)) => Err(str.concat("expected InvalidTransition, got WrongEvidence: ", msg)),
+    Ok(p) => Err(str.concat("expected error, got Ok: ", phase.phase_name(p))),
   }
 }
 
 # ── Legal transition tests ────────────────────────────────────────────────────
+fn test_intake_to_design() -> Result[Unit, Str] {
+  ok_phase(phase.Design, phase.advance(phase.Intake, phase.Design, phase.NoEvidence))
+}
 
-fn test_legal_transitions() -> Unit {
-  let __1 := assert_phase("Intake → Design",             phase.Design,         phase.advance(phase.Intake,         phase.Design,         phase.NoEvidence))
-  let __2 := assert_phase("Design → Implementation",     phase.Implementation, phase.advance(phase.Design,         phase.Implementation, phase.GraphValidated))
-  let __3 := assert_phase("Design → Design (re-plan)",   phase.Design,         phase.advance(phase.Design,         phase.Design,         phase.GraphRefined))
-  let __4 := assert_phase("Implementation → QA",         phase.QA,             phase.advance(phase.Implementation, phase.QA,             phase.NoEvidence))
-  let __5 := assert_phase("QA → Implementation (fail)",  phase.Implementation, phase.advance(phase.QA,             phase.Implementation, phase.QaFailed))
-  let __6 := assert_phase("QA → Demo",                   phase.Demo,           phase.advance(phase.QA,             phase.Demo,           phase.QaAttested))
-  let __7 := assert_phase("Demo → Retro",                phase.Retro,          phase.advance(phase.Demo,           phase.Retro,          phase.NoEvidence))
-  let __8 := assert_phase("Retro → Digest",              phase.Digest,         phase.advance(phase.Retro,          phase.Digest,         phase.NoEvidence))
-  let __9 := assert_phase("Digest → Intake",             phase.Intake,         phase.advance(phase.Digest,         phase.Intake,         phase.DigestComplete))
-  ()
+fn test_design_to_impl() -> Result[Unit, Str] {
+  ok_phase(phase.Implementation, phase.advance(phase.Design, phase.Implementation, phase.GraphValidated))
+}
+
+fn test_design_replan() -> Result[Unit, Str] {
+  ok_phase(phase.Design, phase.advance(phase.Design, phase.Design, phase.GraphRefined))
+}
+
+fn test_impl_to_qa() -> Result[Unit, Str] {
+  ok_phase(phase.QA, phase.advance(phase.Implementation, phase.QA, phase.NoEvidence))
+}
+
+fn test_qa_fail_bounce() -> Result[Unit, Str] {
+  ok_phase(phase.Implementation, phase.advance(phase.QA, phase.Implementation, phase.QaFailed))
+}
+
+fn test_qa_to_demo() -> Result[Unit, Str] {
+  ok_phase(phase.Demo, phase.advance(phase.QA, phase.Demo, phase.QaAttested))
+}
+
+fn test_demo_to_retro() -> Result[Unit, Str] {
+  ok_phase(phase.Retro, phase.advance(phase.Demo, phase.Retro, phase.NoEvidence))
+}
+
+fn test_retro_to_digest() -> Result[Unit, Str] {
+  ok_phase(phase.Digest, phase.advance(phase.Retro, phase.Digest, phase.NoEvidence))
+}
+
+fn test_digest_to_intake() -> Result[Unit, Str] {
+  ok_phase(phase.Intake, phase.advance(phase.Digest, phase.Intake, phase.DigestComplete))
 }
 
 # ── Wrong evidence tests ──────────────────────────────────────────────────────
+fn test_design_impl_no_evidence() -> Result[Unit, Str] {
+  expect_wrong_ev(phase.advance(phase.Design, phase.Implementation, phase.NoEvidence))
+}
 
-fn test_wrong_evidence() -> Unit {
-  let __1 := assert_wrong_ev("Design → Implementation without GraphValidated", phase.advance(phase.Design,  phase.Implementation, phase.NoEvidence))
-  let __2 := assert_wrong_ev("Design → Design without GraphRefined",           phase.advance(phase.Design,  phase.Design,         phase.NoEvidence))
-  let __3 := assert_wrong_ev("QA → Demo without QaAttested",                   phase.advance(phase.QA,      phase.Demo,           phase.NoEvidence))
-  let __4 := assert_wrong_ev("QA → Implementation without QaFailed",           phase.advance(phase.QA,      phase.Implementation, phase.NoEvidence))
-  let __5 := assert_wrong_ev("Digest → Intake without DigestComplete",         phase.advance(phase.Digest,  phase.Intake,         phase.NoEvidence))
-  ()
+fn test_design_replan_no_evidence() -> Result[Unit, Str] {
+  expect_wrong_ev(phase.advance(phase.Design, phase.Design, phase.NoEvidence))
+}
+
+fn test_qa_demo_no_evidence() -> Result[Unit, Str] {
+  expect_wrong_ev(phase.advance(phase.QA, phase.Demo, phase.NoEvidence))
+}
+
+fn test_digest_intake_no_evidence() -> Result[Unit, Str] {
+  expect_wrong_ev(phase.advance(phase.Digest, phase.Intake, phase.NoEvidence))
 }
 
 # ── Illegal transition tests ──────────────────────────────────────────────────
+fn test_intake_to_qa_illegal() -> Result[Unit, Str] {
+  expect_invalid(phase.advance(phase.Intake, phase.QA, phase.NoEvidence))
+}
 
-fn test_illegal_transitions() -> Unit {
-  let __1 := assert_invalid("Intake → QA",            phase.advance(phase.Intake,         phase.QA,     phase.NoEvidence))
-  let __2 := assert_invalid("Intake → Intake",        phase.advance(phase.Intake,         phase.Intake, phase.NoEvidence))
-  let __3 := assert_invalid("Demo → Design",          phase.advance(phase.Demo,           phase.Design, phase.NoEvidence))
-  let __4 := assert_invalid("QA → Retro",             phase.advance(phase.QA,             phase.Retro,  phase.NoEvidence))
-  let __5 := assert_invalid("Implementation → Demo",  phase.advance(phase.Implementation, phase.Demo,   phase.NoEvidence))
-  let __6 := assert_invalid("Digest → Design",        phase.advance(phase.Digest,         phase.Design, phase.NoEvidence))
-  ()
+fn test_demo_to_design_illegal() -> Result[Unit, Str] {
+  expect_invalid(phase.advance(phase.Demo, phase.Design, phase.NoEvidence))
+}
+
+fn test_impl_to_demo_illegal() -> Result[Unit, Str] {
+  expect_invalid(phase.advance(phase.Implementation, phase.Demo, phase.NoEvidence))
 }
 
 # ── Predicate tests ───────────────────────────────────────────────────────────
-
-fn test_predicates() -> Unit {
-  let __1 := if phase.is_terminal(phase.Digest) { pass("Digest is terminal") } else { fail("Digest is terminal", "returned false") }
-  let __2 := if !phase.is_terminal(phase.QA)    { pass("QA is not terminal") } else { fail("QA is not terminal", "returned true") }
-  let __3 := if phase.requires_graph(phase.Design)         { pass("Design requires graph") } else { fail("Design requires graph", "returned false") }
-  let __4 := if !phase.requires_graph(phase.Retro)         { pass("Retro does not require graph") } else { fail("Retro does not require graph", "returned true") }
-  ()
+fn test_digest_is_terminal() -> Result[Unit, Str] {
+  if phase.is_terminal(phase.Digest) {
+    Ok(())
+  } else {
+    Err("Digest should be terminal")
+  }
 }
 
-fn main() -> [io] Unit {
-  let __p := io.print("phase tests")
-  let __1 := test_legal_transitions()
-  let __2 := test_wrong_evidence()
-  let __3 := test_illegal_transitions()
-  let __4 := test_predicates()
-  ()
+fn test_qa_not_terminal() -> Result[Unit, Str] {
+  if phase.is_terminal(phase.QA) {
+    Err("QA should not be terminal")
+  } else {
+    Ok(())
+  }
 }
+
+fn test_design_requires_graph() -> Result[Unit, Str] {
+  if phase.requires_graph(phase.Design) {
+    Ok(())
+  } else {
+    Err("Design should require graph")
+  }
+}
+
+fn test_retro_no_graph() -> Result[Unit, Str] {
+  if phase.requires_graph(phase.Retro) {
+    Err("Retro should not require graph")
+  } else {
+    Ok(())
+  }
+}
+
+# ── Suite ─────────────────────────────────────────────────────────────────────
+fn suite() -> List[Result[Unit, Str]] {
+  [test_intake_to_design(), test_design_to_impl(), test_design_replan(), test_impl_to_qa(), test_qa_fail_bounce(), test_qa_to_demo(), test_demo_to_retro(), test_retro_to_digest(), test_digest_to_intake(), test_design_impl_no_evidence(), test_design_replan_no_evidence(), test_qa_demo_no_evidence(), test_digest_intake_no_evidence(), test_intake_to_qa_illegal(), test_demo_to_design_illegal(), test_impl_to_demo_illegal(), test_digest_is_terminal(), test_qa_not_terminal(), test_design_requires_graph(), test_retro_no_graph()]
+}
+
+fn run_all() -> Unit {
+  let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
+    match r {
+      Ok(_) => n,
+      Err(_) => n + 1,
+    }
+  })
+  if failures == 0 {
+    ()
+  } else {
+    let __force_fail := 1 / 0
+    ()
+  }
+}
+

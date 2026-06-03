@@ -7,6 +7,7 @@ description = "Multi-agent sprint cycles built on lex-soft (design stage)"
 
 [dependencies]
 "lex-soft"   = { path = "../lex-soft" }
+"lex-llm"    = { path = "../lex-llm" }
 "lex-spec"   = { path = "../lex-spec" }
 "lex-schema" = { path = "../lex-schema" }
 "lex-jobs"   = { path = "../lex-jobs" }

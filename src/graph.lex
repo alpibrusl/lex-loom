@@ -1,82 +1,84 @@
 import "std.list" as list
-import "std.str"  as str
-import "std.int"  as int
+
+import "std.str" as str
+
+import "std.int" as int
 
 import "lex-schema/json_value" as jv
 
+import "./phase" as ph
+
 # ── Types ────────────────────────────────────────────────────────────────────
+type Phase = ph.Phase
 
-type Phase =
-  Intake | Design | Implementation | QA | Demo | Retro | Digest
-
-# `gate` is the spec source evaluated by lex-spec at runtime.
-# Empty gate is rejected by validate/metaspec — ungated output is not allowed.
-type Node = {
-  id   :: Str,
-  role :: Str,
-  gate :: Str,
-}
+type Node = { id :: Str, role :: Str, gate :: Str }
 
 # `handoff` is the schema source validated by lex-schema at runtime.
 # On the wire only a content-hash ref travels, not the payload itself.
-type Edge = {
-  from    :: Str,
-  to      :: Str,
-  handoff :: Str,
-}
+type Edge = { from :: Str, to :: Str, handoff :: Str }
 
 # The dynamic artifact produced by the Architect per sprint.
 # Content-addressed by its own hash once content-addressing lands in lex-vcs.
-type SprintGraph = {
-  id    :: Str,
-  phase :: Phase,
-  nodes :: List[Node],
-  edges :: List[Edge],
-}
+type SprintGraph = { id :: Str, phase :: Phase, nodes :: List[Node], edges :: List[Edge] }
 
 # ── Internal helpers (pure) ───────────────────────────────────────────────────
-
 fn node_ids(g :: SprintGraph) -> List[Str] {
-  list.map(g.nodes, fn (n :: Node) -> Str { n.id })
+  list.map(g.nodes, fn (n :: Node) -> Str {
+    n.id
+  })
 }
 
 fn predecessors(g :: SprintGraph, id :: Str) -> List[Str] {
   list.fold(g.edges, [], fn (acc :: List[Str], e :: Edge) -> List[Str] {
-    if e.to == id { list.concat(acc, [e.from]) } else { acc }
+    if e.to == id {
+      list.concat(acc, [e.from])
+    } else {
+      acc
+    }
   })
 }
 
 fn str_contains(items :: List[Str], target :: Str) -> Bool {
   list.fold(items, false, fn (found :: Bool, s :: Str) -> Bool {
-    if found { true } else { s == target }
+    if found {
+      true
+    } else {
+      s == target
+    }
   })
 }
 
 fn str_filter(items :: List[Str], pred :: (Str) -> Bool) -> List[Str] {
   list.fold(items, [], fn (acc :: List[Str], s :: Str) -> List[Str] {
-    if pred(s) { list.concat(acc, [s]) } else { acc }
+    if pred(s) {
+      list.concat(acc, [s])
+    } else {
+      acc
+    }
   })
 }
 
 fn count_occurrences(items :: List[Str], target :: Str) -> Int {
   list.fold(items, 0, fn (n :: Int, s :: Str) -> Int {
-    if s == target { n + 1 } else { n }
+    if s == target {
+      n + 1
+    } else {
+      n
+    }
   })
 }
 
 # ── Structural validation (pure) ──────────────────────────────────────────────
-
 fn validate_unique_ids(g :: SprintGraph) -> Result[Unit, Str] {
   let ids := node_ids(g)
   list.fold(ids, Ok(()), fn (acc :: Result[Unit, Str], id :: Str) -> Result[Unit, Str] {
     match acc {
       Err(msg) => Err(msg),
-      Ok(_) =>
-        if count_occurrences(ids, id) > 1 {
-          Err(str.join(["duplicate node id: ", id], ""))
-        } else {
-          Ok(())
-        },
+      Ok(_) => if count_occurrences(ids, id) > 1 {
+        Err(str.join(["duplicate node id: ", id], ""))
+      } else {
+        Ok(())
+      },
     }
   })
 }
@@ -85,16 +87,19 @@ fn validate_node_fields(g :: SprintGraph) -> Result[Unit, Str] {
   list.fold(g.nodes, Ok(()), fn (acc :: Result[Unit, Str], n :: Node) -> Result[Unit, Str] {
     match acc {
       Err(msg) => Err(msg),
-      Ok(_) =>
-        if str.is_empty(n.id) {
-          Err("node has empty id")
-        } else if str.is_empty(n.role) {
+      Ok(_) => if str.is_empty(n.id) {
+        Err("node has empty id")
+      } else {
+        if str.is_empty(n.role) {
           Err(str.join(["node ", n.id, " has empty role"], ""))
-        } else if str.is_empty(n.gate) {
-          Err(str.join(["node ", n.id, " has no gate (ungated output not allowed)"], ""))
         } else {
-          Ok(())
-        },
+          if str.is_empty(n.gate) {
+            Err(str.join(["node ", n.id, " has no gate (ungated output not allowed)"], ""))
+          } else {
+            Ok(())
+          }
+        }
+      },
     }
   })
 }
@@ -104,16 +109,19 @@ fn validate_edge_refs(g :: SprintGraph) -> Result[Unit, Str] {
   list.fold(g.edges, Ok(()), fn (acc :: Result[Unit, Str], e :: Edge) -> Result[Unit, Str] {
     match acc {
       Err(msg) => Err(msg),
-      Ok(_) =>
-        if !str_contains(ids, e.from) {
-          Err(str.join(["edge references unknown source node: ", e.from], ""))
-        } else if !str_contains(ids, e.to) {
+      Ok(_) => if not str_contains(ids, e.from) {
+        Err(str.join(["edge references unknown source node: ", e.from], ""))
+      } else {
+        if not str_contains(ids, e.to) {
           Err(str.join(["edge references unknown target node: ", e.to], ""))
-        } else if str.is_empty(e.handoff) {
-          Err(str.join(["edge ", e.from, "->", e.to, " has no handoff schema"], ""))
         } else {
-          Ok(())
-        },
+          if str.is_empty(e.handoff) {
+            Err(str.join(["edge ", e.from, "->", e.to, " has no handoff schema"], ""))
+          } else {
+            Ok(())
+          }
+        }
+      },
     }
   })
 }
@@ -123,31 +131,33 @@ fn validate_edge_refs(g :: SprintGraph) -> Result[Unit, Str] {
 # Kahn's algorithm over immutable lists. Returns layers — each layer is a set
 # of node ids whose predecessors are all in prior layers. Errors on a cycle
 # (use metaspec iteration budgets to allow bounded cycles).
-
-fn topo_sort(g :: SprintGraph) -> Result[List[List[Str]], Str] {
+fn topo_sort(g :: SprintGraph) -> Result[List[List[Str]], Str]
+  examples {
+    topo_sort({ id: "g5", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }, { id: "b", role: "test", gate: "spec true" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }] }) => Ok([["a"], ["b"]])
+  }
+{
   topo_step(g, node_ids(g), [])
 }
 
-fn topo_step(
-  g         :: SprintGraph,
-  remaining :: List[Str],
-  acc       :: List[List[Str]],
-) -> Result[List[List[Str]], Str] {
+fn topo_step(g :: SprintGraph, remaining :: List[Str], acc :: List[List[Str]]) -> Result[List[List[Str]], Str] {
   if list.is_empty(remaining) {
     Ok(acc)
   } else {
-    # A node is ready when none of its predecessors are still remaining
     let ready := str_filter(remaining, fn (id :: Str) -> Bool {
       let preds := predecessors(g, id)
-      !list.fold(preds, false, fn (any_pending :: Bool, pred :: Str) -> Bool {
-        if any_pending { true } else { str_contains(remaining, pred) }
+      not list.fold(preds, false, fn (any_pending :: Bool, pred :: Str) -> Bool {
+        if any_pending {
+          true
+        } else {
+          str_contains(remaining, pred)
+        }
       })
     })
     if list.is_empty(ready) {
       Err("cycle detected in SprintGraph — add an iteration budget to allow bounded cycles")
     } else {
       let next := str_filter(remaining, fn (id :: Str) -> Bool {
-        !str_contains(ready, id)
+        not str_contains(ready, id)
       })
       topo_step(g, next, list.concat(acc, [ready]))
     }
@@ -155,9 +165,16 @@ fn topo_step(
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
-
 # Structural validation only — schema and spec content are checked by metaspec.
-fn validate(g :: SprintGraph) -> Result[Unit, Str] {
+fn validate(g :: SprintGraph) -> Result[Unit, Str]
+  examples {
+    validate({ id: "g0", phase: Intake, nodes: [], edges: [] }) => Ok(()),
+    validate({ id: "g1", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true" }, { id: "n1", role: "test", gate: "spec true" }], edges: [] }) => Err("duplicate node id: n1"),
+    validate({ id: "g2", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "" }], edges: [] }) => Err("node n1 has no gate (ungated output not allowed)"),
+    validate({ id: "g3", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true" }], edges: [{ from: "n1", to: "n2", handoff: "schema {}" }] }) => Err("edge references unknown target node: n2"),
+    validate({ id: "g4", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }, { id: "b", role: "test", gate: "spec true" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Err("cycle detected in SprintGraph — add an iteration budget to allow bounded cycles")
+  }
+{
   match validate_unique_ids(g) {
     Err(e) => Err(e),
     Ok(_) => match validate_node_fields(g) {
@@ -166,7 +183,7 @@ fn validate(g :: SprintGraph) -> Result[Unit, Str] {
         Err(e) => Err(e),
         Ok(_) => match topo_sort(g) {
           Err(e) => Err(e),
-          Ok(_)  => Ok(()),
+          Ok(_) => Ok(()),
         },
       },
     },
@@ -174,28 +191,48 @@ fn validate(g :: SprintGraph) -> Result[Unit, Str] {
 }
 
 # ── JSON serialisation ────────────────────────────────────────────────────────
-
 fn phase_to_str(p :: Phase) -> Str {
   match p {
-    Intake         => "Intake",
-    Design         => "Design",
+    Intake => "Intake",
+    Design => "Design",
     Implementation => "Implementation",
-    QA             => "QA",
-    Demo           => "Demo",
-    Retro          => "Retro",
-    Digest         => "Digest",
+    QA => "QA",
+    Demo => "Demo",
+    Retro => "Retro",
+    Digest => "Digest",
   }
 }
 
 fn phase_from_str(s :: Str) -> Result[Phase, Str] {
-  if s == "Intake"         { Ok(Intake) }
-  else if s == "Design"    { Ok(Design) }
-  else if s == "Implementation" { Ok(Implementation) }
-  else if s == "QA"        { Ok(QA) }
-  else if s == "Demo"      { Ok(Demo) }
-  else if s == "Retro"     { Ok(Retro) }
-  else if s == "Digest"    { Ok(Digest) }
-  else { Err(str.concat("unknown phase: ", s)) }
+  if s == "Intake" {
+    Ok(Intake)
+  } else {
+    if s == "Design" {
+      Ok(Design)
+    } else {
+      if s == "Implementation" {
+        Ok(Implementation)
+      } else {
+        if s == "QA" {
+          Ok(QA)
+        } else {
+          if s == "Demo" {
+            Ok(Demo)
+          } else {
+            if s == "Retro" {
+              Ok(Retro)
+            } else {
+              if s == "Digest" {
+                Ok(Digest)
+              } else {
+                Err(str.concat("unknown phase: ", s))
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 fn node_to_json(n :: Node) -> jv.Json {
@@ -207,12 +244,11 @@ fn edge_to_json(e :: Edge) -> jv.Json {
 }
 
 fn to_json(g :: SprintGraph) -> jv.Json {
-  JObj([
-    ("id",    JStr(g.id)),
-    ("phase", JStr(phase_to_str(g.phase))),
-    ("nodes", JList(list.map(g.nodes, fn (n :: Node) -> jv.Json { node_to_json(n) }))),
-    ("edges", JList(list.map(g.edges, fn (e :: Edge) -> jv.Json { edge_to_json(e) }))),
-  ])
+  JObj([("id", JStr(g.id)), ("phase", JStr(phase_to_str(g.phase))), ("nodes", JList(list.map(g.nodes, fn (n :: Node) -> jv.Json {
+    node_to_json(n)
+  }))), ("edges", JList(list.map(g.edges, fn (e :: Edge) -> jv.Json {
+    edge_to_json(e)
+  })))])
 }
 
 fn node_from_json(j :: jv.Json) -> Result[Node, Str] {
@@ -248,10 +284,14 @@ fn edge_from_json(j :: jv.Json) -> Result[Edge, Str] {
     Some(JStr(s)) => s,
     _ => "schema {}",
   }
-  if str.is_empty(from) || str.is_empty(to) {
+  if str.is_empty(from) {
     Err("edge missing from or to field")
   } else {
-    Ok({ from: from, to: to, handoff: handoff })
+    if str.is_empty(to) {
+      Err("edge missing from or to field")
+    } else {
+      Ok({ from: from, to: to, handoff: handoff })
+    }
   }
 }
 
@@ -261,8 +301,8 @@ fn nodes_from_json(j :: jv.Json) -> Result[List[Node], Str] {
       match acc {
         Err(e) => Err(e),
         Ok(ns) => match node_from_json(item) {
-          Err(e)  => Err(e),
-          Ok(n)   => Ok(list.concat(ns, [n])),
+          Err(e) => Err(e),
+          Ok(n) => Ok(list.concat(ns, [n])),
         },
       }
     }),
@@ -301,11 +341,11 @@ fn from_json(j :: jv.Json) -> Result[SprintGraph, Str] {
         Ok(p) => {
           let nodes_j := match jv.get_field(j, "nodes") {
             Some(v) => v,
-            None    => JList([]),
+            None => JList([]),
           }
           let edges_j := match jv.get_field(j, "edges") {
             Some(v) => v,
-            None    => JList([]),
+            None => JList([]),
           }
           match nodes_from_json(nodes_j) {
             Err(e) => Err(e),
@@ -324,7 +364,7 @@ fn from_json(j :: jv.Json) -> Result[SprintGraph, Str] {
 fn from_json_str(s :: Str) -> Result[SprintGraph, Str] {
   match jv.parse(s) {
     Err(e) => Err(str.join(["JSON parse error at pos ", int.to_str(e.pos), ": ", e.message], "")),
-    Ok(j)  => from_json(j),
+    Ok(j) => from_json(j),
   }
 }
 
@@ -332,54 +372,3 @@ fn to_json_str(g :: SprintGraph) -> Str {
   jv.stringify(to_json(g))
 }
 
-examples {
-  # Empty graph is valid
-  validate({ id: "g0", phase: Intake, nodes: [], edges: [] }) == Ok(())
-
-  # Duplicate node ids are rejected
-  validate({
-    id: "g1", phase: Intake,
-    nodes: [
-      { id: "n1", role: "build", gate: "spec true" },
-      { id: "n1", role: "test",  gate: "spec true" },
-    ],
-    edges: [],
-  }) == Err("duplicate node id: n1")
-
-  # Ungated node is rejected
-  validate({
-    id: "g2", phase: Intake,
-    nodes: [{ id: "n1", role: "build", gate: "" }],
-    edges: [],
-  }) == Err("node n1 has no gate (ungated output not allowed)")
-
-  # Edge to unknown node is rejected
-  validate({
-    id: "g3", phase: Intake,
-    nodes: [{ id: "n1", role: "build", gate: "spec true" }],
-    edges: [{ from: "n1", to: "n2", handoff: "schema {}" }],
-  }) == Err("edge references unknown target node: n2")
-
-  # Cycle is rejected
-  validate({
-    id: "g4", phase: Intake,
-    nodes: [
-      { id: "a", role: "build", gate: "spec true" },
-      { id: "b", role: "test",  gate: "spec true" },
-    ],
-    edges: [
-      { from: "a", to: "b", handoff: "schema {}" },
-      { from: "b", to: "a", handoff: "schema {}" },
-    ],
-  }) == Err("cycle detected in SprintGraph — add an iteration budget to allow bounded cycles")
-
-  # Valid two-node DAG returns sorted layers
-  topo_sort({
-    id: "g5", phase: Intake,
-    nodes: [
-      { id: "a", role: "build", gate: "spec true" },
-      { id: "b", role: "test",  gate: "spec true" },
-    ],
-    edges: [{ from: "a", to: "b", handoff: "schema {}" }],
-  }) == Ok([["a"], ["b"]])
-}

@@ -75,12 +75,12 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
                 Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
                   Err(e) => Err(e),
                   Ok(_) => match exec_ddl(db, ddl_tightened_specs_idx()) {
-                  Err(e) => Err(e),
-                  Ok(_) => match exec_ddl(db, ddl_node_results()) {
                     Err(e) => Err(e),
-                    Ok(_) => exec_ddl(db, ddl_node_results_idx()),
+                    Ok(_) => match exec_ddl(db, ddl_node_results()) {
+                      Err(e) => Err(e),
+                      Ok(_) => exec_ddl(db, ddl_node_results_idx()),
+                    },
                   },
-                },
                 },
               },
             },
@@ -90,3 +90,4 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
     },
   }
 }
+

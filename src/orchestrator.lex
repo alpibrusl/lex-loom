@@ -285,10 +285,20 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
     } else {
       design_retry_prompt(request, errors)
     }
-    let agent_cfg := roles.architect_with_context(cfg.model, specs_context)
-    let handler := runner.make_handler(cfg.db, agent_cfg)
-    let outcome := handler(msg.user_text(prompt))
-    let output := extract_text(outcome.reply)
+    let agent_cfg := roles.architect_with_context(cfg.model, specs_context, cfg.id)
+    let handler   := runner.make_handler(cfg.db, agent_cfg)
+    let outcome   := handler(msg.user_text(prompt))
+    # Try reading the graph from the tool output file first (emit_graph tool path),
+    # then fall back to parsing the text reply (text output path).
+    let tmp_path  := roles.graph_tmp_path(cfg.id)
+    let output    := match io.read(tmp_path) {
+      Ok(file_content) => {
+        # Clean up the temp file so the next attempt starts fresh
+        let __rm := io.write(tmp_path, "")
+        file_content
+      },
+      Err(_) => extract_text(outcome.reply),
+    }
     let __tl := io.print(str.join(["[loom] architect attempt=", int.to_str(attempts), " output_len=", int.to_str(str.len(output))], ""))
     match graph.from_json_str(output) {
       Err(parse_err) => {

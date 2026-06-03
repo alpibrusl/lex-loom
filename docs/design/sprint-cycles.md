@@ -1,4 +1,4 @@
-# loom — design: multi-agent sprint cycles
+# lex-loom — design: multi-agent sprint cycles
 
 > **Status.** Design proposal (v0.0). No implementation yet — this doc
 > is the contract the first `src/` modules will be checked against.

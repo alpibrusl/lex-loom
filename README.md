@@ -1,4 +1,4 @@
-# loom
+# lex-loom
 
 > **Incubator.** Lives in `lex-lang/loom/` while the design and API
 > surface firm up — the same path `lex-jobs` took. Intended to extract to

@@ -1,9 +1,9 @@
-# lex-loom — design: multi-agent sprint cycles
+# loom — design: multi-agent sprint cycles
 
 > **Status.** Design proposal (v0.0). No implementation yet — this doc
 > is the contract the first `src/` modules will be checked against.
 >
-> **Name.** The package is `lex-loom` — the orchestration substrate.
+> **Name.** The package is `loom` — the orchestration substrate.
 > The workflow it runs is a **sprint cycle**. A loom holds a fixed
 > **warp** (the effect-typed substrate and the gates) and a dynamic
 > **weft** (the agent bodies the model fills in) and weaves them into one
@@ -22,7 +22,7 @@
 > **Predecessor.** [`lex-soft`](https://github.com/alpibrusl/lex-soft) is the
 > direct runtime ancestor — a pure-Lex multi-agent platform whose registry,
 > relationships graph, outbox, state store, trace log, and runner loop are
-> the primitives lex-loom builds on. See §17 for the lineage map.
+> the primitives loom builds on. See §17 for the lineage map.
 
 ---
 
@@ -72,9 +72,9 @@ turned into an architecture: the substrate (layer 2) carries the
 constraints; the model (the Architect) fills the bodies (the graph and
 each node's work); the type checker verifies the result.
 
-## 3. Reuse map — lex-loom is mostly wiring
+## 3. Reuse map — loom is mostly wiring
 
-The ecosystem already provides every primitive. `lex-loom` is the thin
+The ecosystem already provides every primitive. `loom` is the thin
 orchestration layer that composes them.
 
 | Dependency | Role in a sprint |
@@ -90,7 +90,7 @@ orchestration layer that composes them.
 | **lex-mcp** | Exposes the sprint controls (start, status, advance, inspect-trail) to Claude Code / Cursor as MCP tools. |
 | **lex-code** | The existing worker agents — build / test / spec / review / plan / explore / refactor — and its `run_parallel` (`list.par_map`) is the literal seed of our orchestrator. |
 
-What is genuinely **new** in lex-loom: the `SprintGraph` value + its
+What is genuinely **new** in loom: the `SprintGraph` value + its
 validator, the phase state machine, the effect-typed graph executor, the
 four orchestration roles (Architect / QA / Demo / Scribe), and the
 Digest feedback loop.
@@ -341,7 +341,7 @@ as a system rather than a slogan.
 ## 14. Module layout (for the first implementation PR)
 
 ```
-lex-loom/
+loom/
   lex.toml
   src/
     graph.lex         # SprintGraph / Node / Edge ADTs + schema + validate (pure, examples{})
@@ -389,32 +389,32 @@ lex-loom/
 - **M5.** Durable queue (lex-jobs) + multi-tenancy (lex-hub) + MCP/A2A
   front door across processes.
 
-## 17. Lineage: what lex-loom inherits from `lex-soft`
+## 17. Lineage: what loom inherits from `lex-soft`
 
 [`lex-soft`](https://github.com/alpibrusl/lex-soft) is the immediate predecessor —
 a pure-Lex multi-agent platform demonstrated by an EV fleet (truck / depot / tms).
-Every significant primitive lex-loom depends on already exists there. lex-loom is
+Every significant primitive loom depends on already exists there. loom is
 the sprint-cycle evolution: a richer phase state machine, a dynamic typed graph,
 and a feedback loop that encodes learning back into specs.
 
 ### Primitives reused directly
 
-| `lex-soft` module | lex-loom role | Notes |
+| `lex-soft` module | loom role | Notes |
 |---|---|---|
 | `registry.lex` — `AgentRef`, `register`, `find_by_kind`, `heartbeat` | agent discovery in `transport.lex` (§4) | Resolving a `Node.role` string to a live agent endpoint is exactly `registry.find_by_kind`. |
-| `relationships.lex` — directed edges with `role` + `contract_json` | `Edge.handoff` schema binding (§5) | The `contract_json` field is the untyped precursor to lex-loom's `ModelSchema` handoff. The role graph is the structural seed of `SprintGraph.edges`. |
+| `relationships.lex` — directed edges with `role` + `contract_json` | `Edge.handoff` schema binding (§5) | The `contract_json` field is the untyped precursor to loom's `ModelSchema` handoff. The role graph is the structural seed of `SprintGraph.edges`. |
 | `resolver.lex` — intent-based peer lookup | Architect agent's graph derivation (§8) | `resolve(db, agent_id, intent)` is the runtime call the Architect makes when populating `SprintGraph.nodes` after Intake. |
-| `outbox.lex` — durable local send queue (lex-jobs backed) | control plane §4 | Exactly the "enqueue a node-job, await ack" model described in §4. lex-loom uses this directly for phase fan-out; `flush_loop` is the worker drain. |
-| `platform/inbox.lex` — push queue (cloud agents) + pull queue (edge agents) | control plane §4 | The dual-queue topology handles the "offline edge worker" case lex-loom needs for agents running outside the orchestrator's process. |
+| `outbox.lex` — durable local send queue (lex-jobs backed) | control plane §4 | Exactly the "enqueue a node-job, await ack" model described in §4. loom uses this directly for phase fan-out; `flush_loop` is the worker drain. |
+| `platform/inbox.lex` — push queue (cloud agents) + pull queue (edge agents) | control plane §4 | The dual-queue topology handles the "offline edge worker" case loom needs for agents running outside the orchestrator's process. |
 | `state_store.lex` — JSON blob per agent, SQLite-backed | per-node ephemeral state in `orchestrator.lex` | `state_store.load / save` are the calls `run_phase` uses to checkpoint each node's working state between restarts. |
 | `trace.lex` — append-only event log, run-ID correlated | `lex-trail` integration (§12) | lex-soft's trace table is the local SQLite layer; lex-trail adds the content-addressed hash chain on top. The event kinds (`received`, `llm_start`, `llm_done`, `sent`, `error`) extend directly with sprint kinds (`graph_validated`, `phase_advanced`, `gate_denied`). |
 | `runner.lex` — `AgentConfig`, `Backend` (Local/Remote), `make_handler` | `run_phase` executor (§6) | The `Backend` polymorphism (local SQLite vs platform HTTP) is the seam §4 calls "swappable transport." `make_handler` is the per-node invoke call inside `run_phase`. |
-| `platform/client.lex` — `peers`, `load_state`, `save_state`, `pull_inbox` | `transport.lex` remote backend (§4, M5) | The platform HTTP API is the multi-tenant distribution layer §11 refers to; lex-loom plugs in via `BackendRemote(PlatformClient)`. |
-| `platform/server.lex` — `/v1/agents`, `/v1/messages`, `/v1/state`, `/v1/audit` | MCP/A2A front door (§14 `server/`) | The existing platform routes are the foundation. lex-loom extends them with sprint-specific endpoints (`/v1/sprints/:id/graph`, `/v1/sprints/:id/phase`). |
-| `a2a.lex` — `send / broadcast` (from/to/topic/payload) | inter-agent calls plane (§4) | The A2A envelope is already in place; lex-loom layers lex-agent's typed capabilities and spec preconditions on top. |
-| `migrate.lex` — idempotent DDL (`agents`, `relationships`, `agent_state`, `traces`) | database bootstrap in `transport.lex` | lex-loom extends the schema with sprint tables (`sprint_graphs`, `phase_transitions`) using the same idempotent migration pattern. |
+| `platform/client.lex` — `peers`, `load_state`, `save_state`, `pull_inbox` | `transport.lex` remote backend (§4, M5) | The platform HTTP API is the multi-tenant distribution layer §11 refers to; loom plugs in via `BackendRemote(PlatformClient)`. |
+| `platform/server.lex` — `/v1/agents`, `/v1/messages`, `/v1/state`, `/v1/audit` | MCP/A2A front door (§14 `server/`) | The existing platform routes are the foundation. loom extends them with sprint-specific endpoints (`/v1/sprints/:id/graph`, `/v1/sprints/:id/phase`). |
+| `a2a.lex` — `send / broadcast` (from/to/topic/payload) | inter-agent calls plane (§4) | The A2A envelope is already in place; loom layers lex-agent's typed capabilities and spec preconditions on top. |
+| `migrate.lex` — idempotent DDL (`agents`, `relationships`, `agent_state`, `traces`) | database bootstrap in `transport.lex` | loom extends the schema with sprint tables (`sprint_graphs`, `phase_transitions`) using the same idempotent migration pattern. |
 
-### What lex-loom adds (genuinely new surface)
+### What loom adds (genuinely new surface)
 
 - **`SprintGraph`** — a typed, content-addressed, diffable value derived per request (§5, §8); lex-soft's relationships graph is a static registry, not a per-sprint artifact.
 - **Gated phase state machine** — evidence-consuming transitions with `InvalidTransition` enforcement (§7); lex-soft has no phase concept.

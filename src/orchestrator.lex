@@ -24,8 +24,8 @@ import "lex-agent/src/server" as srv
 
 import "lex-soft/src/runner" as runner
 
-import "./graph" as graph
-
+import "./graph"    as graph
+import "./gates"    as gates
 import "./metaspec" as metaspec
 
 import "./phase" as phase
@@ -55,20 +55,12 @@ type ArtifactCache = List[(Str, Str)]
 
 # ── Gate evaluation ───────────────────────────────────────────────────────────
 #
-# Evaluate-at-both-ends (§10). M3 stub: non-empty checks.
-# M4: replaced with spec_checker.evaluate(gate, bindings).
-type GateVerdict = GateAllow | GateDeny(Str)
+# Evaluate-at-both-ends (§10).
+# Delegates to gates.lex which maps gate DSL strings to lex-spec evaluations.
+type GateVerdict = gates.GateVerdict
 
 fn evaluate_gate(gate :: Str, output :: Str) -> GateVerdict {
-  if str.is_empty(gate) {
-    GateDeny("gate is empty — ungated output not allowed")
-  } else {
-    if str.is_empty(output) {
-      GateDeny("node produced empty output")
-    } else {
-      GateAllow
-    }
-  }
+  gates.evaluate(gate, output)
 }
 
 # ── Artifact cache helpers ────────────────────────────────────────────────────
@@ -250,7 +242,32 @@ fn max_design_retries() -> Int {
 }
 
 fn design_prompt(request :: Str) -> Str {
-  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"spec non-empty\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n", "Rules: every node must have a non-empty gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor."], "")
+  str.join([
+    "You are the Architect for a software sprint.\n\n",
+    "Project request:\n", request, "\n\n",
+    "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n",
+    "{\n",
+    "  \"id\": \"<sprint-graph-id>\",\n",
+    "  \"phase\": \"Design\",\n",
+    "  \"nodes\": [\n",
+    "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n",
+    "  ],\n",
+    "  \"edges\": [\n",
+    "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n",
+    "  ]\n",
+    "}\n\n",
+    "Valid roles: architect, build, qa, demo, scribe.\n\n",
+    "Valid gate expressions (choose the most specific one for each role):\n",
+    "  spec non-empty              — output must not be empty (default)\n",
+    "  spec contains PASS          — output must contain the word PASS (use for qa nodes)\n",
+    "  spec contains fn            — output must contain a function definition (use for build nodes)\n",
+    "  spec starts-with fn         — output must start with fn keyword\n",
+    "  spec json                   — output must be valid JSON\n",
+    "  spec json-field <key>       — output must be JSON with field <key>\n",
+    "  spec len-gt <N>             — output must be longer than N characters\n\n",
+    "Rules: every node must have a gate; edges must reference existing node ids; ",
+    "no cycles; every demo node must have a qa ancestor.",
+  ], "")
 }
 
 fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
@@ -341,7 +358,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }
       })
       let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
-        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec non-empty" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec contains PASS" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
       } else {
         sprint_graph
       }

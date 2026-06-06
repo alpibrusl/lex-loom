@@ -26,13 +26,11 @@ import "std.int" as int
 
 import "std.list" as list
 
-import "lex-llm/src/provider" as prov
-
 import "lex-jobs/src/jobs" as jobs
 
 import "lex-schema/json_value" as jv
 
-import "lex-agent/src/message" as msg
+import "lex-llm/src/provider" as prov
 
 import "lex-soft/src/runner" as runner
 
@@ -44,11 +42,11 @@ import "./roles" as roles
 
 import "./graph" as graph
 
-fn get_env(key :: Str, default :: Str) -> [env] Str {
+fn get_env(key :: Str, fallback :: Str) -> [env] Str {
   match env.get(key) {
-    None => default,
+    None => fallback,
     Some(v) => if str.is_empty(v) {
-      default
+      fallback
     } else {
       v
     },
@@ -57,7 +55,7 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
 
 # Parse and execute a single node-job payload.
 # Writes the result to node_results via transport.write_node_result.
-fn execute_node_job(db :: Db, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
+fn execute_node_job(db :: Db, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
   match jv.parse(payload) {
     Err(_) => Fail("invalid JSON payload"),
     Ok(j) => {
@@ -107,21 +105,12 @@ fn execute_node_job(db :: Db, payload :: Str, model_default :: Str, provider :: 
               match roles.for_role_with_provider(n.role, model, provider) {
                 None => Fail(str.join(["unknown role: ", n.role], "")),
                 Some(agent_cfg) => {
-                  let handler := runner.make_handler(db, agent_cfg)
-                  let in_msg := msg.user_text(if str.is_empty(input_content) {
+                  let input_str := if str.is_empty(input_content) {
                     sprint_id
                   } else {
                     input_content
-                  })
-                  let outcome := handler(in_msg)
-                  let output := match outcome.reply {
-                    None => "",
-                    Some(m) => match list.head(m.parts) {
-                      None => "",
-                      Some(TextPart(s)) => s,
-                      Some(_) => "",
-                    },
                   }
+                  let output := runner.step(db, agent_cfg, input_str)
                   let accepted := if not str.is_empty(output) {
                     not str.is_empty(n.gate)
                   } else {
@@ -189,7 +178,7 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn poll_loop(db :: Db, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn poll_loop(db :: Db, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
   match jobs.try_claim(db, queue) {
     Err(e) => io.print(str.concat("[loom/worker] claim error: ", e)),
     Ok(None) => {

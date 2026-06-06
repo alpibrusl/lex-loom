@@ -42,6 +42,20 @@ fn trail(db :: Db, sprint_id :: Str, event_kind :: Str, data :: Str) -> [sql, fs
   trace.record(db, sprint_id, sprint_id, event_kind, data)
 }
 
+type TrailCountRow = { n :: Int }
+
+fn count_trail_events(db :: Db, sprint_id :: Str, event_kind :: Str) -> [sql, fs_read] Int {
+  let q := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", sq(sprint_id), "' AND event_kind='", sq(event_kind), "'"], "")
+  let rows :: Result[List[TrailCountRow], SqlError] := sql.query(db, q, [])
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
+  }
+}
+
 # ── Plane 3: Artifacts ────────────────────────────────────────────────────────
 #
 # Node output is stored by content hash; handoffs carry the hash, not the
@@ -236,6 +250,41 @@ fn make_worker_dispatch(db :: Db, invoke_fn :: (Str, Str, Str, Str, Str) -> [io,
       },
       _ => Fail(str.concat("unknown handler: ", handler)),
     }
+  }
+}
+
+# ── Attention queue (Judgeable-lane gate routing) ─────────────────────────────
+#
+# When a node's gate is Judgeable, its output is stored as an artifact and a
+# row is pushed here instead of auto-passing or failing. Human resolves via
+# the web API: approve (sprint can proceed) or reject (triggers learning loop).
+type AttentionRow = { id :: Str, sprint_id :: Str, node_id :: Str, gate :: Str, oracle :: Str, artifact_hash :: Str, verdict :: Str, rejection_reason :: Str, created_at :: Str }
+
+fn push_attention(db :: Db, sprint_id :: Str, node_id :: Str, gate :: Str, oracle :: Str, artifact_hash :: Str) -> [sql, fs_write, time, random, crypto] Result[Str, Str] {
+  let id := crypto.random_str_hex(16)
+  let now := time.now_str()
+  let q := str.join(["INSERT INTO attention_queue (id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, created_at) VALUES ('", sq(id), "', '", sq(sprint_id), "', '", sq(node_id), "', '", sq(gate), "', '", sq(oracle), "', '", sq(artifact_hash), "', 'pending', '", now, "')"], "")
+  match sql.exec(db, q, []) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(id),
+  }
+}
+
+fn list_attention_pending(db :: Db) -> [sql, fs_read] List[AttentionRow] {
+  let q := "SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at FROM attention_queue WHERE verdict='pending' ORDER BY created_at ASC"
+  let rows :: Result[List[AttentionRow], SqlError] := sql.query(db, q, [])
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+fn resolve_attention(db :: Db, id :: Str, verdict :: Str, reason :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let q := str.join(["UPDATE attention_queue SET verdict='", sq(verdict), "', rejection_reason='", sq(reason), "', resolved_at='", now, "' WHERE id='", sq(id), "'"], "")
+  match sql.exec(db, q, []) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
   }
 }
 

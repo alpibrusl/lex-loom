@@ -1,4 +1,4 @@
-# orchestrator.lex — run_phase / run_sprint with an honest effect row (§VI).
+# orchestrator.lex -- run_phase / run_sprint with an honest effect row (§VI).
 #
 # M3: Design phase uses real Architect output with retry; all phases use the
 #     derived SprintGraph; re-planning via semantic diff.
@@ -18,14 +18,12 @@ import "std.int" as int
 
 import "lex-schema/json_value" as jv
 
-import "lex-agent/src/message" as msg
-
-import "lex-agent/src/server" as srv
-
 import "lex-soft/src/runner" as runner
 
-import "./graph"    as graph
-import "./gates"    as gates
+import "./graph" as graph
+
+import "./gates" as gates
+
 import "./metaspec" as metaspec
 
 import "./phase" as phase
@@ -34,23 +32,33 @@ import "./transport" as tr
 
 import "./roles" as roles
 
+import "./cast" as cast
+
 import "./diff" as diff
 
 import "./digest" as digest
 
+import "./improver" as improver
+
 import "./tenant" as tenant
 
+import "./gates" as gates
+
+import "./loom_trail" as ltrail
+
+import "./manifests" as manifests
+
 # ── Types ─────────────────────────────────────────────────────────────────────
-type NodeOutcome = { node_id :: Str, accepted :: Bool, artifact :: Str, reason :: Str }
+type NodeOutcome = { node_id :: Str, attested :: Bool, sealed :: Bool, artifact :: Str, reason :: Str }
 
 type PhaseResult = { phase :: graph.Phase, outcomes :: List[NodeOutcome], success :: Bool }
 
-type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, summary :: Str }
+type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, fully_sealed :: Bool, summary :: Str }
 
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: Db }
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: Db, api_calls_max :: Int, roster :: cast.Roster }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
-# Used for re-planning — unchanged nodes reuse their prior artifact.
+# Used for re-planning -- unchanged nodes reuse their prior artifact.
 type ArtifactCache = List[(Str, Str)]
 
 # ── Gate evaluation ───────────────────────────────────────────────────────────
@@ -84,125 +92,123 @@ fn cache_put(cache :: ArtifactCache, node_id :: Str, artifact :: Str) -> Artifac
 }
 
 # ── Node invocation ───────────────────────────────────────────────────────────
-fn max_node_retries() -> Int { 1 }
+fn max_node_retries() -> Int {
+  1
+}
 
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   invoke_node_attempt(n, input, cfg, 1, "")
 }
 
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
-  let agent_cfg_opt := roles.for_role(n.role, cfg.model)
-  match agent_cfg_opt {
-    None => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
-    Some(agent_cfg) => {
-      let handler  := runner.make_handler(cfg.db, agent_cfg)
-      # On retry: append the denial reason so the agent knows what to fix
-      let prompt := if str.is_empty(prior_denial) {
-        if str.is_empty(input) { cfg.request } else { input }
-      } else {
-        str.join([if str.is_empty(input) { cfg.request } else { input },
-          "\n\nYour previous output was rejected by the gate \"", n.gate,
-          "\" with reason: ", prior_denial,
-          "\nPlease fix your output to satisfy the gate."], "")
-      }
-      let __ts    := tr.trail(cfg.db, cfg.id, "node_started",
-        str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
-      let outcome := handler(msg.user_text(prompt))
-      let output  := extract_text(outcome.reply)
-      # Empty output = model cold-start or transient failure — retry silently (no feedback)
-      if str.is_empty(output) {
-        if attempt > max_node_retries() {
-          { node_id: n.id, accepted: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
-        } else {
-          let __tr := tr.trail(cfg.db, cfg.id, "node_retrying",
-            str.join(["{\"node\":\"", n.id, "\",\"reason\":\"empty output\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-          invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial)
-        }
-      } else {
-      # Producer self-check
-      match evaluate_gate(n.gate, output) {
-        GateDeny(reason) => {
-          let __td := tr.trail(cfg.db, cfg.id, "node_denied",
-            str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
-          if attempt > max_node_retries() {
-            { node_id: n.id, accepted: false, artifact: "", reason: reason }
-          } else {
-            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying",
-              str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-            invoke_node_attempt(n, input, cfg, attempt + 1, reason)
-          }
-        },
-        GateAllow =>
-          # Orchestrator re-check (evaluate-at-both-ends)
-          match evaluate_gate(n.gate, output) {
-            GateDeny(reason) => {
-              let __td := tr.trail(cfg.db, cfg.id, "node_denied",
-                str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
-              { node_id: n.id, accepted: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
-            },
-            GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-              Err(err) => { node_id: n.id, accepted: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-              Ok(hash) => {
-                let __ta := tr.trail(cfg.db, cfg.id, "node_accepted",
-                  str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                { node_id: n.id, accepted: true, artifact: hash, reason: "" }
-              },
-            },
-          },
-      }
-      } # end else (non-empty output)
-    },
+  let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
+    Some(c) => Some(c),
+    None => roles.for_role(n.role, cfg.model),
   }
-}
-
-fn extract_text(reply :: Option[msg.Message]) -> Str {
-  match reply {
-    None => "",
-    Some(m) => match list.head(m.parts) {
-      None => "",
-      Some(TextPart(s)) => s,
-      Some(_) => "",
+  match agent_cfg_opt {
+    None => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
+    Some(agent_cfg) => {
+      let calls_so_far := tr.count_trail_events(cfg.db, cfg.id, "node_started")
+      if calls_so_far >= cfg.api_calls_max {
+        let __tb := tr.trail(cfg.db, cfg.id, "budget_exhausted", str.join(["{\"node\":\"", n.id, "\",\"used\":", int.to_str(calls_so_far), ",\"limit\":", int.to_str(cfg.api_calls_max), "}"], ""))
+        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["budget exhausted: max_api_calls=", int.to_str(cfg.api_calls_max)], "") }
+      } else {
+        let prompt := if str.is_empty(prior_denial) {
+          if str.is_empty(input) {
+            cfg.request
+          } else {
+            input
+          }
+        } else {
+          str.join([if str.is_empty(input) {
+            cfg.request
+          } else {
+            input
+          }, "\n\nYour previous output was rejected by the gate \"", n.gate, "\" with reason: ", prior_denial, "\nPlease fix your output to satisfy the gate."], "")
+        }
+        let __ts := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+        let output := runner.step(cfg.db, agent_cfg, prompt)
+        if str.is_empty(output) {
+          if attempt > max_node_retries() {
+            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
+          } else {
+            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"empty output\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+            invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial)
+          }
+        } else {
+          if gates.is_judgeable(n.gate) {
+            let oracle := gates.oracle_of(n.gate)
+            match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+              Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+              Ok(hash) => {
+                let __tq := tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash)
+                let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+                { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+              },
+            }
+          } else {
+            match evaluate_gate(n.gate, output) {
+              GateDeny(reason) => {
+                let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                if attempt > max_node_retries() {
+                  { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
+                } else {
+                  let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                  invoke_node_attempt(n, input, cfg, attempt + 1, reason)
+                }
+              },
+              GateAllow => match evaluate_gate(n.gate, output) {
+                GateDeny(reason) => {
+                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+                  { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
+                },
+                GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                  Ok(hash) => {
+                    let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                    { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                  },
+                },
+              },
+            }
+          }
+        }
+      }
     },
   }
 }
 
 # ── Layer execution ───────────────────────────────────────────────────────────
 #
-# M3: sequential. M5: replace list.map with list.par_map.
+# Independent nodes in the same topo layer run concurrently via list.par_map.
+# Layers are still sequential -- this is the §VI parallel fan-out.
+fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+  match cache_get(cache, node_id) {
+    Some(hash) => {
+      let __ts := tr.trail(cfg.db, cfg.id, "node_reused", str.join(["{\"node\":\"", node_id, "\",\"artifact\":\"", hash, "\"}"], ""))
+      { node_id: node_id, attested: true, sealed: true, artifact: hash, reason: "" }
+    },
+    None => {
+      match find_node_in_graph(g, node_id) {
+        None => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "node not found in graph" },
+        Some(n) => invoke_node(n, resolve_input(cfg.db, input_ref), cfg),
+      }
+    },
+  }
+}
+
 fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-  list.fold(layer, { outcomes: [], cache: cache }, fn (acc :: { outcomes :: List[NodeOutcome], cache :: ArtifactCache }, node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-    match cache_get(acc.cache, node_id) {
-      Some(hash) => {
-        let __ts := tr.trail(cfg.db, cfg.id, "node_reused", str.join(["{\"node\":\"", node_id, "\",\"artifact\":\"", hash, "\"}"], ""))
-        let outcome := { node_id: node_id, accepted: true, artifact: hash, reason: "" }
-        { outcomes: list.concat(acc.outcomes, [outcome]), cache: acc.cache }
-      },
-      None => {
-        let node_opt := find_node_in_graph(g, node_id)
-        match node_opt {
-          None => {
-            let outcome := { node_id: node_id, accepted: false, artifact: "", reason: "node not found in graph" }
-            { outcomes: list.concat(acc.outcomes, [outcome]), cache: acc.cache }
-          },
-          Some(n) => {
-            let input_content := resolve_input(cfg.db, input_ref)
-            let outcome := invoke_node(n, input_content, cfg)
-            let next_cache := if outcome.accepted {
-              cache_put(acc.cache, node_id, outcome.artifact)
-            } else {
-              acc.cache
-            }
-            let next_ref := if outcome.accepted {
-              outcome.artifact
-            } else {
-              input_ref
-            }
-            { outcomes: list.concat(acc.outcomes, [outcome]), cache: next_cache }
-          },
-        }
-      },
+  let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+    invoke_node_for_layer(node_id, g, input_ref, cache, cfg)
+  })
+  let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
+    if o.attested {
+      cache_put(acc, o.node_id, o.artifact)
+    } else {
+      acc
     }
   })
+  { outcomes: outcomes, cache: new_cache }
 }
 
 fn find_node_in_graph(g :: graph.SprintGraph, node_id :: Str) -> Option[graph.Node] {
@@ -243,11 +249,11 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
             if not ok {
               false
             } else {
-              o.accepted
+              o.attested
             }
           })
           let next_ref := list.fold(layer_result.outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
-            if o.accepted {
+            if o.attested {
               if not str.is_empty(o.artifact) {
                 o.artifact
               } else {
@@ -276,32 +282,7 @@ fn max_design_retries() -> Int {
 }
 
 fn design_prompt(request :: Str) -> Str {
-  str.join([
-    "You are the Architect for a software sprint.\n\n",
-    "Project request:\n", request, "\n\n",
-    "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n",
-    "{\n",
-    "  \"id\": \"<sprint-graph-id>\",\n",
-    "  \"phase\": \"Design\",\n",
-    "  \"nodes\": [\n",
-    "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n",
-    "  ],\n",
-    "  \"edges\": [\n",
-    "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n",
-    "  ]\n",
-    "}\n\n",
-    "Valid roles: architect, build, qa, demo, scribe.\n\n",
-    "Valid gate expressions (choose the most specific one for each role):\n",
-    "  spec non-empty              — output must not be empty (default)\n",
-    "  spec contains PASS          — output must contain the word PASS (use for qa nodes)\n",
-    "  spec contains fn            — output must contain a function definition (use for build nodes)\n",
-    "  spec starts-with fn         — output must start with fn keyword\n",
-    "  spec json                   — output must be valid JSON\n",
-    "  spec json-field <key>       — output must be JSON with field <key>\n",
-    "  spec len-gt <N>             — output must be longer than N characters\n\n",
-    "Rules: every node must have a gate; edges must reference existing node ids; ",
-    "no cycles; every demo node must have a qa ancestor.",
-  ], "")
+  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe nodes)\n", "  spec contains PASS          -- Formal: output must contain the word PASS (use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor."], "")
 }
 
 fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
@@ -320,18 +301,14 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
       design_retry_prompt(request, errors)
     }
     let agent_cfg := roles.architect_with_context(cfg.model, specs_context, cfg.id)
-    let handler   := runner.make_handler(cfg.db, agent_cfg)
-    let outcome   := handler(msg.user_text(prompt))
-    # Try reading the graph from the tool output file first (emit_graph tool path),
-    # then fall back to parsing the text reply (text output path).
-    let tmp_path  := roles.graph_tmp_path(cfg.id)
-    let output    := match io.read(tmp_path) {
+    let direct := runner.step(cfg.db, agent_cfg, prompt)
+    let tmp_path := roles.graph_tmp_path(cfg.id)
+    let output := match io.read(tmp_path) {
       Ok(file_content) => {
-        # Clean up the temp file so the next attempt starts fresh
         let __rm := io.write(tmp_path, "")
         file_content
       },
-      Err(_) => extract_text(outcome.reply),
+      Err(_) => direct,
     }
     let __tl := io.print(str.join(["[loom] architect attempt=", int.to_str(attempts), " output_len=", int.to_str(str.len(output))], ""))
     match graph.from_json_str(output) {
@@ -366,43 +343,44 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
 
 # ── run_sprint ────────────────────────────────────────────────────────────────
 #
-fn max_qa_bounces() -> Int { 2 }
+fn max_qa_bounces() -> Int {
+  2
+}
 
 # Run QA; if it fails, bounce back to Implementation and retry (up to max_qa_bounces).
 # Returns both the final QA result and the latest impl result (possibly updated).
 type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
 
-fn run_qa_with_bounce(
-  qa_graph   :: graph.SprintGraph,
-  impl_graph :: graph.SprintGraph,
-  impl_ref   :: Str,
-  cfg        :: SprintCfg,
-  bounce     :: Int,
-) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
+fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
   let qa_passed := list.fold(qa_result.outcomes, false, fn (found :: Bool, o :: NodeOutcome) -> Bool {
-    if found { true } else { o.accepted }
+    if found {
+      true
+    } else {
+      o.attested
+    }
   })
   if qa_passed {
     { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
   } else {
     if bounce > max_qa_bounces() {
-      # Exhausted bounces — return the failed QA result
       { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
     } else {
-      let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced",
-        str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
+      let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced", str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
       let __tt := tr.record_transition(cfg.db, cfg.id, "QA", "Implementation", "QaFailed")
-      # Re-run Implementation with the QA denial reason as context
       let qa_denial := list.fold(qa_result.outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
-        if str.is_empty(acc) { o.reason } else { acc }
+        if str.is_empty(acc) {
+          o.reason
+        } else {
+          acc
+        }
       })
-      let bounce_input := str.join([
-        resolve_input(cfg.db, impl_ref),
-        "\n\nQA feedback (your previous output did not pass): ", qa_denial,
-      ], "")
+      let bounce_input := str.join([resolve_input(cfg.db, impl_ref), "\n\nQA feedback (your previous output did not pass): ", qa_denial], "")
       let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
-      let new_impl_ref := match new_impl_ref_result { Ok(h) => h, Err(_) => impl_ref }
+      let new_impl_ref := match new_impl_ref_result {
+        Ok(h) => h,
+        Err(_) => impl_ref,
+      }
       let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
       let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
       let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
@@ -418,6 +396,14 @@ fn run_qa_with_bounce(
 fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] SprintResult {
   let __reg := tenant.register(cfg.db, cfg.id, cfg.request, "")
   let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
+  let __tm := tr.trail(cfg.db, cfg.id, "sprint_manifest", manifests.sprint_manifest_json(cfg.id))
+  let llog_opt := match ltrail.open(str.concat(cfg.id, "-trail.db")) {
+    Err(_) => None,
+    Ok(llog) => {
+      let __lt := ltrail.sprint_started(llog, cfg.id, cfg.request, None)
+      Some(llog)
+    },
+  }
   let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }], edges: [] }
   let intake_result := run_phase(intake_graph, graph.Intake, "", [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
@@ -428,14 +414,26 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
   match design_dr {
     DesignFailed(reason) => {
       let __tf := tr.trail(cfg.db, cfg.id, "sprint_failed", str.join(["{\"reason\":\"", reason, "\"}"], ""))
-      { sprint_id: cfg.id, phases: [intake_result], success: false, summary: str.join(["Sprint ", cfg.id, " failed in Design: ", reason], "") }
+      { sprint_id: cfg.id, phases: [intake_result], success: false, fully_sealed: false, summary: str.join(["Sprint ", cfg.id, " failed in Design: ", reason], "") }
     },
     DesignOk(sprint_graph) => {
       let design_ref := intake_ref
+      let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
+      let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster }
+      let __ltgv := match llog_opt {
+        None => (),
+        Some(log) => {
+          let __e := ltrail.graph_validated(log, cfg.id, sprint_graph.id, list.len(sprint_graph.nodes), ltrail.latest_id(log))
+          ()
+        },
+      }
       let __tph2 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Design\",\"to\":\"Implementation\"}")
+      let __tpm2 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"Implementation\",\"grant\":\"", manifests.grant_summary_for_phase("Implementation"), "\"}"], ""))
       let impl_result := run_phase(sprint_graph, graph.Implementation, design_ref, [], cfg)
       let impl_ref := first_accepted_artifact(impl_result.outcomes)
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
+      let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
       let qa_demo_nodes := graph.str_filter(graph.node_ids(sprint_graph), fn (id :: Str) -> Bool {
         match find_node_in_graph(sprint_graph, id) {
           None => false,
@@ -451,20 +449,27 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       } else {
         sprint_graph
       }
-      # QA + bounce-back loop: if QA fails, re-run Implementation up to max_bounces times.
       let qa_impl_result := run_qa_with_bounce(qa_demo_graph, sprint_graph, impl_ref, cfg, 1)
-      let qa_result  := qa_impl_result.qa
-      let impl_result2 := qa_impl_result.impl   # may be updated after bounce
-      let demo_ref   := first_accepted_artifact(qa_result.outcomes)
+      let qa_result := qa_impl_result.qa
+      let impl_result2 := qa_impl_result.impl
+      let demo_ref := first_accepted_artifact(qa_result.outcomes)
       let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
       let retro_graph := { id: str.concat(cfg.id, "-retro"), phase: graph.Retro, nodes: [{ id: "retro-scribe", role: "scribe", gate: "spec non-empty" }], edges: [] }
       let retro_result := run_phase(retro_graph, graph.Retro, demo_ref, [], cfg)
       let __tph5 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Retro\",\"to\":\"Digest\"}")
       let next_sprint_id := str.concat(cfg.id, "-next")
       let digest_result := digest.run_digest(cfg.id, next_sprint_id, cfg.model, cfg.db)
-      let __tph6 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Digest\",\"to\":\"Intake\"}")
+      let __tph6 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Digest\",\"to\":\"Improve\"}")
+      let improve_result := match digest_result {
+        DigestFailed(_) => improver.empty_result(),
+        DigestOk(d) => improver.run_improvement(cfg.db, cfg.id, d.lessons, cfg.model),
+      }
+      let __tpi := tr.trail(cfg.db, cfg.id, "phase_improved", str.join(["{\"agents_improved\":", int.to_str(list.len(improve_result.new_agent_ids)), ",\"roles\":[", str.join(list.map(improve_result.new_agent_ids, fn (id :: Str) -> Str {
+        str.join(["\"", id, "\""], "")
+      }), ","), "]}"], ""))
+      let __tph7 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Improve\",\"to\":\"Intake\"}")
       let digest_summary := match digest_result {
-        DigestOk(d) => str.join([" Digest: ", int.to_str(list.len(d.tightened_specs)), " spec(s) tightened."], ""),
+        DigestOk(d) => str.join([" Digest: ", int.to_str(list.len(d.tightened_specs)), " spec(s) tightened. Improved ", int.to_str(list.len(improve_result.new_agent_ids)), " agent(s)."], ""),
         DigestFailed(e) => str.join([" Digest failed: ", e], ""),
       }
       let all_phases := [intake_result, impl_result2, qa_result, retro_result]
@@ -475,22 +480,60 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
           pr.success
         }
       })
-      let summary := if overall_ok {
-        str.join(["Sprint ", cfg.id, " complete. Demo: ", demo_ref, ".", digest_summary], "")
-      } else {
+      let fully_sealed := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
+        if not ok {
+          false
+        } else {
+          list.fold(pr.outcomes, ok, fn (ok2 :: Bool, o :: NodeOutcome) -> Bool {
+            if not ok2 {
+              false
+            } else {
+              o.sealed
+            }
+          })
+        }
+      })
+      let summary := if not overall_ok {
         str.join(["Sprint ", cfg.id, " failed. Check trail for node denials.", digest_summary], "")
+      } else {
+        if fully_sealed {
+          str.join(["Sprint ", cfg.id, " complete. Demo: ", demo_ref, ".", digest_summary], "")
+        } else {
+          str.join(["Sprint ", cfg.id, " complete — awaiting human attestation.", digest_summary], "")
+        }
       }
       let __tc := tr.trail(cfg.db, cfg.id, "sprint_complete", str.join(["{\"success\":", if overall_ok {
         "true"
       } else {
         "false"
+      }, ",\"fully_sealed\":", if fully_sealed {
+        "true"
+      } else {
+        "false"
       }, "}"], ""))
+      let __ltc := match llog_opt {
+        None => (),
+        Some(log) => {
+          let __e := ltrail.sprint_complete(log, cfg.id, overall_ok, fully_sealed, demo_ref, ltrail.latest_id(log))
+          ()
+        },
+      }
       let __ts := if overall_ok {
         tenant.complete(cfg.db, cfg.id)
       } else {
         tenant.fail(cfg.db, cfg.id)
       }
-      { sprint_id: cfg.id, phases: all_phases, success: overall_ok, summary: summary }
+      let attested_ids := list.fold(all_phases, [], fn (acc :: List[Str], pr :: PhaseResult) -> List[Str] {
+        list.concat(acc, list.fold(pr.outcomes, [], fn (a2 :: List[Str], o :: NodeOutcome) -> List[Str] {
+          if o.attested {
+            list.concat(a2, [o.node_id])
+          } else {
+            a2
+          }
+        }))
+      })
+      let __cup := cast.update_pool_from_sprint(cfg.db, roster, attested_ids)
+      { sprint_id: cfg.id, phases: all_phases, success: overall_ok, fully_sealed: fully_sealed, summary: summary }
     },
   }
 }
@@ -520,7 +563,7 @@ fn apply_replan(old_graph :: graph.SprintGraph, new_graph :: graph.SprintGraph, 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 fn first_accepted_artifact(outcomes :: List[NodeOutcome]) -> Str {
   list.fold(outcomes, "", fn (ref :: Str, o :: NodeOutcome) -> Str {
-    if str.is_empty(ref) and o.accepted {
+    if str.is_empty(ref) and o.attested {
       o.artifact
     } else {
       ref

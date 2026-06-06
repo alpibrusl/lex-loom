@@ -1,16 +1,19 @@
 [package]
-name    = "lex-loom"
-version = "0.0.0"
-edition = "2025"
-license = "EUPL-1.2"
+name        = "lex-loom"
+version     = "0.0.0"
+edition     = "2025"
+license     = "EUPL-1.2"
 description = "Multi-agent sprint cycles built on lex-soft (design stage)"
 
 [dependencies]
-"lex-soft"   = { path = "../lex-soft" }
-"lex-llm"    = { path = "../lex-llm" }
-"lex-spec"   = { path = "../lex-spec" }
-"lex-schema" = { path = "../lex-schema" }
-"lex-jobs"   = { path = "../lex-jobs" }
-"lex-mcp"    = { path = "../lex-mcp" }
-"lex-agent"  = { path = "../lex-agent" }
-"lex-web"    = { path = "../lex-web" }
+lex-soft        = { git = "https://github.com/alpibrusl/lex-soft" }
+lex-llm         = { git = "https://github.com/alpibrusl/lex-llm" }
+lex-spec        = { git = "https://github.com/alpibrusl/lex-spec" }
+lex-schema      = { git = "https://github.com/alpibrusl/lex-schema" }
+lex-jobs        = { git = "https://github.com/alpibrusl/lex-jobs" }
+lex-mcp         = { git = "https://github.com/alpibrusl/lex-mcp" }
+lex-agent       = { git = "https://github.com/alpibrusl/lex-agent" }
+lex-web         = { git = "https://github.com/alpibrusl/lex-web" }
+lex-trail       = { git = "https://github.com/alpibrusl/lex-trail" }
+lex-os-manifest = { git = "https://github.com/alpibrusl/lex-os-manifest" }
+lex-orm         = { git = "https://github.com/alpibrusl/lex-orm" }

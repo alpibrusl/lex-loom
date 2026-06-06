@@ -1,19 +1,20 @@
 import "std.list" as list
-import "std.str"  as str
+
+import "std.str" as str
 
 import "../src/gates" as gates
 
 fn allow(label :: Str, gate :: Str, output :: Str) -> Result[Unit, Str] {
   match gates.evaluate(gate, output) {
-    gates.GateAllow     => Ok(()),
-    gates.GateDeny(msg) => Err(str.join([label, " expected Allow, got Deny: ", msg], "")),
+    GateAllow => Ok(()),
+    GateDeny(msg) => Err(str.join([label, " expected Allow, got Deny: ", msg], "")),
   }
 }
 
 fn deny(label :: Str, gate :: Str, output :: Str) -> Result[Unit, Str] {
   match gates.evaluate(gate, output) {
-    gates.GateDeny(_) => Ok(()),
-    gates.GateAllow   => Err(str.concat(label, " expected Deny, got Allow")),
+    GateDeny(_) => Ok(()),
+    GateAllow => Err(str.concat(label, " expected Deny, got Allow")),
   }
 }
 
@@ -82,32 +83,21 @@ fn test_unknown_gate_falls_back_to_non_empty() -> Result[Unit, Str] {
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [
-    test_empty_gate_always_denies(),
-    test_non_empty_allows_content(),
-    test_non_empty_denies_empty_output(),
-    test_contains_allows_match(),
-    test_contains_denies_no_match(),
-    test_not_contains_allows_clean(),
-    test_not_contains_denies_match(),
-    test_starts_with_allows(),
-    test_starts_with_denies(),
-    test_json_allows_valid(),
-    test_json_denies_invalid(),
-    test_json_field_allows_present(),
-    test_json_field_denies_missing(),
-    test_len_gt_allows(),
-    test_len_gt_denies(),
-    test_unknown_gate_falls_back_to_non_empty(),
-  ]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty()]
 }
 
 fn run_all() -> Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
-    match r { Ok(_) => n, Err(_) => n + 1 }
+    match r {
+      Ok(_) => n,
+      Err(_) => n + 1,
+    }
   })
-  if failures == 0 { () } else {
+  if failures == 0 {
+    ()
+  } else {
     let __force_fail := 1 / 0
     ()
   }
 }
+

@@ -25,8 +25,6 @@ import "std.io" as io
 
 import "lex-schema/json_value" as jv
 
-import "lex-agent/src/message" as msg
-
 import "lex-soft/src/runner" as runner
 
 import "lex-soft/src/trace" as trace
@@ -223,17 +221,8 @@ fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: Db) -
   }
   let __tl := io.print(str.join(["[loom/digest] sprint=", sprint_id, " trail_events=", int.to_str(list.len(trail_rows))], ""))
   let agent_cfg := roles.scribe(model)
-  let handler := runner.make_handler(db, agent_cfg)
   let prompt := scribe_prompt(sprint_id, trail_text, next_sprint_id)
-  let outcome := handler(msg.user_text(prompt))
-  let output := match outcome.reply {
-    None => "",
-    Some(m) => match list.head(m.parts) {
-      None => "",
-      Some(TextPart(s)) => s,
-      Some(_) => "",
-    },
-  }
+  let output := runner.step(db, agent_cfg, prompt)
   let __to := io.print(str.join(["[loom/digest] scribe output_len=", int.to_str(str.len(output))], ""))
   let __tt := trace.record(db, sprint_id, sprint_id, "digest_produced", str.join(["{\"output_len\":", int.to_str(str.len(output)), "}"], ""))
   let artifacts := match jv.parse(output) {

@@ -50,6 +50,24 @@ fn ddl_node_results_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_nr_sprint_phase ON node_results(sprint_id, phase)"
 }
 
+fn ddl_agent_pool() -> Str {
+  "CREATE TABLE IF NOT EXISTS agent_pool (id TEXT PRIMARY KEY, role TEXT NOT NULL, system_prompt TEXT NOT NULL, model_name TEXT NOT NULL DEFAULT '', domain_tags_json TEXT NOT NULL DEFAULT '[]', attestation_count INTEGER NOT NULL DEFAULT 0, last_attested_at TEXT, created_at TEXT NOT NULL)"
+}
+
+fn ddl_agent_pool_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_ap_role ON agent_pool(role)"
+}
+
+# Attention queue — items awaiting human attestation (Judgeable-lane gates).
+# verdict: pending | approved | rejected
+fn ddl_attention_queue() -> Str {
+  "CREATE TABLE IF NOT EXISTS attention_queue (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, gate TEXT NOT NULL, oracle TEXT NOT NULL, artifact_hash TEXT NOT NULL DEFAULT '', verdict TEXT NOT NULL DEFAULT 'pending', rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '')"
+}
+
+fn ddl_attention_queue_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_aq_oracle_verdict ON attention_queue(oracle, verdict)"
+}
+
 fn exec_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Result[Unit, Str] {
   match sql.exec(db, stmt, []) {
     Err(e) => Err(e.message),
@@ -78,7 +96,19 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
                     Err(e) => Err(e),
                     Ok(_) => match exec_ddl(db, ddl_node_results()) {
                       Err(e) => Err(e),
-                      Ok(_) => exec_ddl(db, ddl_node_results_idx()),
+                      Ok(_) => match exec_ddl(db, ddl_node_results_idx()) {
+                        Err(e) => Err(e),
+                        Ok(_) => match exec_ddl(db, ddl_agent_pool()) {
+                          Err(e) => Err(e),
+                          Ok(_) => match exec_ddl(db, ddl_agent_pool_idx()) {
+                            Err(e) => Err(e),
+                            Ok(_) => match exec_ddl(db, ddl_attention_queue()) {
+                              Err(e) => Err(e),
+                              Ok(_) => exec_ddl(db, ddl_attention_queue_idx()),
+                            },
+                          },
+                        },
+                      },
                     },
                   },
                 },

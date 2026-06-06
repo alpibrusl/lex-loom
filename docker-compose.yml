@@ -1,0 +1,55 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/version"]
+      interval: 8s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # Pull gemma4 on first start so the first sprint doesn't time out waiting
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["ollama", "pull", "gemma4:latest"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    restart: "no"
+
+  lex-loom:
+    build: .
+    ports:
+      - "8880:8880"
+    volumes:
+      - loom_data:/data
+    environment:
+      PORT: "8880"
+      DB_PATH: /data/loom.db
+      WEB_DIR: /app/src/web
+      OLLAMA_URL: http://ollama:11434
+      MODEL: gemma4:latest
+      # ── Provider selection (first match wins) ──────────────────────────────
+      # Vertex AI (Gemini 3.5 Flash, EU endpoint):
+      # VERTEX_ACCESS_TOKEN: "${VERTEX_ACCESS_TOKEN}"  # gcloud auth print-access-token
+      # VERTEX_PROJECT: "${VERTEX_PROJECT}"            # GCP project ID
+      # VERTEX_LOCATION: "eu"                          # EU multi-region (default, aiplatform.eu.rep.googleapis.com)
+      # MODEL: "gemini-3.5-flash"
+      #
+      # Anthropic:
+      # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      #
+      # (Ollama is the default when no cloud key is set)
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+
+volumes:
+  ollama_data:
+  loom_data:

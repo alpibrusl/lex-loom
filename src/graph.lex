@@ -384,7 +384,7 @@ fn from_json_str(s :: Str) -> Result[SprintGraph, Str] {
   let clean := strip_fences(s)
   match jv.parse(clean) {
     Err(e) => Err(str.join(["JSON parse error at pos ", int.to_str(e.pos), ": ", e.message], "")),
-    Ok(j)  => from_json(j),
+    Ok(j) => from_json(j),
   }
 }
 

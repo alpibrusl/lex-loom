@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>lex-loom</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:monospace;background:#0d1117;color:#c9d1d9;min-height:100vh;padding:24px 20px}
+
+/* header */
+.hdr{margin-bottom:28px}
+.hdr h1{color:#58a6ff;font-size:1.8em;letter-spacing:-0.5px}
+.hdr h1 span{color:#8b949e;font-size:0.55em;font-weight:normal;margin-left:10px;letter-spacing:0}
+.hdr p{color:#8b949e;font-size:0.82em;margin-top:4px}
+
+/* cards */
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:18px;margin-bottom:16px}
+.card h2{color:#58a6ff;font-size:0.9em;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px}
+
+/* form */
+label{display:inline-flex;flex-direction:column;gap:4px;font-size:0.82em;color:#8b949e;margin-right:12px;margin-bottom:6px}
+input,select{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:6px 8px;font-family:monospace;font-size:0.88em}
+textarea{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:8px;font-family:monospace;font-size:0.85em;width:100%;resize:vertical;margin-top:8px;line-height:1.5}
+.row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
+button{background:#238636;color:#fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-family:monospace;font-size:0.88em;transition:background 0.15s}
+button:hover{background:#2ea043}
+button:disabled{background:#21262d;color:#484f58;cursor:not-allowed}
+button.sec{background:#21262d;border:1px solid #30363d}
+button.sec:hover{background:#30363d}
+button.sprint2{background:#1f6feb;border:none;font-size:0.95em;padding:10px 22px}
+button.sprint2:hover{background:#388bfd}
+button.demo-btn{background:#6e40c9;border:none}
+button.demo-btn:hover{background:#8957e5}
+.msg{font-size:0.82em;color:#8b949e;margin-left:8px}
+.msg.ok{color:#3fb950}
+.msg.err{color:#f85149}
+.msg.run{color:#d29922}
+
+/* phase timeline */
+.timeline{display:flex;align-items:center;gap:0;overflow-x:auto;padding:8px 0}
+.phase-step{display:flex;flex-direction:column;align-items:center;min-width:72px}
+.phase-dot{width:26px;height:26px;border-radius:50%;border:2px solid #30363d;background:#0d1117;display:flex;align-items:center;justify-content:center;font-size:0.65em;color:#484f58;transition:all 0.3s;flex-shrink:0}
+.phase-dot.done{border-color:#3fb950;background:#1a3a2a;color:#3fb950}
+.phase-dot.active{border-color:#d29922;background:#2d2211;color:#d29922;animation:pulse 1.2s infinite}
+.phase-dot.failed{border-color:#f85149;background:#3a1a1a;color:#f85149}
+.phase-name{font-size:0.65em;color:#8b949e;margin-top:5px;text-align:center}
+.phase-line{flex:1;height:2px;background:#30363d;min-width:14px}
+.phase-line.done{background:#3fb950}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+
+/* sprint graph */
+.graph-wrap{overflow-x:auto}
+.graph-nodes{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.node-card{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 14px;min-width:160px}
+.node-card.accepted{border-color:#3fb950}
+.node-card.denied{border-color:#f85149}
+.node-card.running{border-color:#d29922;animation:pulse 1.2s infinite}
+.node-id{font-size:0.8em;color:#c9d1d9;margin-bottom:4px;font-weight:bold}
+.node-role{font-size:0.72em;color:#8b949e;margin-bottom:8px}
+.caps{display:flex;flex-wrap:wrap;gap:4px}
+.cap{display:inline-block;padding:2px 7px;border-radius:10px;font-size:0.68em;font-weight:bold}
+.cap.fs_read  {background:#1a3a2a;color:#3fb950}
+.cap.fs_write {background:#3a2a10;color:#e3b341}
+.cap.llm      {background:#1a2a3a;color:#58a6ff}
+.cap.proc     {background:#2a1a3a;color:#bc8cff}
+.cap.sql      {background:#3a1a1a;color:#f85149}
+.cap.net      {background:#1a3a3a;color:#39d353}
+.node-hash{font-size:0.65em;color:#484f58;margin-top:8px;word-break:break-all}
+.node-hash a{color:#484f58;text-decoration:none}
+.node-hash a:hover{color:#58a6ff}
+.node-verdict{font-size:0.72em;margin-top:6px}
+.node-verdict.ok{color:#3fb950}
+.node-verdict.err{color:#f85149}
+.graph-edges{font-size:0.75em;color:#8b949e;margin-top:8px}
+.graph-edges span{display:inline-block;background:#21262d;border-radius:4px;padding:2px 8px;margin:2px}
+
+/* trail */
+.trail-wrap{max-height:300px;overflow-y:auto;margin-top:8px}
+table{width:100%;border-collapse:collapse;font-size:0.78em}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #21262d;vertical-align:top}
+th{color:#58a6ff;border-bottom:1px solid #30363d;position:sticky;top:0;background:#161b22}
+td.mono{font-family:monospace;word-break:break-all;max-width:420px}
+.ev-kind{display:inline-block;padding:1px 6px;border-radius:4px;font-size:0.9em;font-weight:bold}
+.ev-kind.node_accepted,.ev-kind.graph_validated,.ev-kind.sprint_complete{background:#1a3a2a;color:#3fb950}
+.ev-kind.node_denied,.ev-kind.graph_rejected,.ev-kind.sprint_failed{background:#3a1a1a;color:#f85149}
+.ev-kind.node_started,.ev-kind.phase_advanced{background:#21262d;color:#8b949e}
+.ev-kind.budget_exhausted{background:#3a2a10;color:#e3b341}
+.ev-kind.phase_improved,.ev-kind.agent_improved{background:#1f3a5f;color:#58a6ff}
+.hash-chip{font-family:monospace;font-size:0.85em;background:#21262d;padding:1px 6px;border-radius:3px;color:#8b949e}
+
+/* digest */
+.spec-item{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:10px 12px;margin-bottom:8px}
+.spec-role{color:#58a6ff;font-size:0.8em;font-weight:bold;margin-bottom:4px}
+.spec-gate{font-size:0.78em;color:#3fb950;margin-bottom:4px}
+.spec-why{font-size:0.75em;color:#8b949e}
+.seed-notice{color:#3fb950;font-size:0.82em;margin-top:10px}
+.empty{color:#484f58;font-style:italic;font-size:0.82em;padding:8px 0}
+
+/* agent pool */
+.imp-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:0.72em;background:#1f3a5f;color:#58a6ff;margin-left:6px;vertical-align:middle}
+.attest{display:inline-block;background:#21262d;border-radius:3px;padding:1px 7px;font-size:0.85em;color:#3fb950}
+.tag-chip{display:inline-block;padding:1px 5px;border-radius:3px;font-size:0.72em;background:#21262d;color:#8b949e;margin:1px}
+tr.agent-row{cursor:pointer}
+tr.agent-row:hover td{background:#1c2128}
+
+/* sprint 2 spotlight */
+.s2-spotlight{background:#0d1a2a;border:1px solid #1f6feb;border-radius:8px;padding:16px 20px;margin-top:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.s2-spotlight p{color:#8b949e;font-size:0.82em;flex:1;min-width:200px}
+.s2-spotlight strong{color:#58a6ff}
+
+/* modals */
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:100;align-items:center;justify-content:center}
+.modal-bg.open{display:flex}
+.modal-box{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;max-width:800px;width:95%;max-height:85vh;display:flex;flex-direction:column}
+.modal-box h3{color:#58a6ff;font-size:0.9em;margin-bottom:12px}
+.modal-body{overflow-y:auto;flex:1}
+.modal-body pre{font-size:0.78em;white-space:pre-wrap;word-break:break-word;line-height:1.6}
+.modal-close{align-self:flex-end;margin-top:12px}
+
+/* prompt comparison */
+.cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.cmp-grid{grid-template-columns:1fr}}
+.cmp-col h4{font-size:0.78em;color:#8b949e;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px}
+.cmp-col h4 span{color:#58a6ff}
+.prompt-box{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:10px;font-size:0.76em;white-space:pre-wrap;word-break:break-word;line-height:1.6;max-height:400px;overflow-y:auto;color:#c9d1d9}
+.prompt-box.improved{border-color:#1f6feb}
+.attest-big{display:inline-block;padding:3px 10px;border-radius:4px;font-size:0.82em;font-weight:bold}
+.attest-big.zero{background:#21262d;color:#8b949e}
+.attest-big.pos{background:#1a3a2a;color:#3fb950}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>lex-loom <span>multi-agent sprint orchestrator</span></h1>
+  <p>Formal capability specs before execution &mdash; typed effects, content-addressed artifacts, tamper-evident audit trail, self-improving agent pool.</p>
+</div>
+
+<!-- Launch -->
+<div class="card">
+  <h2>Launch Sprint</h2>
+  <div class="row">
+    <label>Sprint ID<input id="sid" value="ocpp-boot-1" style="width:140px"></label>
+    <label>Model
+      <select id="model" style="width:220px">
+        <option value="gemini-3.5-flash">gemini-3.5-flash (Vertex AI EU)</option>
+        <option value="gemma4:latest">gemma4:latest (Ollama)</option>
+        <option value="gemma3:latest">gemma3:latest (Ollama)</option>
+        <option value="mistral-small-latest">mistral-small-latest (Mistral)</option>
+        <option value="claude-sonnet-4-6">claude-sonnet-4-6 (Anthropic)</option>
+        <option value="gpt-4o">gpt-4o (OpenAI)</option>
+      </select>
+    </label>
+    <label>Max API calls<input id="mac" type="number" value="200" style="width:80px"></label>
+    <button class="demo-btn" onclick="loadDemo(1)" title="Load canonical OCPP demo scenario">&#9733; Demo Sprint 1</button>
+    <button class="demo-btn" onclick="loadDemo(2)" style="opacity:0.6" id="demo2-btn" title="Load Sprint 2 — seeded from prior Digest" disabled>&#9733; Demo Sprint 2</button>
+  </div>
+  <label style="display:block;margin-top:10px;width:100%">Request</label>
+  <textarea id="req" rows="5">Write a pure Lex module `boot_notification.lex` that: (1) defines a BootNotificationRequest record with chargePointVendor, chargePointModel, chargePointSerialNumber, and firmwareVersion Str fields; (2) defines a BootNotificationResponse record with status (one of "Accepted", "Pending", "Rejected") and currentTime Str fields; (3) a pure `parse_request` function that takes a JSON string and returns Option[BootNotificationRequest] — include examples{} blocks; (4) a pure `format_response` function that takes a BootNotificationResponse and returns a JSON string — include examples{} blocks. No effects — pure module only.</textarea>
+  <div class="row">
+    <button id="launch-btn" onclick="launchSprint()">&#9654; Run Sprint</button>
+    <span id="launch-msg" class="msg"></span>
+  </div>
+</div>
+
+<!-- Phase Timeline -->
+<div class="card" id="timeline-card" style="display:none">
+  <h2>Phase Timeline</h2>
+  <div class="timeline" id="timeline"></div>
+</div>
+
+<!-- Sprint Graph -->
+<div class="card" id="graph-card" style="display:none">
+  <h2>Sprint Graph <span style="font-size:0.8em;color:#8b949e;text-transform:none;letter-spacing:0;font-weight:normal">— capability spec per agent</span></h2>
+  <div class="graph-wrap">
+    <div class="graph-nodes" id="graph-nodes"></div>
+    <div class="graph-edges" id="graph-edges"></div>
+  </div>
+</div>
+
+<!-- Audit Trail -->
+<div class="card" id="trail-card" style="display:none">
+  <h2>Audit Trail <span id="trail-count" style="font-size:0.8em;color:#8b949e;text-transform:none;letter-spacing:0;font-weight:normal"></span></h2>
+  <div class="trail-wrap">
+    <table>
+      <thead><tr><th style="width:160px">Time</th><th style="width:180px">Event</th><th>Data</th></tr></thead>
+      <tbody id="trail-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Digest -->
+<div class="card" id="digest-card" style="display:none">
+  <h2>Digest — Sprint 2 Seed</h2>
+  <div id="digest-out"></div>
+</div>
+
+<!-- Agent Pool -->
+<div class="card" id="agents-card">
+  <h2>Agent Pool <span id="agents-count" style="font-size:0.8em;color:#8b949e;text-transform:none;letter-spacing:0;font-weight:normal"></span></h2>
+  <div class="trail-wrap">
+    <table>
+      <thead><tr><th>Role</th><th>ID</th><th>Model</th><th style="width:90px">Attestation</th><th>Tags</th></tr></thead>
+      <tbody id="agents-body"><tr><td colspan="5" class="empty" style="text-align:center">Loading agent pool…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Artifact modal -->
+<div class="modal-bg" id="artifact-modal">
+  <div class="modal-box">
+    <h3 id="modal-title">Artifact</h3>
+    <div class="modal-body"><pre id="modal-content"></pre></div>
+    <button class="sec modal-close" onclick="closeModal('artifact-modal')">Close</button>
+  </div>
+</div>
+
+<!-- Agent prompt comparison modal -->
+<div class="modal-bg" id="agent-modal">
+  <div class="modal-box" style="max-width:960px">
+    <h3 id="agent-modal-title">Agent</h3>
+    <div class="modal-body" id="agent-modal-body"></div>
+    <button class="sec modal-close" onclick="closeModal('agent-modal')">Close</button>
+  </div>
+</div>
+
+<script>
+const PHASES = ['Intake','Design','Cast','Implementation','QA','Demo','Retro','Digest','Improve'];
+
+const ROLE_CAPS = {
+  architect: ['fs_read','llm'],
+  build:     ['fs_write','llm'],
+  qa:        ['proc','fs_read'],
+  demo:      ['llm'],
+  scribe:    ['fs_read','llm'],
+  cast:      ['sql','llm'],
+  improver:  ['sql','llm'],
+};
+
+const DEMO_REQUEST = `Write a pure Lex module \`boot_notification.lex\` that: (1) defines a BootNotificationRequest record with chargePointVendor, chargePointModel, chargePointSerialNumber, and firmwareVersion Str fields; (2) defines a BootNotificationResponse record with status (one of "Accepted", "Pending", "Rejected") and currentTime Str fields; (3) a pure \`parse_request\` function that takes a JSON string and returns Option[BootNotificationRequest] — include examples{} blocks; (4) a pure \`format_response\` function that takes a BootNotificationResponse and returns a JSON string — include examples{} blocks. No effects — pure module only.`;
+
+let pollTimer  = null;
+let lastTrailN = 0;
+let sprintDone = false;
+let activeSid  = '';
+let lastCompletedSid = '';
+
+function $(id){ return document.getElementById(id); }
+
+// ── Demo presets ──────────────────────────────────────────────────────────────
+function loadDemo(n) {
+  if (n === 1) {
+    $('sid').value   = 'ocpp-boot-1';
+    $('req').value   = DEMO_REQUEST;
+    $('mac').value   = '200';
+    $('model').value = 'gemini-3.5-flash';
+  } else {
+    $('sid').value   = 'ocpp-boot-2';
+    $('req').value   = DEMO_REQUEST;
+    $('mac').value   = '200';
+    $('model').value = 'gemini-3.5-flash';
+  }
+}
+
+// ── Launch ────────────────────────────────────────────────────────────────────
+async function launchSprint() {
+  const sid = $('sid').value.trim();
+  const req = $('req').value.trim();
+  if (!sid || !req) return;
+
+  activeSid  = sid;
+  sprintDone = false;
+  lastTrailN = 0;
+
+  $('launch-btn').disabled = true;
+  setMsg('run', '⟳ running — this may take a few minutes…');
+  showCards();
+  renderTimeline([]);
+  clearGraph();
+  clearTrail();
+  $('digest-out').innerHTML = '<p class="empty">Waiting for sprint to complete…</p>';
+
+  startPolling(sid);
+
+  try {
+    const r = await fetch('/api/sprints', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sprint_id: sid, request: req, model: $('model').value, max_api_calls: parseInt($('mac').value)||200 })
+    });
+    const j = await r.json();
+    sprintDone = true;
+    lastCompletedSid = sid;
+    $('launch-btn').disabled = false;
+    if (j.success) {
+      setMsg('ok', '✓ ' + (j.summary||'Sprint complete'));
+    } else {
+      setMsg('err', '✗ ' + (j.summary||'Sprint failed'));
+    }
+    await refreshAll(sid);
+    stopPolling();
+  } catch(e) {
+    $('launch-btn').disabled = false;
+    setMsg('err', '✗ ' + e.message);
+    stopPolling();
+  }
+}
+
+function showCards() {
+  ['timeline-card','graph-card','trail-card','digest-card'].forEach(id => $(id).style.display='block');
+}
+
+function setMsg(cls, txt) {
+  const el = $('launch-msg');
+  el.textContent = txt;
+  el.className = 'msg ' + cls;
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+function startPolling(sid) {
+  stopPolling();
+  pollTimer = setInterval(() => refreshAll(sid), 3000);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function refreshAll(sid) {
+  await Promise.all([refreshStatus(sid), refreshGraph(sid), refreshTrail(sid)]);
+  if (sprintDone) await refreshDigest(sid);
+  await fetchAgentPool();
+}
+
+// ── Status / Timeline ─────────────────────────────────────────────────────────
+async function refreshStatus(sid) {
+  try {
+    const r = await fetch('/api/sprints/' + encodeURIComponent(sid) + '/status');
+    const j = await r.json();
+    renderTimeline(j.transitions || []);
+  } catch(_){}
+}
+
+function renderTimeline(transitions) {
+  const done = new Set();
+  transitions.forEach(t => { done.add(t.from); done.add(t.to); });
+  const activePhase = transitions.length ? transitions[transitions.length-1].to : (transitions.length===0 ? 'Intake' : '');
+
+  let html = '';
+  PHASES.forEach((p, i) => {
+    const isDone   = done.has(p) && !(activePhase === p && !sprintDone);
+    const isActive = activePhase === p && !sprintDone;
+    const cls  = isDone ? 'done' : (isActive ? 'active' : '');
+    const icon = isDone ? '✓' : (isActive ? '●' : '○');
+    html += `<div class="phase-step"><div class="phase-dot ${cls}">${icon}</div><div class="phase-name">${p}</div></div>`;
+    if (i < PHASES.length-1) {
+      html += `<div class="phase-line ${isDone ? 'done' : ''}"></div>`;
+    }
+  });
+  $('timeline').innerHTML = html;
+}
+
+// ── Graph ─────────────────────────────────────────────────────────────────────
+async function refreshGraph(sid) {
+  try {
+    const [gr, tr] = await Promise.all([
+      fetch('/api/sprints/' + encodeURIComponent(sid) + '/graph').then(r=>r.json()),
+      fetch('/api/sprints/' + encodeURIComponent(sid) + '/trail').then(r=>r.json()),
+    ]);
+    if (!gr.graph) return;
+    const outcomes = {};
+    (tr.events||[]).forEach(e => {
+      try {
+        const d = JSON.parse(e.data_json);
+        if (e.event_kind === 'node_accepted') outcomes[d.node] = {ok:true,  hash:d.artifact||''};
+        if (e.event_kind === 'node_denied')   outcomes[d.node] = {ok:false, reason:d.reason||''};
+        if (e.event_kind === 'node_started' && !outcomes[d.node]) outcomes[d.node] = {running:true};
+      } catch(_){}
+    });
+    renderGraph(gr.graph, outcomes);
+  } catch(_){}
+}
+
+function renderGraph(g, outcomes) {
+  const nodes = g.nodes || [];
+  const edges = g.edges || [];
+  let html = '';
+  nodes.forEach(n => {
+    const caps = ROLE_CAPS[n.role] || [];
+    const o    = outcomes[n.id] || {};
+    let cls = '';
+    if (o.ok === true)  cls = 'accepted';
+    if (o.ok === false) cls = 'denied';
+    if (o.running)      cls = 'running';
+    const capHtml = caps.map(c => `<span class="cap ${c}">${c}</span>`).join('');
+    let verdict = '';
+    if (o.ok === true)  verdict = `<div class="node-verdict ok">✓ accepted</div>`;
+    if (o.ok === false) verdict = `<div class="node-verdict err">✗ ${esc(o.reason||'denied')}</div>`;
+    let hashHtml = '';
+    if (o.hash) hashHtml = `<div class="node-hash"><a href="#" onclick="showArtifact('${esc(o.hash)}','${esc(n.id)}');return false">artifact: ${o.hash.slice(0,12)}…</a></div>`;
+    html += `<div class="node-card ${cls}">
+      <div class="node-id">${esc(n.id)}</div>
+      <div class="node-role">[${esc(n.role)}]  gate: <span style="color:#8b949e;font-style:italic">${esc(n.gate)}</span></div>
+      <div class="caps">${capHtml}</div>
+      ${verdict}${hashHtml}
+    </div>`;
+  });
+  $('graph-nodes').innerHTML = html;
+  const edgeHtml = edges.map(e => `<span>&#9658; ${esc(e.from)} → ${esc(e.to)}</span>`).join('');
+  $('graph-edges').innerHTML = edges.length ? 'Edges: ' + edgeHtml : '';
+}
+
+function clearGraph() {
+  $('graph-nodes').innerHTML = '';
+  $('graph-edges').innerHTML = '';
+}
+
+// ── Trail ─────────────────────────────────────────────────────────────────────
+async function refreshTrail(sid) {
+  try {
+    const r = await fetch('/api/sprints/' + encodeURIComponent(sid) + '/trail');
+    const j = await r.json();
+    const events = j.events || [];
+    if (events.length === lastTrailN) return;
+    lastTrailN = events.length;
+    $('trail-count').textContent = `— ${events.length} events, content-addressed`;
+    renderTrail(events);
+  } catch(_){}
+}
+
+function renderTrail(events) {
+  const rows = [...events].reverse().map(e => {
+    let data = e.data_json || '';
+    try {
+      const d = JSON.parse(data);
+      if (d.artifact) d.artifact = `<span class="hash-chip">${d.artifact.slice(0,14)}…</span>`;
+      data = Object.entries(d).map(([k,v])=>`${k}=${typeof v==='string'?v:JSON.stringify(v)}`).join('  ');
+    } catch(_){ data = trunc(data, 140); }
+    const ts = (e.ts||'').replace('T',' ').slice(0,19);
+    return `<tr>
+      <td class="mono" style="white-space:nowrap;color:#484f58">${ts}</td>
+      <td><span class="ev-kind ${e.event_kind||''}">${esc(e.event_kind||'')}</span></td>
+      <td class="mono">${data}</td>
+    </tr>`;
+  }).join('');
+  $('trail-body').innerHTML = rows;
+}
+
+function clearTrail() {
+  $('trail-body').innerHTML = '';
+  $('trail-count').textContent = '';
+  lastTrailN = 0;
+}
+
+// ── Digest ────────────────────────────────────────────────────────────────────
+async function refreshDigest(sid) {
+  try {
+    const r = await fetch('/api/sprints/' + encodeURIComponent(sid) + '/digest');
+    const j = await r.json();
+    const specs = j.specs || [];
+    if (!specs.length) {
+      $('digest-out').innerHTML = '<p class="empty">No digest yet.</p>';
+      return;
+    }
+    let html = specs.map(s => `
+      <div class="spec-item">
+        <div class="spec-role">${esc(s.node_role)}</div>
+        <div class="spec-gate">gate: ${esc(s.spec_src)}</div>
+        <div class="spec-why">${esc(s.reason)}</div>
+      </div>`).join('');
+    if (j.has_seed_graph) {
+      html += `<div class="seed-notice">✓ Seed graph ready — Sprint 2 will reuse these tightened specs and improved agents.</div>`;
+    }
+    $('digest-out').innerHTML = html;
+  } catch(_){}
+}
+
+// ── Agent Pool ────────────────────────────────────────────────────────────────
+async function fetchAgentPool() {
+  try {
+    const r = await fetch('/api/agents');
+    const j = await r.json();
+    const agents = j.agents || [];
+    const improved = agents.filter(a => a.id.includes('-improved-'));
+    $('agents-count').textContent = `— ${agents.length} agent(s)${improved.length ? ', ' + improved.length + ' improved this sprint' : ''}`;
+
+    if (!agents.length) {
+      $('agents-body').innerHTML = '<tr><td colspan="5" class="empty" style="text-align:center">No agents seeded yet.</td></tr>';
+      return;
+    }
+
+    const rows = agents.map(a => {
+      const isImproved = a.id.includes('-improved-');
+      const badge = isImproved ? '<span class="imp-badge">&#9650; improved</span>' : '';
+      let tags = '';
+      try {
+        const arr = JSON.parse(a.domain_tags || '[]');
+        tags = arr.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('');
+      } catch(_) { tags = esc(a.domain_tags || ''); }
+      return `<tr class="agent-row" onclick="showAgent('${esc(a.id)}','${esc(a.role)}')" ${isImproved ? 'style="background:#0d1a2a"' : ''}>
+        <td><strong>${esc(a.role)}</strong></td>
+        <td class="mono" style="font-size:0.78em">${esc(a.id)}${badge}</td>
+        <td style="font-size:0.78em;color:#8b949e">${esc(a.model_name||'—')}</td>
+        <td><span class="attest">${a.attestation_count}</span></td>
+        <td>${tags}</td>
+      </tr>`;
+    }).join('');
+    $('agents-body').innerHTML = rows;
+
+    // Enable Demo Sprint 2 button once there are improved agents
+    if (improved.length > 0) {
+      $('demo2-btn').disabled = false;
+      $('demo2-btn').style.opacity = '1';
+      showSprint2Spotlight(improved.length);
+    }
+  } catch(_){}
+}
+
+function showSprint2Spotlight(n) {
+  const digestOut = $('digest-out');
+  if (!digestOut || digestOut.querySelector('.s2-spotlight')) return;
+  const div = document.createElement('div');
+  div.className = 's2-spotlight';
+  div.innerHTML = `
+    <div>
+      <strong>${n} agent prompt${n>1?'s':''} improved by the Improver.</strong>
+      <p>Cast will prefer these agents in Sprint 2 — they start with attestation=0 and earn trust through acceptance.</p>
+    </div>
+    <button class="sprint2" onclick="loadDemo(2);window.scrollTo({top:0,behavior:'smooth'})">&#9654; Set up Sprint 2</button>`;
+  digestOut.appendChild(div);
+}
+
+// ── Agent detail modal ────────────────────────────────────────────────────────
+async function showAgent(agentId, role) {
+  $('agent-modal-title').textContent = agentId;
+  $('agent-modal-body').innerHTML = '<p class="empty" style="padding:20px 0;text-align:center">Loading…</p>';
+  $('agent-modal').classList.add('open');
+
+  try {
+    // Fetch the target agent
+    const r1 = await fetch('/api/agents/' + encodeURIComponent(agentId));
+    const agent = await r1.json();
+
+    const isImproved = agentId.includes('-improved-');
+    let compareHtml = '';
+
+    if (isImproved) {
+      // Find the base (non-improved) agent for this role
+      const poolR = await fetch('/api/agents');
+      const pool  = await poolR.json();
+      const base  = (pool.agents || []).find(a => a.role === role && !a.id.includes('-improved-'));
+
+      if (base) {
+        const r2    = await fetch('/api/agents/' + encodeURIComponent(base.id));
+        const baseA = await r2.json();
+        compareHtml = `
+          <div class="cmp-grid">
+            <div class="cmp-col">
+              <h4>Original — <span>${esc(base.id)}</span>
+                &nbsp;<span class="attest-big ${base.attestation_count>0?'pos':'zero'}">${base.attestation_count} attestations</span>
+              </h4>
+              <div class="prompt-box">${esc(baseA.system_prompt||'(no prompt)')}</div>
+            </div>
+            <div class="cmp-col">
+              <h4><span class="imp-badge">&#9650; improved</span> <span>${esc(agentId)}</span></h4>
+              <div class="prompt-box improved">${esc(agent.system_prompt||'(no prompt)')}</div>
+            </div>
+          </div>`;
+      }
+    }
+
+    if (!compareHtml) {
+      const attestCls = agent.attestation_count > 0 ? 'pos' : 'zero';
+      compareHtml = `
+        <p style="margin-bottom:10px;font-size:0.82em;color:#8b949e">
+          Role: <strong style="color:#58a6ff">${esc(agent.role)}</strong> &nbsp;
+          Model: <strong>${esc(agent.model_name||'—')}</strong> &nbsp;
+          <span class="attest-big ${attestCls}">${agent.attestation_count} attestations</span>
+        </p>
+        <div class="prompt-box">${esc(agent.system_prompt||'(no prompt)')}</div>`;
+    }
+
+    $('agent-modal-body').innerHTML = compareHtml;
+  } catch(e) {
+    $('agent-modal-body').innerHTML = `<p class="msg err">Error: ${esc(e.message)}</p>`;
+  }
+}
+
+// ── Artifact modal ────────────────────────────────────────────────────────────
+async function showArtifact(hash, nodeId) {
+  $('modal-title').textContent = 'Artifact — ' + nodeId + '  ' + hash;
+  $('modal-content').textContent = 'Loading…';
+  $('artifact-modal').classList.add('open');
+  try {
+    const r = await fetch('/api/sprints/' + encodeURIComponent(activeSid) + '/artifact/' + encodeURIComponent(hash));
+    const j = await r.json();
+    $('modal-content').textContent = j.content || '(empty)';
+  } catch(e) {
+    $('modal-content').textContent = 'Error: ' + e.message;
+  }
+}
+
+function closeModal(id) {
+  $(id).classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeModal('artifact-modal');
+    closeModal('agent-modal');
+  }
+});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function trunc(s,n){ return s.length>n ? s.slice(0,n)+'…' : s; }
+
+// Load agent pool on page open
+fetchAgentPool();
+</script>
+</body>
+</html>

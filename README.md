@@ -1,10 +1,29 @@
 # lex-loom
 
-Multi-agent **sprint cycles** for the Lex ecosystem — take a project request and drive it end-to-end through Intake → Design → Implementation → QA → Demo → Retro → Digest, with a dynamic agent graph derived per request and a learning loop that tightens specs across sprints.
+Multi-agent **sprint cycles** — give it a task, watch seven agents build it, read every capability they used.
 
-> **Status: M5 complete.** All milestones implemented and tested. `lex ci` passes; full sprint runs against Ollama (`qwen3-coder:30b`) and Anthropic Claude.
+Every agent runs under a formally-specified **capability spec** (`[fs_read, llm]`, `[fs_write, llm]`, `[proc, fs_read]`…). No agent can exceed its spec. Every artifact is content-addressed. Every phase transition is evidence-gated. The audit trail is tamper-evident by construction.
 
-Built under the principles of [Trust Without Comprehension](https://alpibru.com/manifesto).
+> **Status: M5 complete.** Full sprint pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with learning loop. `lex ci` passes.
+
+---
+
+## One-command demo
+
+```bash
+git clone https://github.com/alpibrusl/lex-loom
+cd lex-loom
+bash demo.sh
+```
+
+Opens `http://localhost:8880` — live sprint graph with capability badges, audit trail, artifact viewer, and Sprint 2 seeded from the Digest.
+
+With Anthropic (faster, better output):
+```bash
+ANTHROPIC_API_KEY=sk-... bash demo.sh
+```
+
+Requirements: Docker, `curl`. No other setup.
 
 ---
 
@@ -16,7 +35,7 @@ The **interaction graph is data** — a typed, content-addressed `SprintGraph` p
 
 ---
 
-## Quick start
+## Quick start (local, no Docker)
 
 ### Offline demo (no LLM needed)
 

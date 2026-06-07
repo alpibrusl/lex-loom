@@ -688,12 +688,10 @@ function renderSeries(series) {
     (noQa ? ` &nbsp;·&nbsp; ${noQa} no-QA` : '') +
     ` &nbsp;·&nbsp; QA pass rate: <strong>${rate}%</strong>`;
 
-  // Sparkline — one block per sprint, height proportional to position in series (shows learning curve)
-  const maxH = 42;
-  const minH = 6;
+  // Sparkline — height encodes QA verdict (PASS=tall green, FAIL=short red, unknown=mid amber)
   const sparkHtml = series.map((s, i) => {
-    const cls   = s.qa_verdict === 'PASS' ? 'pass' : (s.qa_verdict === 'FAIL' ? 'fail' : 'running');
-    const h     = minH + Math.round((i + 1) / total * (maxH - minH));
+    const cls = s.qa_verdict === 'PASS' ? 'pass' : (s.qa_verdict === 'FAIL' ? 'fail' : 'running');
+    const h   = s.qa_verdict === 'PASS' ? 42 : (s.qa_verdict === 'FAIL' ? 14 : 24);
     const label = `Sprint ${i+1}: ${s.sprint_id.slice(7,15)}… QA=${s.qa_verdict||'?'} ${s.success?'✓':'✗'}`;
     return `<div class="spark-block ${cls}" style="height:${h}px" title="${esc(label)}"></div>`;
   }).join('');

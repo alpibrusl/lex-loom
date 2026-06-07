@@ -13,6 +13,8 @@
 
 import "std.str" as str
 
+import "std.int" as int
+
 import "std.list" as list
 
 import "std.sql" as sql
@@ -32,7 +34,7 @@ import "./roles" as roles
 # ── Types ─────────────────────────────────────────────────────────────────────
 type ImprovementResult = { improved_roles :: List[Str], new_agent_ids :: List[Str] }
 
-type AgentRow = { id :: Str, system_prompt :: Str, domain_tags_json :: Str, model_name :: Str }
+type AgentRow = { id :: Str, system_prompt :: Str, domain_tags_json :: Str, model_name :: Str, attestation_count :: Int }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 fn sq(s :: Str) -> Str {
@@ -49,7 +51,7 @@ fn empty_result() -> ImprovementResult {
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 fn load_best_agent(db :: Db, role :: Str) -> [sql, fs_read] Option[AgentRow] {
-  let q := str.join(["SELECT id, system_prompt, domain_tags_json, model_name FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC LIMIT 1"], "")
+  let q := str.join(["SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC LIMIT 1"], "")
   let rows :: Result[List[AgentRow], SqlError] := sql.query(db, q, [])
   match rows {
     Err(_) => None,
@@ -57,9 +59,9 @@ fn load_best_agent(db :: Db, role :: Str) -> [sql, fs_read] Option[AgentRow] {
   }
 }
 
-fn save_improved_agent(db :: Db, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str) -> [sql, fs_write, time] Unit {
+fn save_improved_agent(db :: Db, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(new_id), "','", sq(role), "','", sq(prompt), "','", sq(model_name), "','", sq(tags_json), "',0,'", sq(now), "')"], "")
+  let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(new_id), "','", sq(role), "','", sq(prompt), "','", sq(model_name), "','", sq(tags_json), "',", int.to_str(starting_count), ",'", sq(now), "')"], "")
   let __r := sql.exec(db, q, [])
   ()
 }
@@ -121,6 +123,10 @@ fn improve_role(db :: Db, sprint_id :: Str, role :: Str, specs :: List[dg.Tighte
     Some(a) => a.model_name,
     None => "",
   }
+  let parent_count := match current_opt {
+    Some(a) => a.attestation_count,
+    None => 0,
+  }
   let p := roles.make_provider()
   let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [] }
   let prompt := improvement_prompt(role, current_prompt, lesson, specs)
@@ -131,7 +137,7 @@ fn improve_role(db :: Db, sprint_id :: Str, role :: Str, specs :: List[dg.Tighte
     None
   } else {
     let new_id := new_agent_id(role, sprint_id)
-    let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name)
+    let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name, parent_count + 2)
     let __log3 := io.print(str.join(["[loom/improver] saved agent ", new_id], ""))
     Some(new_id)
   }

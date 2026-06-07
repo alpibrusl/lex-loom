@@ -16,11 +16,11 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-type SprintIdRow = { agent_id :: Str }
-type TsRow       = { ts :: Str }
-type CompleteRow = { data_json :: Str }
-type QaNodeRow   = { data_json :: Str }
-type ArtifactRow = { content :: Str }
+type SprintIdRow  = { agent_id :: Str }
+type TsRow        = { ts :: Str }
+type CompleteRow  = { data_json :: Str }
+type QaResultRow  = { data_json :: Str }
+type ArtifactRow  = { content :: Str }
 
 type QaInfo = { accepted :: Bool, verdict :: Str }
 
@@ -78,16 +78,15 @@ fn load_success(db :: Db, sid :: Str) -> [sql, fs_read] Bool {
 }
 
 fn load_qa_info(db :: Db, sid :: Str) -> [sql, fs_read] QaInfo {
-  # Find the last accepted node whose id contains "qa"
   let q := str.join(["SELECT data_json FROM traces WHERE agent_id='", sq(sid), "' AND event_kind='node_accepted' AND data_json LIKE '%qa%' ORDER BY ts DESC LIMIT 1"], "")
-  let rows :: Result[List[QaNodeRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[QaResultRow], SqlError] := sql.query(db, q, [])
   match rows {
     Err(_) => { accepted: false, verdict: "" },
     Ok(rs) => match list.head(rs) {
       None => { accepted: false, verdict: "" },
       Some(r) => {
         let hash := get_str_field(r.data_json, "artifact")
-        let verdict := if str.is_empty(hash) { "PASS" } else { load_verdict(db, hash) }
+        let verdict := if str.is_empty(hash) { "" } else { load_verdict(db, hash) }
         { accepted: true, verdict: verdict }
       },
     },

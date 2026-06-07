@@ -97,6 +97,29 @@ td.mono{font-family:monospace;word-break:break-all;max-width:420px}
 .seed-notice{color:#3fb950;font-size:0.82em;margin-top:10px}
 .empty{color:#484f58;font-style:italic;font-size:0.82em;padding:8px 0}
 
+/* series chart */
+.series-empty{color:#484f58;font-style:italic;font-size:0.82em;padding:8px 0}
+.series-stats{font-size:0.82em;color:#8b949e;margin-bottom:14px}
+.series-stats strong{color:#c9d1d9}
+.series-stats .pass-rate{color:#3fb950;font-weight:bold}
+.series-stats .fail-rate{color:#f85149;font-weight:bold}
+.sparkline{display:flex;gap:5px;align-items:flex-end;height:48px;margin-bottom:16px;padding:6px 0}
+.spark-block{flex:1;max-width:32px;border-radius:3px 3px 0 0;transition:height 0.4s ease,background 0.3s;cursor:default;min-height:6px}
+.spark-block.pass{background:#1a4a2a}
+.spark-block.fail{background:#4a1a1a}
+.spark-block.running{background:#3a2a10;animation:pulse 1.2s infinite}
+.spark-block:hover{filter:brightness(1.4)}
+.series-table{width:100%;border-collapse:collapse;font-size:0.78em;margin-top:4px}
+.series-table th,.series-table td{text-align:left;padding:5px 10px;border-bottom:1px solid #21262d;vertical-align:middle}
+.series-table th{color:#58a6ff;border-bottom:1px solid #30363d}
+.series-table td:first-child{font-family:monospace;color:#484f58;white-space:nowrap}
+.qa-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:0.9em;font-weight:bold}
+.qa-badge.pass{background:#1a3a2a;color:#3fb950}
+.qa-badge.fail{background:#3a1a1a;color:#f85149}
+.qa-badge.none{background:#21262d;color:#484f58}
+.ok-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:0.9em;font-weight:bold;background:#1a3a2a;color:#3fb950}
+.fail-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:0.9em;font-weight:bold;background:#3a1a1a;color:#f85149}
+
 /* agent pool */
 .imp-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:0.72em;background:#1f3a5f;color:#58a6ff;margin-left:6px;vertical-align:middle}
 .attest{display:inline-block;background:#21262d;border-radius:3px;padding:1px 7px;font-size:0.85em;color:#3fb950}
@@ -195,6 +218,17 @@ tr.agent-row:hover td{background:#1c2128}
   <h2>Digest</h2>
   <div id="digest-summary" style="margin-bottom:14px"></div>
   <div id="digest-out"></div>
+</div>
+
+<!-- Sprint Series -->
+<div class="card" id="series-card">
+  <h2>Sprint Series <span style="font-size:0.8em;color:#8b949e;text-transform:none;letter-spacing:0;font-weight:normal">— QA pass rate over time</span></h2>
+  <div id="series-stats" class="series-stats"></div>
+  <div id="series-sparkline" class="sparkline"></div>
+  <table class="series-table">
+    <thead><tr><th>Sprint</th><th>Started</th><th>QA verdict</th><th>Outcome</th></tr></thead>
+    <tbody id="series-body"><tr><td colspan="4" class="series-empty">Loading…</td></tr></tbody>
+  </table>
 </div>
 
 <!-- Agent Pool -->
@@ -330,7 +364,7 @@ function stopPolling() {
 }
 
 async function refreshAll(sid) {
-  await Promise.all([refreshStatus(sid), refreshGraph(sid), refreshTrail(sid)]);
+  await Promise.all([refreshStatus(sid), refreshGraph(sid), refreshTrail(sid), fetchSeries()]);
   if (sprintDone) await refreshDigest(sid);
   await fetchAgentPool();
 }
@@ -624,12 +658,74 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ── Sprint Series ─────────────────────────────────────────────────────────────
+async function fetchSeries() {
+  try {
+    const r = await fetch('/api/series');
+    const j = await r.json();
+    renderSeries(j.series || []);
+  } catch(_){}
+}
+
+function renderSeries(series) {
+  if (!series.length) {
+    $('series-stats').innerHTML = '';
+    $('series-sparkline').innerHTML = '<span style="color:#484f58;font-size:0.75em">No sprints yet.</span>';
+    $('series-body').innerHTML = '<tr><td colspan="4" class="series-empty">No sprints yet.</td></tr>';
+    return;
+  }
+
+  const total   = series.length;
+  const passed  = series.filter(s => s.qa_verdict === 'PASS').length;
+  const failed  = series.filter(s => s.qa_verdict === 'FAIL').length;
+  const noQa    = total - passed - failed;
+  const rate    = total ? Math.round(passed / total * 100) : 0;
+
+  $('series-stats').innerHTML =
+    `<strong>${total}</strong> sprint${total!==1?'s':''} &nbsp;·&nbsp; ` +
+    `<span class="pass-rate">${passed} PASS</span> &nbsp;·&nbsp; ` +
+    `<span class="fail-rate">${failed} FAIL</span>` +
+    (noQa ? ` &nbsp;·&nbsp; ${noQa} no-QA` : '') +
+    ` &nbsp;·&nbsp; QA pass rate: <strong>${rate}%</strong>`;
+
+  // Sparkline — one block per sprint, height proportional to position in series (shows learning curve)
+  const maxH = 42;
+  const minH = 6;
+  const sparkHtml = series.map((s, i) => {
+    const cls   = s.qa_verdict === 'PASS' ? 'pass' : (s.qa_verdict === 'FAIL' ? 'fail' : 'running');
+    const h     = minH + Math.round((i + 1) / total * (maxH - minH));
+    const label = `Sprint ${i+1}: ${s.sprint_id.slice(7,15)}… QA=${s.qa_verdict||'?'} ${s.success?'✓':'✗'}`;
+    return `<div class="spark-block ${cls}" style="height:${h}px" title="${esc(label)}"></div>`;
+  }).join('');
+  $('series-sparkline').innerHTML = sparkHtml;
+
+  // Table rows
+  const rows = series.map((s, i) => {
+    const qa   = s.qa_verdict === 'PASS' ? '<span class="qa-badge pass">PASS</span>'
+               : s.qa_verdict === 'FAIL' ? '<span class="qa-badge fail">FAIL</span>'
+               : '<span class="qa-badge none">—</span>';
+    const out  = s.success
+               ? '<span class="ok-badge">✓ success</span>'
+               : '<span class="fail-badge">✗ failed</span>';
+    const ts   = (s.ts || '').replace('T',' ').slice(0,16);
+    const sid  = s.sprint_id.replace('sprint-','').slice(0,12) + '…';
+    return `<tr>
+      <td title="${esc(s.sprint_id)}">#${i+1} &nbsp;<span class="hash-chip">${esc(sid)}</span></td>
+      <td style="color:#8b949e">${esc(ts)}</td>
+      <td>${qa}</td>
+      <td>${out}</td>
+    </tr>`;
+  }).join('');
+  $('series-body').innerHTML = rows;
+}
+
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function trunc(s,n){ return s.length>n ? s.slice(0,n)+'…' : s; }
 
-// Load agent pool on page open
+// Load on page open
 fetchAgentPool();
+fetchSeries();
 </script>
 </body>
 </html>

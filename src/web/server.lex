@@ -56,6 +56,8 @@ import "../cast" as cast
 
 import "../pool_seed" as pool_seed
 
+import "../series" as ser
+
 # ── Env / parse helpers ───────────────────────────────────────────────────────
 fn get_env_l(key :: Str, fallback :: Str) -> [env] Str {
   match env.get(key) {
@@ -365,6 +367,17 @@ fn handle_reject_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, r
   }
 }
 
+# ── GET /api/series ───────────────────────────────────────────────────────────
+fn handle_series(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  match open_loom_db(db_path) {
+    Err(_) => resp.internal_error(),
+    Ok(db) => {
+      let stats := ser.load_series(db)
+      resp.json(str.join(["{\"series\":", ser.to_json(stats), "}"], ""))
+    },
+  }
+}
+
 # ── Router (static + read-only JSON routes) ───────────────────────────────────
 fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r0 := router.new()
@@ -395,13 +408,16 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r8 := router.route_effectful(r7, "GET", "/api/agents/:agent_id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_get_agent(db_path, c)
   })
-  let r9 := router.route_effectful(r8, "GET", "/api/attention", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r9 := router.route_effectful(r8, "GET", "/api/series", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    handle_series(db_path)
+  })
+  let r10 := router.route_effectful(r9, "GET", "/api/attention", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_list_attention(db_path, c)
   })
-  let r10 := router.route_effectful(r9, "POST", "/api/attention/:id/approve", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r11 := router.route_effectful(r10, "POST", "/api/attention/:id/approve", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_approve_attention(db_path, c)
   })
-  router.route_effectful(r10, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_reject_attention(db_path, c)
   })
 }

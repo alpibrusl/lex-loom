@@ -392,7 +392,7 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
 # diff identifies which nodes need re-running.
 fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] SprintResult {
   let __reg := tenant.register(cfg.db, cfg.id, cfg.request, "")
-  let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
+  let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request\":", jv.stringify(JStr(cfg.request)), ",\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
   let __tm := tr.trail(cfg.db, cfg.id, "sprint_manifest", manifests.sprint_manifest_json(cfg.id))
   let llog_opt := match ltrail.open(str.concat(cfg.id, "-trail.db")) {
     Err(_) => None,

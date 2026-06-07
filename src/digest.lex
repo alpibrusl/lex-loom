@@ -40,7 +40,8 @@ import "./roles" as roles
 type TightenedSpec = { node_role :: Str, spec_src :: Str, reason :: Str }
 
 # The full Digest artifact produced by the Scribe at end of sprint.
-type DigestArtifacts = { sprint_id :: Str, lessons :: Str, tightened_specs :: List[TightenedSpec], seed_graph :: graph.SprintGraph }
+# summary: stakeholder-facing prose retrospective (replaces the separate Retro phase)
+type DigestArtifacts = { sprint_id :: Str, summary :: Str, lessons :: Str, tightened_specs :: List[TightenedSpec], seed_graph :: graph.SprintGraph }
 
 type DigestResult = DigestOk(DigestArtifacts) | DigestFailed(Str)
 
@@ -80,7 +81,7 @@ fn save_digest(db :: Db, d :: DigestArtifacts) -> [sql, fs_write, time, random, 
   let id := crypto.random_str_hex(16)
   let now := time.now_str()
   let seed_j := graph.to_json_str(d.seed_graph)
-  let q := str.join(["INSERT INTO digests (id, sprint_id, lessons, seed_graph_json, created_at) VALUES ('", sq(id), "', '", sq(d.sprint_id), "', '", sq(d.lessons), "', '", sq(seed_j), "', '", now, "')"], "")
+  let q := str.join(["INSERT INTO digests (id, sprint_id, summary_text, lessons, seed_graph_json, created_at) VALUES ('", sq(id), "', '", sq(d.sprint_id), "', '", sq(d.summary), "', '", sq(d.lessons), "', '", sq(seed_j), "', '", now, "')"], "")
   match sql.exec(db, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => {
@@ -116,6 +117,21 @@ fn load_tightened_specs(db :: Db, sprint_id :: Str) -> [sql, fs_read] List[Tight
     Ok(rs) => list.map(rs, fn (r :: SpecRow) -> TightenedSpec {
       { node_role: r.node_role, spec_src: r.spec_src, reason: r.reason }
     }),
+  }
+}
+
+# Load the summary from the most recent digest for a sprint.
+type SummaryRow = { summary_text :: Str }
+
+fn load_summary(db :: Db, sprint_id :: Str) -> [sql, fs_read] Str {
+  let q := str.join(["SELECT summary_text FROM digests WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
+  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db, q, [])
+  match rows {
+    Err(_) => "",
+    Ok(rs) => match list.head(rs) {
+      None => "",
+      Some(r) => r.summary_text,
+    },
   }
 }
 
@@ -184,10 +200,14 @@ fn parse_tightened_specs(j :: jv.Json) -> List[TightenedSpec] {
 }
 
 fn default_seed_graph(next_sprint_id :: Str) -> graph.SprintGraph {
-  { id: str.concat(next_sprint_id, "-seed"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }, { id: "build", role: "build", gate: "spec non-empty" }, { id: "qa", role: "qa", gate: "spec non-empty" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "intake", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
+  { id: str.concat(next_sprint_id, "-seed"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }, { id: "build", role: "build", gate: "spec non-empty" }, { id: "qa", role: "qa", gate: "spec json-verdict-pass" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "intake", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
 }
 
 fn parse_digest_json(j :: jv.Json, sprint_id :: Str, next_sprint_id :: Str) -> DigestArtifacts {
+  let summary := match jv.get_field(j, "summary") {
+    Some(JStr(s)) => s,
+    _ => "(no summary recorded)",
+  }
   let lessons := match jv.get_field(j, "lessons") {
     Some(JStr(s)) => s,
     _ => "(no lessons recorded)",
@@ -203,12 +223,12 @@ fn parse_digest_json(j :: jv.Json, sprint_id :: Str, next_sprint_id :: Str) -> D
     },
     None => default_seed_graph(next_sprint_id),
   }
-  { sprint_id: sprint_id, lessons: lessons, tightened_specs: specs, seed_graph: seed }
+  { sprint_id: sprint_id, summary: summary, lessons: lessons, tightened_specs: specs, seed_graph: seed }
 }
 
 # ── Scribe prompt ─────────────────────────────────────────────────────────────
 fn scribe_prompt(sprint_id :: Str, trail_text :: Str, next_sprint_id :: Str) -> Str {
-  str.join(["You are the Scribe. Sprint `", sprint_id, "` has completed.\n\n", "Sprint trail:\n```\n", trail_text, "\n```\n\n", "Produce a JSON digest with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"lessons\": \"<1-3 sentences: what worked, what failed, key insight>\",\n", "  \"tightened_specs\": [\n", "    {\n", "      \"node_role\": \"<role that needs a tighter gate>\",\n", "      \"spec_src\": \"<new gate predicate, e.g. spec output contains PASS>\",\n", "      \"reason\": \"<why this gate was added based on sprint evidence>\"\n", "    }\n", "  ],\n", "  \"seed_graph\": {\n", "    \"id\": \"", next_sprint_id, "-seed\",\n", "    \"phase\": \"Intake\",\n", "    \"nodes\": [ { \"id\": \"...\", \"role\": \"...\", \"gate\": \"spec non-empty\" } ],\n", "    \"edges\": [ { \"from\": \"...\", \"to\": \"...\", \"handoff\": \"schema {}\" } ]\n", "  }\n", "}\n\n", "Rules for seed_graph: must be a valid SprintGraph — no cycles, every demo node must ", "have a qa ancestor, every node needs a non-empty gate.\n", "Add a tightened_spec entry for every node_role that produced a gate denial or empty output.\n", "Output only JSON."], "")
+  str.join(["You are the Scribe. Sprint `", sprint_id, "` has completed.\n\n", "Sprint trail:\n```\n", trail_text, "\n```\n\n", "Produce a JSON digest with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"summary\": \"<2-3 paragraph stakeholder-facing retrospective: what was built, key outcomes, what to improve next — write for a non-technical audience>\",\n", "  \"lessons\": \"<1-3 sentences: what worked, what failed, key technical insight for the engineering team>\",\n", "  \"tightened_specs\": [\n", "    {\n", "      \"node_role\": \"<role that needs a tighter gate>\",\n", "      \"spec_src\": \"<new gate predicate, e.g. spec json-verdict-pass>\",\n", "      \"reason\": \"<why this gate was added based on sprint evidence>\"\n", "    }\n", "  ],\n", "  \"seed_graph\": {\n", "    \"id\": \"", next_sprint_id, "-seed\",\n", "    \"phase\": \"Intake\",\n", "    \"nodes\": [ { \"id\": \"...\", \"role\": \"...\", \"gate\": \"spec non-empty\" } ],\n", "    \"edges\": [ { \"from\": \"...\", \"to\": \"...\", \"handoff\": \"schema {}\" } ]\n", "  }\n", "}\n\n", "Rules for seed_graph: must be a valid SprintGraph — no cycles, every demo node must ", "have a qa ancestor, every node needs a non-empty gate. Use 'spec json-verdict-pass' for qa nodes.\n", "Add a tightened_spec entry for every node_role that produced a gate denial or empty output.\n", "Output only JSON."], "")
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────

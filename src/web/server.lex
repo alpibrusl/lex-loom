@@ -223,7 +223,8 @@ fn handle_digest(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql
         let specs := dg.load_tightened_specs(db, sprint_id)
         let specs_json := str.concat("[", str.concat(str.join(list.map(specs, spec_to_json), ","), "]"))
         let has_seed := seed_flag(db, sprint_id)
-        resp.json(str.join(["{\"sprint_id\":", esc(sprint_id), ",\"specs\":", specs_json, ",\"has_seed_graph\":", has_seed, "}"], ""))
+        let summary := dg.load_summary(db, sprint_id)
+        resp.json(str.join(["{\"sprint_id\":", esc(sprint_id), ",\"summary\":", esc(summary), ",\"specs\":", specs_json, ",\"has_seed_graph\":", has_seed, "}"], ""))
       },
     },
   }

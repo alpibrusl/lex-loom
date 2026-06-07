@@ -192,7 +192,8 @@ tr.agent-row:hover td{background:#1c2128}
 
 <!-- Digest -->
 <div class="card" id="digest-card" style="display:none">
-  <h2>Digest — Sprint 2 Seed</h2>
+  <h2>Digest</h2>
+  <div id="digest-summary" style="margin-bottom:14px"></div>
   <div id="digest-out"></div>
 </div>
 
@@ -226,7 +227,7 @@ tr.agent-row:hover td{background:#1c2128}
 </div>
 
 <script>
-const PHASES = ['Intake','Design','Cast','Implementation','QA','Demo','Retro','Digest','Improve'];
+const PHASES = ['Intake','Design','Cast','Implementation','QA','Demo','Digest','Improve'];
 
 const ROLE_CAPS = {
   architect: ['fs_read','llm'],
@@ -279,6 +280,7 @@ async function launchSprint() {
   renderTimeline([]);
   clearGraph();
   clearTrail();
+  $('digest-summary').innerHTML = '';
   $('digest-out').innerHTML = '<p class="empty">Waiting for sprint to complete…</p>';
 
   startPolling(sid);
@@ -458,12 +460,22 @@ async function refreshDigest(sid) {
   try {
     const r = await fetch('/api/sprints/' + encodeURIComponent(sid) + '/digest');
     const j = await r.json();
+
+    // Summary (stakeholder retrospective — was separate Retro phase)
+    const summary = j.summary || '';
+    if (summary) {
+      $('digest-summary').innerHTML = `<div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px 14px;font-size:0.82em;line-height:1.7;color:#c9d1d9;white-space:pre-wrap">${esc(summary)}</div>`;
+    }
+
     const specs = j.specs || [];
-    if (!specs.length) {
+    if (!specs.length && !summary) {
       $('digest-out').innerHTML = '<p class="empty">No digest yet.</p>';
       return;
     }
-    let html = specs.map(s => `
+    let html = specs.length
+      ? '<h3 style="color:#58a6ff;font-size:0.8em;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Tightened Specs → Sprint 2</h3>'
+      : '';
+    html += specs.map(s => `
       <div class="spec-item">
         <div class="spec-role">${esc(s.node_role)}</div>
         <div class="spec-gate">gate: ${esc(s.spec_src)}</div>

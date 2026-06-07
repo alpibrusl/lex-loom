@@ -152,7 +152,22 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                     },
                   }
                 } else {
-                  from_spec_verdict(ev.eval(spec_non_empty(), [("output", sp.VStr(output))]))
+                  if trimmed == "spec json-verdict-pass" {
+                    match jv.parse(output) {
+                      Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
+                      Ok(j) => match jv.get_field(j, "verdict") {
+                        None => GateDeny("JSON output missing 'verdict' field"),
+                        Some(JStr(v)) => if v == "PASS" {
+                          GateAllow
+                        } else {
+                          GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
+                        },
+                        Some(_) => GateDeny("'verdict' field is not a string"),
+                      },
+                    }
+                  } else {
+                    from_spec_verdict(ev.eval(spec_non_empty(), [("output", sp.VStr(output))]))
+                  }
                 }
               }
             }

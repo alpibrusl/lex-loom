@@ -23,7 +23,7 @@ fn ddl_artifacts() -> Str {
 }
 
 fn ddl_digests() -> Str {
-  "CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, lessons TEXT NOT NULL, seed_graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, summary_text TEXT NOT NULL DEFAULT '', lessons TEXT NOT NULL, seed_graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
 }
 
 fn ddl_digests_idx() -> Str {

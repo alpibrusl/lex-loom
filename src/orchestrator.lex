@@ -279,7 +279,7 @@ fn max_design_retries() -> Int {
 }
 
 fn design_prompt(request :: Str) -> Str {
-  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe nodes)\n", "  spec starts-with PASS       -- Formal: output must start with the word PASS (use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor."], "")
+  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe/demo nodes)\n", "  spec json-verdict-pass      -- Formal: output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor. QA nodes MUST use 'spec json-verdict-pass'."], "")
 }
 
 fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
@@ -442,7 +442,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }
       })
       let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
-        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec starts-with PASS" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
       } else {
         sprint_graph
       }
@@ -450,10 +450,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl
       let demo_ref := first_accepted_artifact(qa_result.outcomes)
-      let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"QA\",\"to\":\"Demo\"}")
-      let retro_graph := { id: str.concat(cfg.id, "-retro"), phase: graph.Retro, nodes: [{ id: "retro-scribe", role: "scribe", gate: "spec non-empty" }], edges: [] }
-      let retro_result := run_phase(retro_graph, graph.Retro, demo_ref, [], cfg)
-      let __tph5 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Retro\",\"to\":\"Digest\"}")
+      let __tph4 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Demo\",\"to\":\"Digest\"}")
       let next_sprint_id := str.concat(cfg.id, "-next")
       let digest_result := digest.run_digest(cfg.id, next_sprint_id, cfg.model, cfg.db)
       let __tph6 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Digest\",\"to\":\"Improve\"}")
@@ -469,7 +466,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         DigestOk(d) => str.join([" Digest: ", int.to_str(list.len(d.tightened_specs)), " spec(s) tightened. Improved ", int.to_str(list.len(improve_result.new_agent_ids)), " agent(s)."], ""),
         DigestFailed(e) => str.join([" Digest failed: ", e], ""),
       }
-      let all_phases := [intake_result, impl_result2, qa_result, retro_result]
+      let all_phases := [intake_result, impl_result2, qa_result]
       let overall_ok := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
         if not ok {
           false

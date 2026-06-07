@@ -33,9 +33,6 @@ RUN --mount=type=secret,id=github_token \
     lex pkg install; \
     git config --global --unset-all 'url.https://github.com/.insteadof' 2>/dev/null || true
 
-# Vendor packages not publicly available on GitHub
-COPY vendor/ /root/.lex/packages/
-
 EXPOSE 8880
 
 ENV PORT=8880 \

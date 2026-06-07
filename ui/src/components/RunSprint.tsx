@@ -4,21 +4,24 @@ import type { PhaseTransition } from '../types'
 
 const PRESETS = [
   {
-    label: 'Order Validator',
-    emoji: '📦',
-    description: 'Python validation with edge cases',
-    request: 'Write a Python function validate_order(order: dict) -> tuple[bool, str] that checks: items key exists and is a non-empty list, each item has price > 0 and qty > 0 as numbers, customer_id is a non-empty string. Returns (True, "ok") on success, (False, reason) on first failure.',
+    label: 'Event System',
+    emoji: '⚡',
+    description: '3-module library · parallel build+QA',
+    complex: true,
+    request: 'Build a Python event processing library with three independent modules that must each be separately testable: (1) PriorityEventQueue class using heapq for priority-ordered delivery, supporting push(event, priority) and pop() -> event; (2) EventRouter that maps event types to handler functions via register(event_type, handler) and dispatch(event) -> any; (3) EventLog that records all dispatched events with timestamps, supports replay() -> list and clear(). Each module has its own test suite.',
   },
   {
-    label: 'Duration Parser',
-    emoji: '⏱',
-    description: 'Parse "2h30m" → seconds',
-    request: 'Write a Python function parse_duration(s: str) -> int that parses human-readable durations like "2h30m", "45s", "1d12h", "90m" into total seconds. "0s" returns 0. Repeated same-unit (e.g. "2h1h") raises ValueError. Invalid input raises ValueError.',
+    label: 'Order Validator',
+    emoji: '📦',
+    description: 'Single function with edge cases',
+    complex: false,
+    request: 'Write a Python function validate_order(order: dict) -> tuple[bool, str] that checks: items key exists and is a non-empty list, each item has price > 0 and qty > 0 as numbers, customer_id is a non-empty string. Returns (True, "ok") on success, (False, reason) on first failure.',
   },
   {
     label: 'Token Bucket',
     emoji: '🪣',
     description: 'Thread-safe rate limiter class',
+    complex: false,
     request: 'Write a Python class TokenBucket(rate: float, capacity: float) implementing a token bucket rate limiter. Method consume(tokens: float = 1) -> bool returns True if tokens were consumed, False if insufficient. Thread-safe with threading.Lock. Tokens refill at rate/second up to capacity.',
   },
 ]
@@ -119,7 +122,10 @@ export default function RunSprint({ onComplete, onClose }: Props) {
                   }`}
                 >
                   <div className="text-xl mb-1">{p.emoji}</div>
-                  <div className="text-slate-200 text-sm font-medium">{p.label}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-200 text-sm font-medium">{p.label}</span>
+                    {p.complex && <span className="text-[9px] px-1 py-0.5 rounded bg-indigo-900/60 text-indigo-300 font-semibold">MULTI-NODE</span>}
+                  </div>
                   <div className="text-muted text-xs mt-0.5">{p.description}</div>
                 </button>
               ))}

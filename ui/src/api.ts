@@ -46,3 +46,19 @@ export async function runSprint(req: {
   });
   return r.json();
 }
+
+export async function createAgent(req: {
+  id: string;
+  role: string;
+  system_prompt: string;
+  attestation_count?: number;
+  model_name?: string;
+}): Promise<{ id: string; role: string; created: boolean }> {
+  const r = await fetch('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}

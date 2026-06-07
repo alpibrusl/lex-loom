@@ -28,6 +28,8 @@ import "std.env" as env
 
 import "std.int" as int
 
+import "std.time" as time
+
 import "std.sql" as sql
 
 import "std.crypto" as crypto
@@ -314,6 +316,56 @@ fn handle_get_agent(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, 
   }
 }
 
+# ── POST /api/agents ──────────────────────────────────────────────────────────
+fn handle_create_agent(body :: Str, db_path :: Str) -> [io, time, sql, fs_read, fs_write] resp.Response {
+  match jv.parse(body) {
+    Err(_) => resp.bad_request("invalid JSON"),
+    Ok(j) => {
+      let id := get_jv_str(j, "id")
+      let role := get_jv_str(j, "role")
+      let system_prompt := get_jv_str(j, "system_prompt")
+      let model_name := get_jv_str(j, "model_name")
+      let tags_json := get_jv_str(j, "tags_json")
+      let att_str := get_jv_str(j, "attestation_count")
+      if str.is_empty(id) {
+        resp.bad_request("id is required")
+      } else {
+        if str.is_empty(role) {
+          resp.bad_request("role is required")
+        } else {
+          if str.is_empty(system_prompt) {
+            resp.bad_request("system_prompt is required")
+          } else {
+            match open_loom_db(db_path) {
+              Err(_) => resp.internal_error(),
+              Ok(db) => {
+                let now := time.now_str()
+                let model := if str.is_empty(model_name) {
+                  "gemini-3.5-flash"
+                } else {
+                  model_name
+                }
+                let tags := if str.is_empty(tags_json) {
+                  str.join(["[\"", sq(role), "\"]"], "")
+                } else {
+                  tags_json
+                }
+                let att := match str.to_int(att_str) {
+                  Some(n) => n,
+                  None => 1,
+                }
+                let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(id), "','", sq(role), "','", sq(system_prompt), "','", sq(model), "','", sq(tags), "',", int.to_str(att), ",'", sq(now), "')"], "")
+                let __r := sql.exec(db, q, [])
+                resp.json(str.join(["{\"id\":", esc(id), ",\"role\":", esc(role), ",\"attestation_count\":", int.to_str(att), ",\"created\":true}"], ""))
+              },
+            }
+          }
+        }
+      }
+    },
+  }
+}
+
 # ── /api/attention ────────────────────────────────────────────────────────────
 #
 # GET  /api/attention               — list all pending items across all oracles
@@ -443,9 +495,14 @@ fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypt
       let rsp := handle_launch_body(req.body, db_path)
       { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
     } else {
-      let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
-      let rsp := router.dispatch(r, raw)
-      { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+      if req.method == "POST" and req.path == "/api/agents" {
+        let rsp := handle_create_agent(req.body, db_path)
+        { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+      } else {
+        let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
+        let rsp := router.dispatch(r, raw)
+        { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+      }
     }
   })
 }

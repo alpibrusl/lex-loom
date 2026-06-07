@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { getSprintTrail, getSprintDigest, getArtifact, getAgents, getAgent } from '../api'
 import type { TrailEvent, DigestData, Agent } from '../types'
 import DiffViewer from '../components/DiffViewer'
+import PhaseGraph, { type GraphData, graphStatusFromTrail } from '../components/PhaseGraph'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -28,36 +29,8 @@ const ROLE_COLOR: Record<string, { bg: string; text: string; border: string; ico
   demo:      { bg: 'bg-violet-950',   text: 'text-violet-300', border: 'border-violet-700', icon: '🎯' },
   scribe:    { bg: 'bg-teal-950',     text: 'text-teal-300',   border: 'border-teal-700',   icon: '📝' },
 }
+// GraphData type re-used from PhaseGraph import (type GraphData)
 
-// ── Graph visualization ───────────────────────────────────────────────────────
-
-interface GraphNode { id: string; role: string; gate: string }
-interface GraphEdge { from: string; to: string; handoff: string }
-interface GraphData  { id: string; phase: string; nodes: GraphNode[]; edges: GraphEdge[] }
-
-function SprintGraph({ graphJson }: { graphJson: string }) {
-  const graph: GraphData = safeJson(graphJson) as unknown as GraphData
-  if (!graph.nodes?.length) return null
-
-  return (
-    <div className="flex items-center gap-2 overflow-x-auto py-2 flex-wrap">
-      {graph.nodes.map((node, i) => {
-        const role = node.role || nodeRole(node.id)
-        const meta = ROLE_COLOR[role] || ROLE_COLOR['intake']
-        const hasNext = i < graph.nodes.length - 1
-        return (
-          <div key={node.id} className="flex items-center gap-2 flex-shrink-0">
-            <div className={`px-3 py-1.5 rounded-lg border text-xs font-medium ${meta.bg} ${meta.text} ${meta.border}`}>
-              <span className="mr-1">{meta.icon}</span>
-              {node.role || node.id}
-            </div>
-            {hasNext && <span className="text-muted text-sm">→</span>}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
 
 // ── Node step card ────────────────────────────────────────────────────────────
 
@@ -396,28 +369,19 @@ export default function SprintDetail() {
       {/* ② PLAN */}
       {graphJson && (() => {
         const g = safeJson(graphJson) as unknown as GraphData
-        return g.nodes?.length ? (
+        if (!g.nodes?.length) return null
+        const { accepted, active } = graphStatusFromTrail(events)
+        return (
           <section>
             <div className="flex items-center gap-2 mb-3">
               <span className="text-xs font-bold text-muted uppercase tracking-widest">② Plan</span>
-              <span className="text-muted text-xs">· {g.nodes.length} agents</span>
+              <span className="text-muted text-xs">· {g.nodes.length} agent{g.nodes.length !== 1 ? 's' : ''} · {g.edges?.length ?? 0} handoffs</span>
             </div>
             <div className="bg-surface border border-border rounded-xl p-5">
-              <SprintGraph graphJson={graphJson} />
-              {g.nodes.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  {g.nodes.map(n => (
-                    <div key={n.id} className="flex items-start gap-2 text-xs">
-                      <span className="font-mono text-muted">{n.id}</span>
-                      <span className="text-muted">·</span>
-                      <span className="text-slate-400 flex-1">{n.gate}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <PhaseGraph graph={g} acceptedNodes={accepted} activeNode={active} />
             </div>
           </section>
-        ) : null
+        )
       })()}
 
       {/* ③ EXECUTION */}

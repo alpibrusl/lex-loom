@@ -3,3 +3,5 @@
 llm_call.lex
 *-trail.db
 .env
+ui/node_modules/
+ui/dist/

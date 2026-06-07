@@ -1,0 +1,48 @@
+import type { SprintStat, SprintStatus, TrailEvent, Agent, AgentDetail, SprintResult, DigestData } from './types';
+
+async function get<T>(path: string): Promise<T> {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.json();
+}
+
+export async function getSeries(): Promise<{ series: SprintStat[] }> {
+  return get('/api/series');
+}
+
+export async function getSprintStatus(id: string): Promise<SprintStatus> {
+  return get(`/api/sprints/${id}/status`);
+}
+
+export async function getSprintTrail(id: string): Promise<{ sprint_id: string; events: TrailEvent[] }> {
+  return get(`/api/sprints/${id}/trail`);
+}
+
+export async function getSprintDigest(id: string): Promise<DigestData> {
+  return get(`/api/sprints/${id}/digest`);
+}
+
+export async function getArtifact(sprintId: string, hash: string): Promise<{ hash: string; content: string }> {
+  return get(`/api/sprints/${sprintId}/artifact/${hash}`);
+}
+
+export async function getAgents(): Promise<{ agents: Agent[] }> {
+  return get('/api/agents');
+}
+
+export async function getAgent(id: string): Promise<AgentDetail> {
+  return get(`/api/agents/${id}`);
+}
+
+export async function runSprint(req: {
+  sprint_id: string;
+  request: string;
+  model: string;
+}): Promise<SprintResult> {
+  const r = await fetch('/api/sprints', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  return r.json();
+}

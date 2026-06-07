@@ -30,7 +30,7 @@ import "lex-schema/json_value" as jv
 
 import "lex-schema/error" as e
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
 # ── Provider helpers ──────────────────────────────────────────────────────────
 fn make_ollama_provider() -> [env] prov.Provider {
@@ -117,21 +117,18 @@ fn make_emit_graph_tool(sprint_id :: Str) -> t.Tool {
 }
 
 fn architect(model :: Str) -> [env] runner.AgentDef {
-  architect_with_context(model, "", "")
+  let p := make_provider()
+  { id: "loom-architect", kind: "architect", system_prompt: "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum.", model_name: model, provider: p, tools: [] }
 }
 
 fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: if str.is_empty(sprint_id) {
-    []
-  } else {
-    [make_emit_graph_tool(sprint_id)]
-  } }
+  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [] }
 }
 
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: "You are the QA agent for a software sprint. Review the implementation output provided. Decide whether it satisfies the sprint goal. Reply with a structured verdict: PASS or FAIL, followed by a one-paragraph rationale. Be specific about what passes or fails.", model_name: model, provider: p, tools: [] }
+  { id: "loom-qa", kind: "qa", system_prompt: "You are the QA agent for a software sprint. Evaluate the implementation ONLY against the sprint goal in the user message.\n\nFORBIDDEN: Do NOT apply Lex language criteria (examples{} blocks, effect rows, match arm coverage) unless the goal explicitly asks for Lex code. Do NOT invent criteria absent from the goal.\n\nRULE: Your reply MUST begin with the single word PASS or FAIL on the first line — no markdown, no prefix. Then a blank line, then one paragraph explaining your verdict in terms of the sprint goal.", model_name: model, provider: p, tools: [] }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -156,13 +153,13 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
     { id: id, kind: kind, system_prompt: system_prompt, model_name: model, provider: p, tools: [] }
   }
   if role == "architect" {
-    Some(mk("loom-architect", "architect", "You are the Architect for a software sprint. Given a project request, produce a JSON sprint graph describing the agent nodes and edges needed to complete the work. Each node needs an id, a role, and a gate (a predicate the output must satisfy). Each edge needs from, to, and a handoff schema. Keep the graph minimal and executable."))
+    Some(mk("loom-architect", "architect", "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum."))
   } else {
     if role == "build" {
       Some(mk("loom-build", "build", "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation."))
     } else {
       if role == "qa" {
-        Some(mk("loom-qa", "qa", "You are the QA agent for a software sprint. Review the implementation output provided. Decide whether it satisfies the sprint goal. Reply with a structured verdict: PASS or FAIL, followed by a one-paragraph rationale. Be specific about what passes or fails."))
+        Some(mk("loom-qa", "qa", "You are the QA agent for a software sprint. Evaluate the implementation ONLY against the sprint goal in the user message.\n\nFORBIDDEN: Do NOT apply Lex language criteria (examples{} blocks, effect rows, match arm coverage) unless the goal explicitly asks for Lex code. Do NOT invent criteria absent from the goal.\n\nRULE: Your reply MUST begin with the single word PASS or FAIL on the first line — no markdown, no prefix. Then a blank line, then one paragraph explaining your verdict in terms of the sprint goal."))
       } else {
         if role == "demo" {
           Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience."))

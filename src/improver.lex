@@ -21,7 +21,7 @@ import "std.io" as io
 
 import "std.time" as time
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
 import "lex-llm/src/providers" as providers
 

@@ -1,13 +1,10 @@
-# migrate.lex — DDL for loom-specific tables.
+# migrate.lex — full DDL for loom.
 #
-# Calls soft_migrate.run first so the full lex-soft schema
-# (agents, relationships, agent_state, traces) is always present.
-# Loom adds: sprint_graphs, phase_transitions, artifacts,
-#            digests, tightened_specs.
+# Platform tables (agents, relationships, agent_state, traces) are created
+# first, followed by loom-specific tables: sprint_graphs, phase_transitions,
+# artifacts, digests, tightened_specs.
 
 import "std.sql" as sql
-
-import "lex-soft/src/migrate" as soft_migrate
 
 fn ddl_sprint_graphs() -> Str {
   "CREATE TABLE IF NOT EXISTS sprint_graphs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, phase TEXT NOT NULL, graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
@@ -75,36 +72,75 @@ fn exec_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Result[Unit, Str] {
   }
 }
 
+fn ddl_agents() -> Str {
+  "CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, inbox_url TEXT NOT NULL, capabilities_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active', registered_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)"
+}
+
+fn ddl_relationships() -> Str {
+  "CREATE TABLE IF NOT EXISTS relationships (id TEXT PRIMARY KEY, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, role TEXT NOT NULL, contract_json TEXT NOT NULL DEFAULT '{}', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)"
+}
+
+fn ddl_rel_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_rel_from ON relationships(from_agent, active)"
+}
+
+fn ddl_agent_state() -> Str {
+  "CREATE TABLE IF NOT EXISTS agent_state (agent_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT NOT NULL)"
+}
+
+fn ddl_traces() -> Str {
+  "CREATE TABLE IF NOT EXISTS traces (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, agent_id TEXT NOT NULL, event_kind TEXT NOT NULL, data_json TEXT, ts TEXT NOT NULL)"
+}
+
+fn ddl_traces_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_traces_agent_ts ON traces(agent_id, ts)"
+}
+
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match soft_migrate.run(db) {
+  match exec_ddl(db, ddl_agents()) {
     Err(e) => Err(e),
-    Ok(_) => match exec_ddl(db, ddl_sprint_graphs()) {
+    Ok(_) => match exec_ddl(db, ddl_relationships()) {
       Err(e) => Err(e),
-      Ok(_) => match exec_ddl(db, ddl_sprint_graphs_idx()) {
+      Ok(_) => match exec_ddl(db, ddl_rel_idx()) {
         Err(e) => Err(e),
-        Ok(_) => match exec_ddl(db, ddl_phase_transitions()) {
+        Ok(_) => match exec_ddl(db, ddl_agent_state()) {
           Err(e) => Err(e),
-          Ok(_) => match exec_ddl(db, ddl_artifacts()) {
+          Ok(_) => match exec_ddl(db, ddl_traces()) {
             Err(e) => Err(e),
-            Ok(_) => match exec_ddl(db, ddl_digests()) {
+            Ok(_) => match exec_ddl(db, ddl_traces_idx()) {
               Err(e) => Err(e),
-              Ok(_) => match exec_ddl(db, ddl_digests_idx()) {
+              Ok(_) => match exec_ddl(db, ddl_sprint_graphs()) {
                 Err(e) => Err(e),
-                Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
+                Ok(_) => match exec_ddl(db, ddl_sprint_graphs_idx()) {
                   Err(e) => Err(e),
-                  Ok(_) => match exec_ddl(db, ddl_tightened_specs_idx()) {
+                  Ok(_) => match exec_ddl(db, ddl_phase_transitions()) {
                     Err(e) => Err(e),
-                    Ok(_) => match exec_ddl(db, ddl_node_results()) {
+                    Ok(_) => match exec_ddl(db, ddl_artifacts()) {
                       Err(e) => Err(e),
-                      Ok(_) => match exec_ddl(db, ddl_node_results_idx()) {
+                      Ok(_) => match exec_ddl(db, ddl_digests()) {
                         Err(e) => Err(e),
-                        Ok(_) => match exec_ddl(db, ddl_agent_pool()) {
+                        Ok(_) => match exec_ddl(db, ddl_digests_idx()) {
                           Err(e) => Err(e),
-                          Ok(_) => match exec_ddl(db, ddl_agent_pool_idx()) {
+                          Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
                             Err(e) => Err(e),
-                            Ok(_) => match exec_ddl(db, ddl_attention_queue()) {
+                            Ok(_) => match exec_ddl(db, ddl_tightened_specs_idx()) {
                               Err(e) => Err(e),
-                              Ok(_) => exec_ddl(db, ddl_attention_queue_idx()),
+                              Ok(_) => match exec_ddl(db, ddl_node_results()) {
+                                Err(e) => Err(e),
+                                Ok(_) => match exec_ddl(db, ddl_node_results_idx()) {
+                                  Err(e) => Err(e),
+                                  Ok(_) => match exec_ddl(db, ddl_agent_pool()) {
+                                    Err(e) => Err(e),
+                                    Ok(_) => match exec_ddl(db, ddl_agent_pool_idx()) {
+                                      Err(e) => Err(e),
+                                      Ok(_) => match exec_ddl(db, ddl_attention_queue()) {
+                                        Err(e) => Err(e),
+                                        Ok(_) => exec_ddl(db, ddl_attention_queue_idx()),
+                                      },
+                                    },
+                                  },
+                                },
+                              },
                             },
                           },
                         },

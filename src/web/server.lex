@@ -30,6 +30,8 @@ import "std.int" as int
 
 import "std.sql" as sql
 
+import "std.crypto" as crypto
+
 import "lex-web/src/router" as router
 
 import "lex-web/src/ctx" as ctx
@@ -238,7 +240,7 @@ fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, ra
         let request := get_jv_str(j, "request")
         let model := get_jv_str(j, "model")
         let sid := if str.is_empty(sprint_id) {
-          "sprint-1"
+          str.concat("sprint-", crypto.random_str_hex(8))
         } else {
           sprint_id
         }

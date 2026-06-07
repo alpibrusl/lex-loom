@@ -2,3 +2,4 @@
 .cli/
 llm_call.lex
 *-trail.db
+.env

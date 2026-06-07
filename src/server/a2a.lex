@@ -35,7 +35,7 @@ import "lex-agent/src/task" as tk
 
 import "lex-spec/capability" as cap
 
-import "lex-soft/src/trace" as trace
+import "../agent/trace" as trace
 
 import "../graph" as graph
 

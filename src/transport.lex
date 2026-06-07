@@ -23,9 +23,9 @@ import "std.int" as int
 
 import "std.io" as io
 
-import "lex-soft/src/trace" as trace
+import "./agent/trace" as trace
 
-import "lex-soft/src/a2a" as a2a
+import "./agent/a2a" as a2a
 
 import "lex-jobs/src/jobs" as jobs
 

@@ -25,9 +25,9 @@ import "std.io" as io
 
 import "lex-schema/json_value" as jv
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
-import "lex-soft/src/trace" as trace
+import "./agent/trace" as trace
 
 import "./graph" as graph
 

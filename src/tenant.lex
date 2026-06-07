@@ -19,7 +19,7 @@ import "std.str" as str
 
 import "std.list" as list
 
-import "lex-soft/src/registry" as registry
+import "./agent/registry" as registry
 
 fn loom_kind() -> Str {
   "loom-sprint"

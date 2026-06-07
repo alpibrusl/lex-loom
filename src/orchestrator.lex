@@ -18,7 +18,7 @@ import "std.int" as int
 
 import "lex-schema/json_value" as jv
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
 import "./graph" as graph
 
@@ -113,18 +113,15 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         let __tb := tr.trail(cfg.db, cfg.id, "budget_exhausted", str.join(["{\"node\":\"", n.id, "\",\"used\":", int.to_str(calls_so_far), ",\"limit\":", int.to_str(cfg.api_calls_max), "}"], ""))
         { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["budget exhausted: max_api_calls=", int.to_str(cfg.api_calls_max)], "") }
       } else {
-        let prompt := if str.is_empty(prior_denial) {
-          if str.is_empty(input) {
-            cfg.request
-          } else {
-            input
-          }
+        let base_input := if str.is_empty(input) {
+          cfg.request
         } else {
-          str.join([if str.is_empty(input) {
-            cfg.request
-          } else {
-            input
-          }, "\n\nYour previous output was rejected by the gate \"", n.gate, "\" with reason: ", prior_denial, "\nPlease fix your output to satisfy the gate."], "")
+          str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+        }
+        let prompt := if str.is_empty(prior_denial) {
+          base_input
+        } else {
+          str.join([base_input, "\n\nYour previous output was rejected by the gate \"", n.gate, "\" with reason: ", prior_denial, "\nPlease fix your output to satisfy the gate."], "")
         }
         let __ts := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
         let output := runner.step(cfg.db, agent_cfg, prompt)
@@ -282,7 +279,7 @@ fn max_design_retries() -> Int {
 }
 
 fn design_prompt(request :: Str) -> Str {
-  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe nodes)\n", "  spec contains PASS          -- Formal: output must contain the word PASS (use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor."], "")
+  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe nodes)\n", "  spec starts-with PASS       -- Formal: output must start with the word PASS (use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor."], "")
 }
 
 fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
@@ -445,7 +442,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }
       })
       let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
-        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec contains PASS" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec starts-with PASS" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
       } else {
         sprint_graph
       }

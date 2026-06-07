@@ -20,7 +20,7 @@ import "lex-schema/json_value" as jv
 
 import "lex-llm/src/providers" as providers
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
 import "./roles" as roles
 

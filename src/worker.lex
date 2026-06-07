@@ -32,7 +32,7 @@ import "lex-schema/json_value" as jv
 
 import "lex-llm/src/provider" as prov
 
-import "lex-soft/src/runner" as runner
+import "./agent/runner" as runner
 
 import "./migrate" as migrate
 

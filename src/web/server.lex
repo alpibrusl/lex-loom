@@ -251,7 +251,7 @@ fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, ra
           request
         }
         let mdl := if str.is_empty(model) {
-          "gemma4:latest"
+          "gemini-3.5-flash"
         } else {
           model
         }

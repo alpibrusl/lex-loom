@@ -30,7 +30,48 @@ import "lex-schema/json_value" as jv
 
 import "lex-schema/error" as e
 
+import "std.proc" as proc
+
 import "./agent/runner" as runner
+
+# ── run_code tool (inline — avoids cross-file lex-llm import resolution) ──────
+#
+# Gives QA the ability to *execute* the implementation it received.
+# Uses mktemp via proc to get a unique path (safe for parallel QA nodes),
+# writes code + assertions, runs python3, detects exit via ##EXIT:$? sentinel.
+fn make_run_code_tool() -> t.Tool {
+  let params := {
+    title: "RunCode",
+    description: "Execute Python code and assertions, return {passed, exit_code, output}",
+    fields: [s.required_str("code", []), s.required_str("assertions", [])]
+  }
+  t.define(
+    "run_code",
+    "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.",
+    params,
+    fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+      let code := match jv.get_field(args, "code") { Some(JStr(v)) => v, _ => "" }
+      let assertions := match jv.get_field(args, "assertions") { Some(JStr(v)) => v, _ => "" }
+      let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
+      match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa-XXXXXXXX.py"]) {
+        Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
+        Ok(mk) => {
+          let path := str.trim(mk.stdout)
+          let __w  := io.write(path, full)
+          let cmd  := str.join(["python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
+          match proc.spawn("bash", ["-c", cmd]) {
+            Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
+            Ok(r) => {
+              let combined := str.concat(r.stdout, r.stderr)
+              let passed   := str.contains(combined, "##EXIT:0")
+              Ok(JObj([("passed", JStr(if passed { "true" } else { "false" })), ("exit_code", JInt(if passed { 0 } else { 1 })), ("output", JStr(combined))]))
+            },
+          }
+        },
+      }
+    }
+  )
+}
 
 # ── Provider helpers ──────────────────────────────────────────────────────────
 fn make_ollama_provider() -> [env] prov.Provider {
@@ -126,9 +167,13 @@ fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) 
   { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [] }
 }
 
+fn qa_system_prompt() -> Str {
+  "You are the QA agent for a software sprint. You have access to the run_code tool.\n\nWORKFLOW (mandatory — do not skip):\n1. Extract the implementation code from the previous step output.\n2. Write Python assertions that verify the sprint goal — cover the happy path AND at least two edge cases.\n3. Call run_code with the implementation as `code` and your assertions as `assertions`.\n4. Read the result: if passed=true and exit_code=0, verdict is PASS; otherwise FAIL.\n5. Output ONLY a JSON object — no prose, no markdown fences:\n{\"verdict\":\"PASS\",\"reason\":\"what the tests confirmed\",\"test_output\":\"<first 300 chars of run_code output>\"}\n\nFORBIDDEN: Do not guess or speculate. Your verdict MUST be based on run_code output. Do NOT invent criteria absent from the sprint goal."
+}
+
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: "You are the QA agent for a software sprint. Evaluate the implementation ONLY against the sprint goal in the user message.\n\nFORBIDDEN: Do NOT apply Lex language criteria (examples{} blocks, effect rows, match arm coverage) unless the goal explicitly asks for Lex code. Do NOT invent criteria absent from the goal.\n\nOutput ONLY a JSON object with exactly this shape — no prose, no markdown fences, no text before or after:\n{\"verdict\":\"PASS\",\"reason\":\"one paragraph explaining your verdict in terms of the sprint goal\"}\n\nUse \"PASS\" if the implementation satisfies the sprint goal, \"FAIL\" otherwise. The first character of your response must be '{'.", model_name: model, provider: p, tools: [] }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()] }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -159,7 +204,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
       Some(mk("loom-build", "build", "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation."))
     } else {
       if role == "qa" {
-        Some(mk("loom-qa", "qa", "You are the QA agent for a software sprint. Evaluate the implementation ONLY against the sprint goal in the user message.\n\nFORBIDDEN: Do NOT apply Lex language criteria (examples{} blocks, effect rows, match arm coverage) unless the goal explicitly asks for Lex code. Do NOT invent criteria absent from the goal.\n\nOutput ONLY a JSON object with exactly this shape — no prose, no markdown fences, no text before or after:\n{\"verdict\":\"PASS\",\"reason\":\"one paragraph explaining your verdict in terms of the sprint goal\"}\n\nUse \"PASS\" if the implementation satisfies the sprint goal, \"FAIL\" otherwise. The first character of your response must be '{'."))
+        Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()] })
       } else {
         if role == "demo" {
           Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience."))

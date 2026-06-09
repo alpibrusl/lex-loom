@@ -17,6 +17,8 @@ import "std.sql" as sql
 
 import "std.int" as int
 
+import "lex-orm/src/connection" as conn
+
 import "std.time" as time
 
 import "std.crypto" as crypto
@@ -35,13 +37,15 @@ import "./transport" as tr
 
 import "./roles" as roles
 
+import "./cast" as cast
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 # A spec gate tightened based on this sprint's outcomes.
 type TightenedSpec = { node_role :: Str, spec_src :: Str, reason :: Str }
 
 # The full Digest artifact produced by the Scribe at end of sprint.
 # summary: stakeholder-facing prose retrospective (replaces the separate Retro phase)
-type DigestArtifacts = { sprint_id :: Str, summary :: Str, lessons :: Str, tightened_specs :: List[TightenedSpec], seed_graph :: graph.SprintGraph }
+type DigestArtifacts = { sprint_id :: Str, next_sprint_id :: Str, summary :: Str, lessons :: Str, tightened_specs :: List[TightenedSpec], seed_graph :: graph.SprintGraph }
 
 type DigestResult = DigestOk(DigestArtifacts) | DigestFailed(Str)
 
@@ -51,9 +55,9 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn load_trail(db :: Db, sprint_id :: Str) -> [sql, fs_read] List[TrailRow] {
+fn load_trail(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[TrailRow] {
   let q := str.join(["SELECT event_kind, data_json, ts FROM traces WHERE agent_id='", sq(sprint_id), "' ORDER BY ts"], "")
-  let rows :: Result[List[TrailRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[TrailRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => [],
     Ok(rs) => rs,
@@ -67,26 +71,26 @@ fn format_trail(rows :: List[TrailRow]) -> Str {
 }
 
 # ── Storage ───────────────────────────────────────────────────────────────────
-fn save_tightened_spec(db :: Db, sprint_id :: Str, ts :: TightenedSpec) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
+fn save_tightened_spec(db :: conn.ConnDb, sprint_id :: Str, ts :: TightenedSpec) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
   let id := crypto.random_str_hex(16)
   let now := time.now_str()
   let q := str.join(["INSERT INTO tightened_specs (id, sprint_id, node_role, spec_src, reason, created_at) VALUES ('", sq(id), "', '", sq(sprint_id), "', '", sq(ts.node_role), "', '", sq(ts.spec_src), "', '", sq(ts.reason), "', '", now, "')"], "")
-  match sql.exec(db, q, []) {
+  match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
   }
 }
 
-fn save_digest(db :: Db, d :: DigestArtifacts) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
+fn save_digest(db :: conn.ConnDb, d :: DigestArtifacts) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
   let id := crypto.random_str_hex(16)
   let now := time.now_str()
   let seed_j := graph.to_json_str(d.seed_graph)
   let q := str.join(["INSERT INTO digests (id, sprint_id, summary_text, lessons, seed_graph_json, created_at) VALUES ('", sq(id), "', '", sq(d.sprint_id), "', '", sq(d.summary), "', '", sq(d.lessons), "', '", sq(seed_j), "', '", now, "')"], "")
-  match sql.exec(db, q, []) {
+  match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => {
       let spec_results := list.map(d.tightened_specs, fn (ts :: TightenedSpec) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
-        save_tightened_spec(db, d.sprint_id, ts)
+        save_tightened_spec(db, d.next_sprint_id, ts)
       })
       let first_err := list.fold(spec_results, None, fn (acc :: Option[Str], r :: Result[Unit, Str]) -> Option[Str] {
         match acc {
@@ -109,9 +113,9 @@ fn save_digest(db :: Db, d :: DigestArtifacts) -> [sql, fs_write, time, random, 
 # to incorporate prior learning into gate definitions.
 type SpecRow = { node_role :: Str, spec_src :: Str, reason :: Str }
 
-fn load_tightened_specs(db :: Db, sprint_id :: Str) -> [sql, fs_read] List[TightenedSpec] {
+fn load_tightened_specs(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[TightenedSpec] {
   let q := str.join(["SELECT node_role, spec_src, reason FROM tightened_specs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at"], "")
-  let rows :: Result[List[SpecRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[SpecRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, fn (r :: SpecRow) -> TightenedSpec {
@@ -123,9 +127,9 @@ fn load_tightened_specs(db :: Db, sprint_id :: Str) -> [sql, fs_read] List[Tight
 # Load the summary from the most recent digest for a sprint.
 type SummaryRow = { summary_text :: Str }
 
-fn load_summary(db :: Db, sprint_id :: Str) -> [sql, fs_read] Str {
+fn load_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
   let q := str.join(["SELECT summary_text FROM digests WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => "",
     Ok(rs) => match list.head(rs) {
@@ -138,9 +142,9 @@ fn load_summary(db :: Db, sprint_id :: Str) -> [sql, fs_read] Str {
 # Load the seed graph from the most recent digest for a sprint series.
 type SeedRow = { seed_graph_json :: Str }
 
-fn load_seed_graph(db :: Db, sprint_id :: Str) -> [sql, fs_read] Option[graph.SprintGraph] {
+fn load_seed_graph(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Option[graph.SprintGraph] {
   let q := str.join(["SELECT seed_graph_json FROM digests WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-  let rows :: Result[List[SeedRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[SeedRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
@@ -223,7 +227,7 @@ fn parse_digest_json(j :: jv.Json, sprint_id :: Str, next_sprint_id :: Str) -> D
     },
     None => default_seed_graph(next_sprint_id),
   }
-  { sprint_id: sprint_id, summary: summary, lessons: lessons, tightened_specs: specs, seed_graph: seed }
+  { sprint_id: sprint_id, next_sprint_id: next_sprint_id, summary: summary, lessons: lessons, tightened_specs: specs, seed_graph: seed }
 }
 
 # ── Scribe prompt ─────────────────────────────────────────────────────────────
@@ -232,7 +236,7 @@ fn scribe_prompt(sprint_id :: Str, trail_text :: Str, next_sprint_id :: Str) -> 
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
-fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: Db) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DigestResult {
+fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: conn.ConnDb) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DigestResult {
   let trail_rows := load_trail(db, sprint_id)
   let trail_text := if list.is_empty(trail_rows) {
     "(no trail events found)"
@@ -240,7 +244,12 @@ fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: Db) -
     format_trail(trail_rows)
   }
   let __tl := io.print(str.join(["[loom/digest] sprint=", sprint_id, " trail_events=", int.to_str(list.len(trail_rows))], ""))
-  let agent_cfg := roles.scribe(model)
+  let default_scribe := roles.scribe(model)
+  let scribe_candidates := cast.load_pool_for_role(db, "scribe")
+  let agent_cfg := match cast.best_agent(scribe_candidates, sprint_id) {
+    None => default_scribe,
+    Some(a) => cast.pool_agent_to_config(a, default_scribe, model),
+  }
   let prompt := scribe_prompt(sprint_id, trail_text, next_sprint_id)
   let output := runner.step(db, agent_cfg, prompt)
   let __to := io.print(str.join(["[loom/digest] scribe output_len=", int.to_str(str.len(output))], ""))

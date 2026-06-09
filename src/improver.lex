@@ -19,6 +19,8 @@ import "std.list" as list
 
 import "std.sql" as sql
 
+import "lex-orm/src/connection" as conn
+
 import "std.io" as io
 
 import "std.time" as time
@@ -50,19 +52,19 @@ fn empty_result() -> ImprovementResult {
 }
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
-fn load_best_agent(db :: Db, role :: Str) -> [sql, fs_read] Option[AgentRow] {
+fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[AgentRow] {
   let q := str.join(["SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC LIMIT 1"], "")
-  let rows :: Result[List[AgentRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => None,
     Ok(rs) => list.head(rs),
   }
 }
 
-fn save_improved_agent(db :: Db, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int) -> [sql, fs_write, time] Unit {
+fn save_improved_agent(db :: conn.ConnDb, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
   let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(new_id), "','", sq(role), "','", sq(prompt), "','", sq(model_name), "','", sq(tags_json), "',", int.to_str(starting_count), ",'", sq(now), "')"], "")
-  let __r := sql.exec(db, q, [])
+  let __r := sql.exec(db.handle, q, [])
   ()
 }
 
@@ -106,7 +108,7 @@ fn specs_for_role(all_specs :: List[dg.TightenedSpec], role :: Str) -> List[dg.T
 }
 
 # ── Core improvement ──────────────────────────────────────────────────────────
-fn improve_role(db :: Db, sprint_id :: Str, role :: Str, specs :: List[dg.TightenedSpec], lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Option[Str] {
+fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[dg.TightenedSpec], lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Option[Str] {
   let current_opt := load_best_agent(db, role)
   let current_prompt := match current_opt {
     Some(a) => a.system_prompt,
@@ -128,7 +130,7 @@ fn improve_role(db :: Db, sprint_id :: Str, role :: Str, specs :: List[dg.Tighte
     None => 0,
   }
   let p := roles.make_provider()
-  let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [] }
+  let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
   let prompt := improvement_prompt(role, current_prompt, lesson, specs)
   let __log := io.print(str.join(["[loom/improver] improving role=", role, " sprint=", sprint_id], ""))
   let improved_prompt := runner.step(db, improver_def, prompt)
@@ -144,7 +146,7 @@ fn improve_role(db :: Db, sprint_id :: Str, role :: Str, specs :: List[dg.Tighte
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
-fn run_improvement(db :: Db, sprint_id :: Str, lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] ImprovementResult {
+fn run_improvement(db :: conn.ConnDb, sprint_id :: Str, lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] ImprovementResult {
   let specs := dg.load_tightened_specs(db, sprint_id)
   if list.is_empty(specs) {
     let __log := io.print("[loom/improver] no tightened specs — nothing to improve")

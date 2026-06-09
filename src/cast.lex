@@ -14,6 +14,8 @@ import "std.sql" as sql
 
 import "std.env" as env
 
+import "lex-orm/src/connection" as conn
+
 import "std.time" as time
 
 import "lex-schema/json_value" as jv
@@ -45,9 +47,9 @@ fn row_to_agent(r :: PoolAgentRow) -> PoolAgent {
   { id: r.id, role: r.role, system_prompt: r.system_prompt, model_name: r.model_name, domain_tags_json: r.domain_tags_json, attestation_count: r.attestation_count }
 }
 
-fn load_pool_for_role(db :: Db, role :: Str) -> [sql, fs_read] List[PoolAgent] {
+fn load_pool_for_role(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] List[PoolAgent] {
   let q := str.join(["SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC"], "")
-  let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, row_to_agent),
@@ -90,19 +92,23 @@ fn best_agent(agents :: List[PoolAgent], request :: Str) -> Option[PoolAgent] {
 }
 
 # ── AgentConfig assembly ──────────────────────────────────────────────────────
+# model_name conventions:
+#   "proc:<cmd>"  → proc executor, cmd is the shell command (input piped via stdin)
+#   "a2a:<url>"   → A2A executor, url is the remote agent endpoint
+#   anything else → LLM executor
 fn pool_agent_to_config(a :: PoolAgent, fallback :: runner.AgentDef, model :: Str) -> runner.AgentDef {
-  let m := if str.is_empty(a.model_name) {
-    model
-  } else {
-    a.model_name
-  }
-  { id: a.id, kind: a.role, system_prompt: a.system_prompt, model_name: m, provider: fallback.provider, tools: fallback.tools }
+  let raw := if str.is_empty(a.model_name) { model } else { a.model_name }
+  let is_proc := str.starts_with(raw, "proc:")
+  let is_a2a  := str.starts_with(raw, "a2a:")
+  let proc_cmd := if is_proc { str.slice(raw, 5, str.len(raw)) } else { "" }
+  let a2a_url  := if is_a2a  { str.slice(raw, 4, str.len(raw)) } else { "" }
+  { id: a.id, kind: a.role, system_prompt: a.system_prompt, model_name: raw, provider: fallback.provider, tools: fallback.tools, proc_cmd: proc_cmd, a2a_url: a2a_url }
 }
 
 fn default_config_for_role(role :: Str, model :: Str) -> [env] runner.AgentDef {
   match roles.for_role(role, model) {
     Some(c) => c,
-    None => { id: str.concat("fallback-", role), kind: role, system_prompt: "", model_name: model, provider: providers.ollama_local(), tools: [] },
+    None => { id: str.concat("fallback-", role), kind: role, system_prompt: "", model_name: model, provider: providers.ollama_local(), tools: [], proc_cmd: "", a2a_url: "" },
   }
 }
 
@@ -125,7 +131,7 @@ fn empty_roster() -> Roster {
 }
 
 # ── Cast a single node ────────────────────────────────────────────────────────
-fn cast_node(db :: Db, n :: graph.Node, request :: Str, model :: Str) -> [env, sql, fs_read] RosterEntry {
+fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str) -> [env, sql, fs_read] RosterEntry {
   let candidates := load_pool_for_role(db, n.role)
   let fallback := default_config_for_role(n.role, model)
   match best_agent(candidates, request) {
@@ -138,21 +144,21 @@ fn cast_node(db :: Db, n :: graph.Node, request :: Str, model :: Str) -> [env, s
 }
 
 # ── Build full roster for a sprint graph ─────────────────────────────────────
-fn select_roster(db :: Db, g :: graph.SprintGraph, request :: Str, model :: Str) -> [env, sql, fs_read] Roster {
+fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, model :: Str) -> [env, sql, fs_read] Roster {
   list.map(g.nodes, fn (n :: graph.Node) -> [env, sql, fs_read] RosterEntry {
     cast_node(db, n, request, model)
   })
 }
 
 # ── Attestation update ────────────────────────────────────────────────────────
-fn increment_attestation(db :: Db, agent_id :: Str) -> [sql, fs_write, time] Unit {
+fn increment_attestation(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
   let q := str.join(["UPDATE agent_pool SET attestation_count = attestation_count + 1, last_attested_at = '", sq(now), "' WHERE id = '", sq(agent_id), "'"], "")
-  let __r := sql.exec(db, q, [])
+  let __r := sql.exec(db.handle, q, [])
   ()
 }
 
-fn update_pool_from_sprint(db :: Db, roster :: Roster, accepted_node_ids :: List[Str]) -> [sql, fs_write, time] Unit {
+fn update_pool_from_sprint(db :: conn.ConnDb, roster :: Roster, accepted_node_ids :: List[Str]) -> [sql, fs_write, time] Unit {
   let __r := list.map(roster, fn (entry :: RosterEntry) -> [sql, fs_write, time] Unit {
     if str.is_empty(entry.pool_agent_id) {
       ()

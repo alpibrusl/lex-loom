@@ -19,7 +19,7 @@ import "std.list" as list
 
 import "std.int" as int
 
-import "std.sql" as sql
+import "lex-orm/src/connection" as conn
 
 import "lex-schema/json_value" as jv
 
@@ -46,7 +46,7 @@ import "../digest" as dg
 import "../tenant" as tenant
 
 # ── Skill: start ──────────────────────────────────────────────────────────────
-fn skill_start(db :: Db, model_default :: Str) -> srv.Skill {
+fn skill_start(db :: conn.ConnDb, model_default :: Str) -> srv.Skill {
   let params := { title: "StartSprint", description: "Start a new sprint", fields: [s.required_str("sprint_id", []), s.required_str("request", []), s.optional(s.required_str("model", []))] }
   { capability: cap.inbound("start", "Start a new loom sprint given a project request.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
     let args := msg_to_json(m)
@@ -59,7 +59,7 @@ fn skill_start(db :: Db, model_default :: Str) -> srv.Skill {
       if str.is_empty(request) {
         error_outcome("sprint_id and request are required")
       } else {
-        match migrate.run(db) {
+        match migrate.run(db.handle) {
           Err(e) => error_outcome(str.concat("migrate failed: ", e)),
           Ok(_) => {
             let __reg := tenant.register(db, sprint_id, request, "")
@@ -72,7 +72,7 @@ fn skill_start(db :: Db, model_default :: Str) -> srv.Skill {
 }
 
 # ── Skill: status ─────────────────────────────────────────────────────────────
-fn skill_status(db :: Db) -> srv.Skill {
+fn skill_status(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintStatus", description: "Get sprint status", fields: [s.required_str("sprint_id", [])] }
   { capability: cap.inbound("status", "Return the current state of a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
     let args := msg_to_json(m)
@@ -89,7 +89,7 @@ fn skill_status(db :: Db) -> srv.Skill {
 }
 
 # ── Skill: trail ──────────────────────────────────────────────────────────────
-fn skill_trail(db :: Db) -> srv.Skill {
+fn skill_trail(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintTrail", description: "Fetch sprint trail events", fields: [s.required_str("sprint_id", []), s.optional(s.required_int("limit", []))] }
   { capability: cap.inbound("trail", "Return the last N trail events for a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
     let args := msg_to_json(m)
@@ -107,7 +107,7 @@ fn skill_trail(db :: Db) -> srv.Skill {
 }
 
 # ── Skill: digest ─────────────────────────────────────────────────────────────
-fn skill_digest(db :: Db) -> srv.Skill {
+fn skill_digest(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintDigest", description: "Fetch Digest artifacts", fields: [s.required_str("sprint_id", [])] }
   { capability: cap.inbound("digest", "Return Digest lessons and tightened spec count.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
     let args := msg_to_json(m)
@@ -127,7 +127,7 @@ fn skill_digest(db :: Db) -> srv.Skill {
 }
 
 # ── AgentDef factory ──────────────────────────────────────────────────────────
-fn make_agent(db :: Db, model_default :: Str, base_url :: Str) -> srv.AgentDef {
+fn make_agent(db :: conn.ConnDb, model_default :: Str, base_url :: Str) -> srv.AgentDef {
   let skills := [skill_start(db, model_default), skill_status(db), skill_trail(db), skill_digest(db)]
   let skill_caps := list.map(skills, fn (sk :: srv.Skill) -> cap.Capability {
     sk.capability

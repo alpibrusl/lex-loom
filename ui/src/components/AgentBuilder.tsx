@@ -61,6 +61,14 @@ interface Props {
   onCreated: () => void
 }
 
+type ExecutorType = 'llm' | 'proc' | 'a2a'
+
+const EXECUTOR_INFO: Record<ExecutorType, { label: string; desc: string; placeholder: string }> = {
+  llm:  { label: 'LLM',         desc: 'Standard model call — provider selected by server env vars.',       placeholder: 'gemini-2.5-flash' },
+  proc: { label: 'Process',     desc: 'Spawn a shell command. Input piped via stdin, stdout = artifact.',   placeholder: 'opencode chat -q' },
+  a2a:  { label: 'A2A Agent',   desc: 'Delegate to a remote agent via JSON-RPC tasks/send protocol.',      placeholder: 'http://localhost:8881' },
+}
+
 export default function AgentBuilder({ onCreated }: Props) {
   const [id, setId] = useState('')
   const [role, setRole] = useState('qa')
@@ -70,6 +78,8 @@ export default function AgentBuilder({ onCreated }: Props) {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
   const [template, setTemplate] = useState('')
+  const [executor, setExecutor] = useState<ExecutorType>('llm')
+  const [execTarget, setExecTarget] = useState('')   // cmd for proc, url for a2a
 
   function applyTemplate(key: string) {
     setTemplate(key)
@@ -81,17 +91,38 @@ export default function AgentBuilder({ onCreated }: Props) {
     if (key === 'data-architect') setRole('architect')
     if (key === 'strict-build') setRole('build')
     if (!id) setId(key + '-v1')
+    setExecutor('llm')
+  }
+
+  function effectiveModelName(): string {
+    if (executor === 'proc') return execTarget ? `proc:${execTarget}` : 'proc:'
+    if (executor === 'a2a')  return execTarget ? `a2a:${execTarget}`  : 'a2a:'
+    return ''  // server picks default LLM model
   }
 
   async function handleSave() {
-    if (!id.trim() || !role || !prompt.trim()) {
-      setError('ID, role, and system prompt are required')
+    if (!id.trim() || !role) {
+      setError('ID and role are required')
+      return
+    }
+    if (executor === 'llm' && !prompt.trim()) {
+      setError('System prompt is required for LLM executor')
+      return
+    }
+    if ((executor === 'proc' || executor === 'a2a') && !execTarget.trim()) {
+      setError(executor === 'proc' ? 'Command is required' : 'Agent URL is required')
       return
     }
     setSaving(true)
     setError('')
     try {
-      await createAgent({ id: id.trim(), role, system_prompt: prompt.trim(), attestation_count: att })
+      await createAgent({
+        id: id.trim(),
+        role,
+        system_prompt: prompt.trim(),
+        attestation_count: att,
+        model_name: effectiveModelName(),
+      })
       setSaved(true)
       setTimeout(() => { setSaved(false); onCreated() }, 1500)
     } catch (e: any) {
@@ -167,6 +198,51 @@ export default function AgentBuilder({ onCreated }: Props) {
         </div>
       )}
 
+      {/* Executor type */}
+      <div>
+        <p className="text-xs text-muted font-medium mb-2">Executor</p>
+        <div className="grid grid-cols-3 gap-2">
+          {(Object.entries(EXECUTOR_INFO) as [ExecutorType, typeof EXECUTOR_INFO[ExecutorType]][]).map(([key, info]) => (
+            <button
+              key={key}
+              onClick={() => setExecutor(key)}
+              className={`p-2.5 rounded-lg border text-left text-xs transition-all ${
+                executor === key
+                  ? 'border-emerald-500 bg-emerald-950/30 text-emerald-300'
+                  : 'border-border bg-bg text-muted hover:border-slate-500 hover:text-slate-300'
+              }`}
+            >
+              <div className="font-semibold mb-0.5">{info.label}</div>
+              <div className="text-[10px] leading-tight">{info.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {executor !== 'llm' && (
+          <div className="mt-2">
+            <label className="text-xs text-muted mb-1 block">
+              {executor === 'proc' ? 'Shell command (input via stdin)' : 'Remote agent URL'}
+            </label>
+            <input
+              className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-emerald-500 placeholder-muted"
+              placeholder={EXECUTOR_INFO[executor].placeholder}
+              value={execTarget}
+              onChange={e => setExecTarget(e.target.value)}
+            />
+            {executor === 'proc' && (
+              <p className="text-[10px] text-muted mt-1">
+                model_name will be stored as <span className="font-mono text-slate-400">proc:{execTarget || '<cmd>'}</span>
+              </p>
+            )}
+            {executor === 'a2a' && (
+              <p className="text-[10px] text-muted mt-1">
+                model_name will be stored as <span className="font-mono text-slate-400">a2a:{execTarget || '<url>'}</span>
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Starting attestation */}
       <div>
         <div className="flex items-center justify-between mb-1">
@@ -184,16 +260,18 @@ export default function AgentBuilder({ onCreated }: Props) {
         </div>
       </div>
 
-      {/* System prompt */}
+      {/* System prompt — shown for LLM (mandatory) and optional context for proc/a2a */}
       <div>
-        <label className="text-xs text-muted mb-1 block">System Prompt</label>
+        <label className="text-xs text-muted mb-1 block">
+          System Prompt {executor !== 'llm' && <span className="text-slate-600">(optional — prepended to input)</span>}
+        </label>
         <textarea
           className="w-full bg-bg border border-border rounded-lg p-3 text-xs font-mono text-slate-300 resize-none h-48 focus:outline-none focus:border-emerald-500 placeholder-muted leading-relaxed"
-          placeholder="You are a specialised agent for..."
+          placeholder={executor === 'llm' ? 'You are a specialised agent for...' : 'Optional context prepended to each task input…'}
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
         />
-        <p className="text-[10px] text-muted mt-1">{prompt.length} chars · The system prompt is the full specification of how this agent thinks and what it does.</p>
+        <p className="text-[10px] text-muted mt-1">{prompt.length} chars</p>
       </div>
 
       {error && <p className="text-rose-400 text-xs">{error}</p>}

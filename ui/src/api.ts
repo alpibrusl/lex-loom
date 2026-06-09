@@ -1,4 +1,4 @@
-import type { SprintStat, SprintStatus, TrailEvent, Agent, AgentDetail, SprintResult, DigestData } from './types';
+import type { SprintStat, SprintStatus, TrailEvent, Agent, AgentDetail, SprintResult, DigestData, ProviderInfo } from './types';
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -45,6 +45,10 @@ export async function runSprint(req: {
     body: JSON.stringify(req),
   });
   return r.json();
+}
+
+export async function getProviders(): Promise<ProviderInfo> {
+  return get('/api/providers');
 }
 
 export async function createAgent(req: {

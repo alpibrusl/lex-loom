@@ -80,12 +80,12 @@ fn parse_int_or_l(s :: Str, fallback :: Int) -> Int {
 }
 
 # ── DB helper ─────────────────────────────────────────────────────────────────
-fn open_loom_db(url_or_path :: Str) -> [sql, fs_write] Result[Db, Str] {
+fn open_loom_db(url_or_path :: Str) -> [sql, fs_write] Result[conn.ConnDb, Str] {
   match conn.open(url_or_path) {
     Err(_) => Err("db connection failed"),
     Ok(c) => match migrate.run(c.handle) {
       Err(e) => Err(e),
-      Ok(_) => Ok(c.handle),
+      Ok(_) => Ok(c),
     },
   }
 }
@@ -114,9 +114,9 @@ fn trans_to_json(r :: TransRow) -> Str {
   str.join(["{\"from\":", esc(r.from_phase), ",\"to\":", esc(r.to_phase), ",\"evidence\":", esc(r.evidence), ",\"ts\":", esc(r.ts), "}"], "")
 }
 
-fn load_transitions_json(db :: Db, sprint_id :: Str) -> [sql, fs_read] Str {
+fn load_transitions_json(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
   let q := str.join(["SELECT from_phase, to_phase, evidence, ts FROM phase_transitions WHERE sprint_id='", sq(sprint_id), "' ORDER BY ts"], "")
-  let rows :: Result[List[TransRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[TransRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => "[]",
     Ok(rs) => str.concat("[", str.concat(str.join(list.map(rs, trans_to_json), ","), "]")),
@@ -167,7 +167,7 @@ fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql,
       Err(_) => resp.internal_error(),
       Ok(db) => {
         let q := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-        let rows :: Result[List[GraphRow], SqlError] := sql.query(db, q, [])
+        let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q, [])
         match rows {
           Err(_) => resp.json("{\"graph\":null}"),
           Ok(rs) => match list.head(rs) {
@@ -192,7 +192,7 @@ fn handle_artifact(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, s
         Err(_) => resp.internal_error(),
         Ok(db) => {
           let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
-          let rows :: Result[List[ArtifactContentRow], SqlError] := sql.query(db, q, [])
+          let rows :: Result[List[ArtifactContentRow], SqlError] := sql.query(db.handle, q, [])
           match rows {
             Err(_) => resp.not_found(),
             Ok(rs) => match list.head(rs) {
@@ -211,7 +211,7 @@ fn spec_to_json(s :: dg.TightenedSpec) -> Str {
   str.join(["{\"node_role\":", esc(s.node_role), ",\"spec_src\":", esc(s.spec_src), ",\"reason\":", esc(s.reason), "}"], "")
 }
 
-fn seed_flag(db :: Db, sprint_id :: Str) -> [sql, fs_read] Str {
+fn seed_flag(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
   match dg.load_seed_graph(db, sprint_id) {
     None => "false",
     Some(_) => "true",
@@ -255,7 +255,7 @@ fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, ra
           request
         }
         let mdl := if str.is_empty(model) {
-          "gemini-3.5-flash"
+          "gemini-2.5-flash"
         } else {
           model
         }
@@ -284,7 +284,7 @@ fn handle_list_agents(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random
     Err(_) => resp.internal_error(),
     Ok(db) => {
       let q := "SELECT id, role, model_name, domain_tags_json, attestation_count, created_at FROM agent_pool ORDER BY role ASC, attestation_count DESC"
-      let rows :: Result[List[AgentPoolRow], SqlError] := sql.query(db, q, [])
+      let rows :: Result[List[AgentPoolRow], SqlError] := sql.query(db.handle, q, [])
       match rows {
         Err(_) => resp.json("{\"agents\":[]}"),
         Ok(rs) => resp.json(str.concat("{\"agents\":[", str.concat(str.join(list.map(rs, agent_row_to_json), ","), "]}"))),
@@ -303,7 +303,7 @@ fn handle_get_agent(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, 
       Err(_) => resp.internal_error(),
       Ok(db) => {
         let q := str.join(["SELECT id, role, model_name, domain_tags_json, attestation_count, system_prompt, created_at FROM agent_pool WHERE id='", sq(agent_id), "'"], "")
-        let rows :: Result[List[AgentDetailRow], SqlError] := sql.query(db, q, [])
+        let rows :: Result[List[AgentDetailRow], SqlError] := sql.query(db.handle, q, [])
         match rows {
           Err(_) => resp.not_found(),
           Ok(rs) => match list.head(rs) {
@@ -341,7 +341,7 @@ fn handle_create_agent(body :: Str, db_path :: Str) -> [io, time, sql, fs_read, 
               Ok(db) => {
                 let now := time.now_str()
                 let model := if str.is_empty(model_name) {
-                  "gemini-3.5-flash"
+                  "gemini-2.5-flash"
                 } else {
                   model_name
                 }
@@ -355,7 +355,7 @@ fn handle_create_agent(body :: Str, db_path :: Str) -> [io, time, sql, fs_read, 
                   None => 1,
                 }
                 let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(id), "','", sq(role), "','", sq(system_prompt), "','", sq(model), "','", sq(tags), "',", int.to_str(att), ",'", sq(now), "')"], "")
-                let __r := sql.exec(db, q, [])
+                let __r := sql.exec(db.handle, q, [])
                 resp.json(str.join(["{\"id\":", esc(id), ",\"role\":", esc(role), ",\"attestation_count\":", int.to_str(att), ",\"created\":true}"], ""))
               },
             }
@@ -417,6 +417,82 @@ fn handle_reject_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, r
       }
     },
   }
+}
+
+# ── GET /api/providers ────────────────────────────────────────────────────────
+fn env_key_set(var_name :: Str) -> [env] Bool {
+  match env.get(var_name) {
+    None => false,
+    Some(k) => str.len(k) > 0,
+  }
+}
+
+fn handle_providers() -> [env] resp.Response {
+  let has_vertex := if env_key_set("VERTEX_ACCESS_TOKEN") { env_key_set("VERTEX_PROJECT") } else { false }
+  let has_anthropic := env_key_set("ANTHROPIC_API_KEY")
+  let has_openai := env_key_set("OPENAI_API_KEY")
+  let has_google := env_key_set("GOOGLE_API_KEY")
+  let has_mistral := env_key_set("MISTRAL_API_KEY")
+  let active := if has_vertex {
+    "vertex"
+  } else {
+    if has_anthropic {
+      "anthropic"
+    } else {
+      if has_openai {
+        "openai"
+      } else {
+        if has_google {
+          "google"
+        } else {
+          if has_mistral {
+            "mistral"
+          } else {
+            "ollama"
+          }
+        }
+      }
+    }
+  }
+  let default_model := if has_vertex {
+    "gemini-2.5-flash"
+  } else {
+    if has_anthropic {
+      "claude-sonnet-4-6"
+    } else {
+      if has_openai {
+        "gpt-4.5"
+      } else {
+        if has_google {
+          "gemini-2.5-flash"
+        } else {
+          if has_mistral {
+            "mistral-large-latest"
+          } else {
+            "gemma4:latest"
+          }
+        }
+      }
+    }
+  }
+  let cv := str.concat(
+    if has_vertex { "\"vertex\"," } else { "" },
+    str.concat(
+      if has_anthropic { "\"anthropic\"," } else { "" },
+      str.concat(
+        if has_openai { "\"openai\"," } else { "" },
+        str.concat(
+          if has_google { "\"google\"," } else { "" },
+          str.concat(
+            if has_mistral { "\"mistral\"," } else { "" },
+            "\"ollama\""
+          )
+        )
+      )
+    )
+  )
+  let configured_json := str.concat("[", str.concat(cv, "]"))
+  resp.json(str.join(["{\"active\":", esc(active), ",\"default_model\":", esc(default_model), ",\"configured\":", configured_json, ",\"models\":{\"vertex\":[\"gemini-2.5-flash\",\"gemini-2.0-flash\",\"gemini-2.5-pro\"],\"anthropic\":[\"claude-opus-4-7\",\"claude-sonnet-4-6\",\"claude-haiku-4-5\"],\"openai\":[\"gpt-4.5\",\"o4-mini\",\"gpt-4o\"],\"google\":[\"gemini-2.5-flash\",\"gemini-2.0-flash\",\"gemini-1.5-pro\"],\"mistral\":[\"mistral-large-latest\",\"mistral-medium-latest\",\"mistral-small-latest\"],\"ollama\":[\"gemma4:latest\",\"llama3.2:latest\",\"qwen3:latest\"]}}"], ""))
 }
 
 # ── GET /api/series ───────────────────────────────────────────────────────────
@@ -499,9 +575,14 @@ fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypt
         let rsp := handle_create_agent(req.body, db_path)
         { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
       } else {
-        let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
-        let rsp := router.dispatch(r, raw)
-        { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+        if req.method == "GET" and req.path == "/api/providers" {
+          let rsp := handle_providers()
+          { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+        } else {
+          let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
+          let rsp := router.dispatch(r, raw)
+          { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+        }
       }
     }
   })

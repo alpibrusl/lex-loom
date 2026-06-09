@@ -25,7 +25,7 @@ import "std.io" as io
 
 import "std.str" as str
 
-import "std.sql" as sql
+import "lex-orm/src/connection" as conn
 
 import "lex-mcp/src/server" as mcp_server
 
@@ -48,9 +48,9 @@ fn run_mcp_server() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
   let db_path := get_env("DB_PATH", "loom.db")
   let model := get_env("MODEL", "claude-haiku-4-5-20251001")
   let base_url := get_env("LOOM_BASE_URL", "http://localhost:9100")
-  match sql.open(db_path) {
-    Err(e) => io.print(str.concat("[loom/mcp] FATAL open db: ", e.message)),
-    Ok(db) => match migrate.run(db) {
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom/mcp] FATAL open db"),
+    Ok(db) => match migrate.run(db.handle) {
       Err(e) => io.print(str.concat("[loom/mcp] FATAL migrate: ", e)),
       Ok(_) => {
         let agent := a2a_server.make_agent(db, model, base_url)

@@ -106,7 +106,7 @@ fn make_vertex_provider() -> [env] prov.Provider {
   vtx.make_provider(vtx.config_at(api_key, project, location))
 }
 
-# Provider priority: Vertex AI > Anthropic > Ollama
+# Provider priority: Vertex AI > Anthropic > OpenAI > Google > Mistral > Ollama
 # Vertex AI is selected when VERTEX_ACCESS_TOKEN and VERTEX_PROJECT are both set.
 fn make_provider() -> [env] prov.Provider {
   match env.get("VERTEX_ACCESS_TOKEN") {
@@ -126,12 +126,61 @@ fn make_provider() -> [env] prov.Provider {
   }
 }
 
+fn make_openai_provider() -> [env] prov.Provider {
+  providers.openai()
+}
+
+fn make_google_provider() -> [env] prov.Provider {
+  providers.google()
+}
+
+fn make_mistral_provider() -> [env] prov.Provider {
+  providers.mistral()
+}
+
+fn key_is_set(k :: Str) -> Bool {
+  str.len(k) > 0
+}
+
 fn make_provider_no_vertex() -> [env] prov.Provider {
   match env.get("ANTHROPIC_API_KEY") {
-    Some(k) => if str.is_empty(k) {
-      make_ollama_provider()
-    } else {
+    Some(k) => if key_is_set(k) {
       providers.anthropic()
+    } else {
+      make_provider_no_anthropic()
+    },
+    None => make_provider_no_anthropic(),
+  }
+}
+
+fn make_provider_no_anthropic() -> [env] prov.Provider {
+  match env.get("OPENAI_API_KEY") {
+    Some(k) => if key_is_set(k) {
+      make_openai_provider()
+    } else {
+      make_provider_no_openai()
+    },
+    None => make_provider_no_openai(),
+  }
+}
+
+fn make_provider_no_openai() -> [env] prov.Provider {
+  match env.get("GOOGLE_API_KEY") {
+    Some(k) => if key_is_set(k) {
+      make_google_provider()
+    } else {
+      make_provider_no_google()
+    },
+    None => make_provider_no_google(),
+  }
+}
+
+fn make_provider_no_google() -> [env] prov.Provider {
+  match env.get("MISTRAL_API_KEY") {
+    Some(k) => if key_is_set(k) {
+      make_mistral_provider()
+    } else {
+      make_ollama_provider()
     },
     None => make_ollama_provider(),
   }
@@ -159,12 +208,12 @@ fn make_emit_graph_tool(sprint_id :: Str) -> t.Tool {
 
 fn architect(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum.", model_name: model, provider: p, tools: [] }
+  { id: "loom-architect", kind: "architect", system_prompt: "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [] }
+  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 fn qa_system_prompt() -> Str {
@@ -173,29 +222,29 @@ fn qa_system_prompt() -> Str {
 
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()] }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-demo", kind: "demo", system_prompt: "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience.", model_name: model, provider: p, tools: [] }
+  { id: "loom-demo", kind: "demo", system_prompt: "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 fn scribe(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-scribe", kind: "scribe", system_prompt: "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) lessons learned, (2) spec tightenings for next sprint, (3) a suggested starting graph topology for the next sprint. Be concrete and actionable.", model_name: model, provider: p, tools: [] }
+  { id: "loom-scribe", kind: "scribe", system_prompt: "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) lessons learned, (2) spec tightenings for next sprint, (3) a suggested starting graph topology for the next sprint. Be concrete and actionable.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 fn build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-build", kind: "build", system_prompt: "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation.", model_name: model, provider: p, tools: [] }
+  { id: "loom-build", kind: "build", system_prompt: "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 # Resolve a node role string to an AgentDef using a pre-computed Provider.
 # Pure (no env effect) -- callers that have already resolved the provider use this.
 fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Option[runner.AgentDef] {
   let mk := fn (id :: Str, kind :: Str, system_prompt :: Str) -> runner.AgentDef {
-    { id: id, kind: kind, system_prompt: system_prompt, model_name: model, provider: p, tools: [] }
+    { id: id, kind: kind, system_prompt: system_prompt, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
   }
   if role == "architect" {
     Some(mk("loom-architect", "architect", "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum."))
@@ -204,7 +253,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
       Some(mk("loom-build", "build", "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation."))
     } else {
       if role == "qa" {
-        Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()] })
+        Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" })
       } else {
         if role == "demo" {
           Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience."))

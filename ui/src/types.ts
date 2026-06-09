@@ -56,3 +56,10 @@ export interface DigestData {
   specs: TightenedSpec[];
   has_seed_graph: boolean;
 }
+
+export interface ProviderInfo {
+  active: string;
+  default_model: string;
+  configured: string[];
+  models: Record<string, string[]>;
+}

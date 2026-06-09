@@ -79,12 +79,12 @@ fn resolve_db_url() -> [env] Str {
   }
 }
 
-fn open_db(url_or_path :: Str) -> [sql, fs_write] Result[Db, Str] {
+fn open_db(url_or_path :: Str) -> [sql, fs_write] Result[conn.ConnDb, Str] {
   match conn.open(url_or_path) {
     Err(_) => Err("db connection failed"),
     Ok(c) => match migrate.run(c.handle) {
       Err(e) => Err(e),
-      Ok(_) => Ok(c.handle),
+      Ok(_) => Ok(c),
     },
   }
 }
@@ -125,13 +125,13 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
 fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
-  match sql.open(db_path) {
-    Err(e) => io.print(str.concat("[loom] FATAL open db: ", e.message)),
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
     Ok(db) => {
       let __h := io.print(str.join(["Sprint: ", sprint_id], ""))
       let __sep := io.print("──────────────────────────────────────")
       let q := str.join(["SELECT from_phase, to_phase, evidence, ts FROM phase_transitions WHERE sprint_id='", str.replace(sprint_id, "'", "''"), "' ORDER BY ts"], "")
-      let rows :: Result[List[TransRow], SqlError] := sql.query(db, q, [])
+      let rows :: Result[List[TransRow], SqlError] := sql.query(db.handle, q, [])
       match rows {
         Err(_) => (),
         Ok(rs) => {
@@ -144,7 +144,7 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
       }
       let __sep2 := io.print("──────────────────────────────────────")
       let q2 := str.join(["SELECT node_id, phase, accepted, artifact, reason FROM node_results WHERE sprint_id='", str.replace(sprint_id, "'", "''"), "' ORDER BY created_at"], "")
-      let rows2 :: Result[List[NrRow], SqlError] := sql.query(db, q2, [])
+      let rows2 :: Result[List[NrRow], SqlError] := sql.query(db.handle, q2, [])
       match rows2 {
         Err(_) => (),
         Ok(rs) => {
@@ -170,7 +170,7 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
       }
       let __sep3 := io.print("──────────────────────────────────────")
       let q3 := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", str.replace(sprint_id, "'", "''"), "'"], "")
-      let rows3 :: Result[List[TrailCountRow], SqlError] := sql.query(db, q3, [])
+      let rows3 :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, q3, [])
       match rows3 {
         Err(_) => (),
         Ok(rs) => match list.head(rs) {
@@ -197,8 +197,8 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
 fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
-  match sql.open(db_path) {
-    Err(e) => io.print(str.concat("[loom] FATAL: ", e.message)),
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
     Ok(db) => {
       let rows := dg.load_trail(db, sprint_id)
       let __h := io.print(str.join(["Trail for sprint: ", sprint_id, " (", int.to_str(list.len(rows)), " events)"], ""))
@@ -215,8 +215,8 @@ fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
 fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
-  match sql.open(db_path) {
-    Err(e) => io.print(str.concat("[loom] FATAL: ", e.message)),
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
     Ok(db) => {
       let __h := io.print(str.join(["Digest for sprint: ", sprint_id], ""))
       let __sep := io.print("──────────────────────────────────────")

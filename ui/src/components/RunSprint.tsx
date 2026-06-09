@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { runSprint, getSprintStatus } from '../api'
-import type { PhaseTransition } from '../types'
+import { runSprint, getSprintStatus, getProviders } from '../api'
+import type { PhaseTransition, ProviderInfo } from '../types'
 
 const PRESETS = [
   {
@@ -39,6 +39,11 @@ interface Props {
   onClose: () => void
 }
 
+const PROVIDER_LABEL: Record<string, string> = {
+  vertex: 'Vertex AI', anthropic: 'Anthropic', openai: 'OpenAI',
+  google: 'Google AI', mistral: 'Mistral', ollama: 'Ollama',
+}
+
 export default function RunSprint({ onComplete, onClose }: Props) {
   const [step, setStep] = useState<'pick' | 'running' | 'done'>('pick')
   const [selected, setSelected] = useState(0)
@@ -46,7 +51,18 @@ export default function RunSprint({ onComplete, onClose }: Props) {
   const [sprintId, setSprintId] = useState('')
   const [transitions, setTransitions] = useState<PhaseTransition[]>([])
   const [result, setResult] = useState<{ success: boolean; summary: string } | null>(null)
+  const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null)
+  const [model, setModel] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    getProviders().then(p => {
+      setProviderInfo(p)
+      setModel(p.default_model)
+    }).catch(() => {
+      setModel('gemini-2.5-flash')
+    })
+  }, [])
 
   function stopPoll() {
     if (pollRef.current) clearInterval(pollRef.current)
@@ -78,7 +94,7 @@ export default function RunSprint({ onComplete, onClose }: Props) {
     }, 2000)
 
     try {
-      const res = await runSprint({ sprint_id: sid, request: currentRequest, model: 'gemini-3.5-flash' })
+      const res = await runSprint({ sprint_id: sid, request: currentRequest, model: model || 'gemini-2.5-flash' })
       stopPoll()
       setResult(res)
       setStep('done')
@@ -144,6 +160,40 @@ export default function RunSprint({ onComplete, onClose }: Props) {
                 onChange={e => setCustom(e.target.value)}
               />
             )}
+
+            {/* Provider + model selector */}
+            <div className="bg-bg rounded-lg p-3 border border-border space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted">Provider</span>
+                  {providerInfo && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-400 font-semibold">
+                      {PROVIDER_LABEL[providerInfo.active] ?? providerInfo.active}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-muted">Model</span>
+              </div>
+              <div className="flex gap-2 items-center">
+                {providerInfo && (
+                  <select
+                    className="flex-1 bg-surface border border-border rounded-lg px-2 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-emerald-500"
+                    value={model}
+                    onChange={e => setModel(e.target.value)}
+                  >
+                    {(providerInfo.models[providerInfo.active] ?? []).map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  className="w-40 bg-surface border border-border rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500 placeholder-muted"
+                  placeholder="custom model…"
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                />
+              </div>
+            </div>
 
             <div className="flex justify-between items-center pt-1">
               <button

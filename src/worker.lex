@@ -24,6 +24,8 @@ import "std.sql" as sql
 
 import "std.int" as int
 
+import "lex-orm/src/connection" as conn
+
 import "std.list" as list
 
 import "lex-jobs/src/jobs" as jobs
@@ -55,7 +57,7 @@ fn get_env(key :: Str, fallback :: Str) -> [env] Str {
 
 # Parse and execute a single node-job payload.
 # Writes the result to node_results via transport.write_node_result.
-fn execute_node_job(db :: Db, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
+fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
   match jv.parse(payload) {
     Err(_) => Fail("invalid JSON payload"),
     Ok(j) => {
@@ -150,9 +152,9 @@ fn execute_node_job(db :: Db, payload :: Str, model_default :: Str, provider :: 
 # sprint_graphs stores the full graph JSON; we parse and search.
 type GraphRow = { graph_json :: Str }
 
-fn load_node(db :: Db, sprint_id :: Str, node_id :: Str) -> [sql, fs_read] Option[graph.Node] {
+fn load_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str) -> [sql, fs_read] Option[graph.Node] {
   let q := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-  let rows :: Result[List[GraphRow], SqlError] := sql.query(db, q, [])
+  let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
@@ -178,8 +180,8 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn poll_loop(db :: Db, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
-  match jobs.try_claim(db, queue) {
+fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+  match jobs.try_claim(db.handle, queue) {
     Err(e) => io.print(str.concat("[loom/worker] claim error: ", e)),
     Ok(None) => {
       let __s := time.sleep_ms(poll_ms)
@@ -188,9 +190,9 @@ fn poll_loop(db :: Db, queue :: Str, poll_ms :: Int, model :: Str, provider :: p
     Ok(Some(job)) => {
       let outcome := execute_node_job(db, job.payload, model, provider)
       let __ack := match outcome {
-        Done => jobs.ack(db, job.id),
-        Retry(reason) => jobs.retry_or_fail(db, job, reason),
-        Fail(reason) => jobs.fail(db, job.id, reason),
+        Done => jobs.ack(db.handle, job.id),
+        Retry(reason) => jobs.retry_or_fail(db.handle, job, reason),
+        Fail(reason) => jobs.fail(db.handle, job.id, reason),
       }
       poll_loop(db, queue, poll_ms, model, provider)
     },
@@ -205,9 +207,9 @@ fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, 
     Some(n) => n,
   }
   let __p := io.print(str.join(["[loom/worker] starting db=", db_path, " poll_ms=", int.to_str(poll_ms)], ""))
-  match sql.open(db_path) {
-    Err(e) => io.print(str.concat("[loom/worker] FATAL open db: ", e.message)),
-    Ok(db) => match migrate.run(db) {
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom/worker] FATAL open db"),
+    Ok(db) => match migrate.run(db.handle) {
       Err(e) => io.print(str.concat("[loom/worker] FATAL migrate: ", e)),
       Ok(_) => {
         let provider := roles.make_provider()

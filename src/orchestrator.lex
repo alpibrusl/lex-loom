@@ -14,6 +14,8 @@ import "std.list" as list
 
 import "std.io" as io
 
+import "lex-orm/src/connection" as conn
+
 import "std.int" as int
 
 import "lex-schema/json_value" as jv
@@ -55,7 +57,7 @@ type PhaseResult = { phase :: graph.Phase, outcomes :: List[NodeOutcome], succes
 
 type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, fully_sealed :: Bool, summary :: Str }
 
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: Db, api_calls_max :: Int, roster :: cast.Roster }
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -221,7 +223,7 @@ fn find_node_in_graph(g :: graph.SprintGraph, node_id :: Str) -> Option[graph.No
   })
 }
 
-fn resolve_input(db :: Db, input_ref :: Str) -> [sql, fs_read] Str {
+fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read] Str {
   if str.is_empty(input_ref) {
     ""
   } else {

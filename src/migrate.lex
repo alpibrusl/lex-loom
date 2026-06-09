@@ -6,6 +6,8 @@
 
 import "std.sql" as sql
 
+import "std.list" as list
+
 fn ddl_sprint_graphs() -> Str {
   "CREATE TABLE IF NOT EXISTS sprint_graphs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, phase TEXT NOT NULL, graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
 }
@@ -88,6 +90,14 @@ fn ddl_agent_state() -> Str {
   "CREATE TABLE IF NOT EXISTS agent_state (agent_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT NOT NULL)"
 }
 
+fn ddl_agent_memory() -> Str {
+  "CREATE TABLE IF NOT EXISTS agent_memory (id TEXT NOT NULL PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, ts TEXT NOT NULL)"
+}
+
+fn ddl_agent_memory_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_mem_agent ON agent_memory(agent_id, kind)"
+}
+
 fn ddl_traces() -> Str {
   "CREATE TABLE IF NOT EXISTS traces (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, agent_id TEXT NOT NULL, event_kind TEXT NOT NULL, data_json TEXT, ts TEXT NOT NULL)"
 }
@@ -96,64 +106,40 @@ fn ddl_traces_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_traces_agent_ts ON traces(agent_id, ts)"
 }
 
-fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match exec_ddl(db, ddl_agents()) {
-    Err(e) => Err(e),
-    Ok(_) => match exec_ddl(db, ddl_relationships()) {
+fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
+  match list.head(stmts) {
+    None => Ok(()),
+    Some(stmt) => match exec_ddl(db, stmt) {
       Err(e) => Err(e),
-      Ok(_) => match exec_ddl(db, ddl_rel_idx()) {
-        Err(e) => Err(e),
-        Ok(_) => match exec_ddl(db, ddl_agent_state()) {
-          Err(e) => Err(e),
-          Ok(_) => match exec_ddl(db, ddl_traces()) {
-            Err(e) => Err(e),
-            Ok(_) => match exec_ddl(db, ddl_traces_idx()) {
-              Err(e) => Err(e),
-              Ok(_) => match exec_ddl(db, ddl_sprint_graphs()) {
-                Err(e) => Err(e),
-                Ok(_) => match exec_ddl(db, ddl_sprint_graphs_idx()) {
-                  Err(e) => Err(e),
-                  Ok(_) => match exec_ddl(db, ddl_phase_transitions()) {
-                    Err(e) => Err(e),
-                    Ok(_) => match exec_ddl(db, ddl_artifacts()) {
-                      Err(e) => Err(e),
-                      Ok(_) => match exec_ddl(db, ddl_digests()) {
-                        Err(e) => Err(e),
-                        Ok(_) => match exec_ddl(db, ddl_digests_idx()) {
-                          Err(e) => Err(e),
-                          Ok(_) => match exec_ddl(db, ddl_tightened_specs()) {
-                            Err(e) => Err(e),
-                            Ok(_) => match exec_ddl(db, ddl_tightened_specs_idx()) {
-                              Err(e) => Err(e),
-                              Ok(_) => match exec_ddl(db, ddl_node_results()) {
-                                Err(e) => Err(e),
-                                Ok(_) => match exec_ddl(db, ddl_node_results_idx()) {
-                                  Err(e) => Err(e),
-                                  Ok(_) => match exec_ddl(db, ddl_agent_pool()) {
-                                    Err(e) => Err(e),
-                                    Ok(_) => match exec_ddl(db, ddl_agent_pool_idx()) {
-                                      Err(e) => Err(e),
-                                      Ok(_) => match exec_ddl(db, ddl_attention_queue()) {
-                                        Err(e) => Err(e),
-                                        Ok(_) => exec_ddl(db, ddl_attention_queue_idx()),
-                                      },
-                                    },
-                                  },
-                                },
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+      Ok(_) => run_step(db, list.tail(stmts)),
     },
   }
+}
+
+fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
+  run_step(db, [
+    ddl_agents(),
+    ddl_relationships(),
+    ddl_rel_idx(),
+    ddl_agent_state(),
+    ddl_agent_memory(),
+    ddl_agent_memory_idx(),
+    ddl_traces(),
+    ddl_traces_idx(),
+    ddl_sprint_graphs(),
+    ddl_sprint_graphs_idx(),
+    ddl_phase_transitions(),
+    ddl_artifacts(),
+    ddl_digests(),
+    ddl_digests_idx(),
+    ddl_tightened_specs(),
+    ddl_tightened_specs_idx(),
+    ddl_node_results(),
+    ddl_node_results_idx(),
+    ddl_agent_pool(),
+    ddl_agent_pool_idx(),
+    ddl_attention_queue(),
+    ddl_attention_queue_idx(),
+  ])
 }
 

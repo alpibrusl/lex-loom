@@ -33,16 +33,14 @@ import "./digest" as dg
 
 import "./roles" as roles
 
+import "lex-orm/src/query" as ormq
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 type ImprovementResult = { improved_roles :: List[Str], new_agent_ids :: List[Str] }
 
 type AgentRow = { id :: Str, system_prompt :: Str, domain_tags_json :: Str, model_name :: Str, attestation_count :: Int }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-fn sq(s :: Str) -> Str {
-  str.replace(s, "'", "''")
-}
-
 fn new_agent_id(role :: Str, sprint_id :: Str) -> Str {
   str.join([role, "-improved-", sprint_id], "")
 }
@@ -53,8 +51,8 @@ fn empty_result() -> ImprovementResult {
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[AgentRow] {
-  let q := str.join(["SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC LIMIT 1"], "")
-  let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role=? ORDER BY attestation_count DESC LIMIT 1", params: [PStr(role)] }, db.dialect)
+  let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => None,
     Ok(rs) => list.head(rs),
@@ -63,8 +61,8 @@ fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[Agen
 
 fn save_improved_agent(db :: conn.ConnDb, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(new_id), "','", sq(role), "','", sq(prompt), "','", sq(model_name), "','", sq(tags_json), "',", int.to_str(starting_count), ",'", sq(now), "')"], "")
-  let __r := sql.exec(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES (?,?,?,?,?,?,?)", params: [PStr(new_id), PStr(role), PStr(prompt), PStr(model_name), PStr(tags_json), PInt(starting_count), PStr(now)] }, db.dialect)
+  let __r := sql.exec(db.handle, qd.sql, qd.params)
   ()
 }
 

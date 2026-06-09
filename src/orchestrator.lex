@@ -44,8 +44,6 @@ import "./improver" as improver
 
 import "./tenant" as tenant
 
-import "./gates" as gates
-
 import "./loom_trail" as ltrail
 
 import "./manifests" as manifests

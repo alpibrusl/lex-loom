@@ -108,13 +108,13 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
     Ok(mk) => {
       let path := str.trim(mk.stdout)
       let __w := io.write(path, full_input)
-      let cmd := str.join([def.proc_cmd, " < ", path, " 2>&1"], "")
+      let cmd := str.join([def.proc_cmd, " < ", path, "; echo '##PROC_EXIT:'$?"], "")
       match proc.spawn("bash", ["-c", cmd]) {
         Err(msg) => str.concat("PROC_ERROR: spawn failed: ", msg),
-        Ok(r) => if str.is_empty(str.trim(r.stdout)) {
-          str.concat("PROC_ERROR: empty output. stderr: ", r.stderr)
+        Ok(r) => if str.contains(r.stdout, "##PROC_EXIT:0") {
+          str.trim(str.replace(r.stdout, "##PROC_EXIT:0", ""))
         } else {
-          r.stdout
+          str.join(["PROC_ERROR: exit non-zero. stderr: ", r.stderr], "")
         },
       }
     },

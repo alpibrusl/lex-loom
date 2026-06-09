@@ -39,6 +39,8 @@ import "./roles" as roles
 
 import "./cast" as cast
 
+import "lex-orm/src/query" as ormq
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 # A spec gate tightened based on this sprint's outcomes.
 type TightenedSpec = { node_role :: Str, spec_src :: Str, reason :: Str }
@@ -51,13 +53,9 @@ type DigestResult = DigestOk(DigestArtifacts) | DigestFailed(Str)
 
 type TrailRow = { event_kind :: Str, data_json :: Str, ts :: Str }
 
-fn sq(s :: Str) -> Str {
-  str.replace(s, "'", "''")
-}
-
 fn load_trail(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[TrailRow] {
-  let q := str.join(["SELECT event_kind, data_json, ts FROM traces WHERE agent_id='", sq(sprint_id), "' ORDER BY ts"], "")
-  let rows :: Result[List[TrailRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT event_kind, data_json, ts FROM traces WHERE agent_id=? ORDER BY ts", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[TrailRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => [],
     Ok(rs) => rs,
@@ -74,8 +72,8 @@ fn format_trail(rows :: List[TrailRow]) -> Str {
 fn save_tightened_spec(db :: conn.ConnDb, sprint_id :: Str, ts :: TightenedSpec) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
   let id := crypto.random_str_hex(16)
   let now := time.now_str()
-  let q := str.join(["INSERT INTO tightened_specs (id, sprint_id, node_role, spec_src, reason, created_at) VALUES ('", sq(id), "', '", sq(sprint_id), "', '", sq(ts.node_role), "', '", sq(ts.spec_src), "', '", sq(ts.reason), "', '", now, "')"], "")
-  match sql.exec(db.handle, q, []) {
+  let qd := ormq.for_dialect({ sql: "INSERT INTO tightened_specs (id, sprint_id, node_role, spec_src, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(sprint_id), PStr(ts.node_role), PStr(ts.spec_src), PStr(ts.reason), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, qd.sql, qd.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
   }
@@ -85,8 +83,8 @@ fn save_digest(db :: conn.ConnDb, d :: DigestArtifacts) -> [sql, fs_write, time,
   let id := crypto.random_str_hex(16)
   let now := time.now_str()
   let seed_j := graph.to_json_str(d.seed_graph)
-  let q := str.join(["INSERT INTO digests (id, sprint_id, summary_text, lessons, seed_graph_json, created_at) VALUES ('", sq(id), "', '", sq(d.sprint_id), "', '", sq(d.summary), "', '", sq(d.lessons), "', '", sq(seed_j), "', '", now, "')"], "")
-  match sql.exec(db.handle, q, []) {
+  let qd := ormq.for_dialect({ sql: "INSERT INTO digests (id, sprint_id, summary_text, lessons, seed_graph_json, created_at) VALUES (?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(d.sprint_id), PStr(d.summary), PStr(d.lessons), PStr(seed_j), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, qd.sql, qd.params) {
     Err(e) => Err(e.message),
     Ok(_) => {
       let spec_results := list.map(d.tightened_specs, fn (ts :: TightenedSpec) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
@@ -114,8 +112,8 @@ fn save_digest(db :: conn.ConnDb, d :: DigestArtifacts) -> [sql, fs_write, time,
 type SpecRow = { node_role :: Str, spec_src :: Str, reason :: Str }
 
 fn load_tightened_specs(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[TightenedSpec] {
-  let q := str.join(["SELECT node_role, spec_src, reason FROM tightened_specs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at"], "")
-  let rows :: Result[List[SpecRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT node_role, spec_src, reason FROM tightened_specs WHERE sprint_id=? ORDER BY created_at", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[SpecRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, fn (r :: SpecRow) -> TightenedSpec {
@@ -128,8 +126,8 @@ fn load_tightened_specs(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] L
 type SummaryRow = { summary_text :: Str }
 
 fn load_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
-  let q := str.join(["SELECT summary_text FROM digests WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT summary_text FROM digests WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => "",
     Ok(rs) => match list.head(rs) {
@@ -143,8 +141,8 @@ fn load_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
 type SeedRow = { seed_graph_json :: Str }
 
 fn load_seed_graph(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Option[graph.SprintGraph] {
-  let q := str.join(["SELECT seed_graph_json FROM digests WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
-  let rows :: Result[List[SeedRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT seed_graph_json FROM digests WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[SeedRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {

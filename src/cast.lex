@@ -28,17 +28,14 @@ import "./roles" as roles
 
 import "./graph" as graph
 
+import "lex-orm/src/query" as ormq
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 type PoolAgent = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int }
 
 type RosterEntry = { node_id :: Str, pool_agent_id :: Str, agent_config :: runner.AgentDef }
 
 type Roster = List[RosterEntry]
-
-# ── SQL helpers ───────────────────────────────────────────────────────────────
-fn sq(s :: Str) -> Str {
-  str.replace(s, "'", "''")
-}
 
 # ── Pool query ────────────────────────────────────────────────────────────────
 type PoolAgentRow = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int }
@@ -48,8 +45,8 @@ fn row_to_agent(r :: PoolAgentRow) -> PoolAgent {
 }
 
 fn load_pool_for_role(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] List[PoolAgent] {
-  let q := str.join(["SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role='", sq(role), "' AND retired_at = '' ORDER BY attestation_count DESC"], "")
-  let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role=? AND retired_at='' ORDER BY attestation_count DESC", params: [PStr(role)] }, db.dialect)
+  let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, row_to_agent),
@@ -153,22 +150,22 @@ fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, mode
 # ── Attestation update ────────────────────────────────────────────────────────
 fn increment_attestation(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let q := str.join(["UPDATE agent_pool SET attestation_count = attestation_count + 1, last_attested_at = '", sq(now), "' WHERE id = '", sq(agent_id), "'"], "")
-  let __r := sql.exec(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "UPDATE agent_pool SET attestation_count = attestation_count + 1, last_attested_at = ? WHERE id = ?", params: [PStr(now), PStr(agent_id)] }, db.dialect)
+  let __r := sql.exec(db.handle, qd.sql, qd.params)
   ()
 }
 
 fn decrement_attestation(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let q := str.join(["UPDATE agent_pool SET attestation_count = attestation_count - 1, bounce_count = bounce_count + 1, last_attested_at = '", sq(now), "' WHERE id = '", sq(agent_id), "'"], "")
-  let __r := sql.exec(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "UPDATE agent_pool SET attestation_count = attestation_count - 1, bounce_count = bounce_count + 1, last_attested_at = ? WHERE id = ?", params: [PStr(now), PStr(agent_id)] }, db.dialect)
+  let __r := sql.exec(db.handle, qd.sql, qd.params)
   ()
 }
 
 fn check_and_retire(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let q := str.join(["UPDATE agent_pool SET retired_at = '", sq(now), "' WHERE id = '", sq(agent_id), "' AND attestation_count <= -3 AND retired_at = ''"], "")
-  let __r := sql.exec(db.handle, q, [])
+  let qd := ormq.for_dialect({ sql: "UPDATE agent_pool SET retired_at = ? WHERE id = ? AND attestation_count <= -3 AND retired_at = ''", params: [PStr(now), PStr(agent_id)] }, db.dialect)
+  let __r := sql.exec(db.handle, qd.sql, qd.params)
   ()
 }
 

@@ -35,6 +35,7 @@ DEMO_DIR="$LOOM_ROOT/demo"
 DB="${DEMO_DB:-$DEMO_DIR/demo.db}"
 LEX="${LEX_BIN:-lex}"
 MODEL="${MODEL:-gemini-3.5-flash}"
+VERTEX_LOCATION="${VERTEX_LOCATION:-eu}"
 EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc"
 
 # ── colours ──────────────────────────────────────────────────────────────────
@@ -67,8 +68,8 @@ step "Initialising demo DB at $DB"
 # Seed the demo pool agents (DB is created by open_db + migrate.run on first sprint)
 # We prime the DB by running a no-op sprint command that just opens + migrates it,
 # then inject our demo pool agents.
-DB_PATH="$DB" SPRINT_ID="__init__" REQUEST="init" \
-  "$LEX" run --allow-effects env,sql,fs_read,fs_write src/main.lex sprint_status 2>/dev/null || true
+DB_PATH="$DB" \
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex init_db
 
 sqlite3 "$DB" < "$DEMO_DIR/pool/seed_demo_pool.sql"
 ok "Demo pool agents seeded (Build×2 + Scribe, attestation=100)"
@@ -84,18 +85,18 @@ SPRINT1_ID="demo-sprint-1"
 SPRINT1_REQ="Build a Python Flask REST API for user registration. Endpoints: POST /register (accepts JSON {email, password}, creates user, returns {id, email}), GET /users (lists all users). Email addresses must be validated — reject malformed addresses with HTTP 422."
 
 DB_PATH="$DB" SPRINT_ID="$SPRINT1_ID" REQUEST="$SPRINT1_REQ" MODEL="$MODEL" \
-  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" \
+  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" VERTEX_LOCATION="$VERTEX_LOCATION" \
   "$LEX" run --allow-effects "$EFFECTS" src/main.lex run_sprint_cmd
 
 divider
 step "Sprint 1 trail"
 DB_PATH="$DB" SPRINT_ID="$SPRINT1_ID" \
-  "$LEX" run --allow-effects env,io,sql,fs_read src/main.lex sprint_trail
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_trail
 
 divider
 step "Sprint 1 Digest → tightened specs (seeded under next sprint ID)"
 DB_PATH="$DB" SPRINT_ID="${SPRINT1_ID}-next" \
-  "$LEX" run --allow-effects env,io,sql,fs_read src/main.lex sprint_digest
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_digest
 
 echo ""
 ok "Sprint 1 complete"
@@ -113,13 +114,13 @@ SPRINT2_ID="${SPRINT1_ID}-next"
 SPRINT2_REQ="Build a Python Flask REST API for team invitations. Endpoints: POST /invite (accepts JSON {email, role}, creates invite, returns {id, email, role, status}), GET /invites (lists all invites). Valid roles: member, admin, viewer. Email addresses must be validated."
 
 DB_PATH="$DB" SPRINT_ID="$SPRINT2_ID" REQUEST="$SPRINT2_REQ" MODEL="$MODEL" \
-  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" \
+  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" VERTEX_LOCATION="$VERTEX_LOCATION" \
   "$LEX" run --allow-effects "$EFFECTS" src/main.lex run_sprint_cmd
 
 divider
 step "Sprint 2 trail"
 DB_PATH="$DB" SPRINT_ID="$SPRINT2_ID" \
-  "$LEX" run --allow-effects env,io,sql,fs_read src/main.lex sprint_trail
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_trail
 
 # ══════════════════════════════════════════════════════════════════════════════
 header "Result"

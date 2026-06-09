@@ -53,12 +53,12 @@ fn make_run_code_tool() -> t.Tool {
       let code := match jv.get_field(args, "code") { Some(JStr(v)) => v, _ => "" }
       let assertions := match jv.get_field(args, "assertions") { Some(JStr(v)) => v, _ => "" }
       let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
-      match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa-XXXXXXXX.py"]) {
+      match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
         Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
         Ok(mk) => {
           let path := str.trim(mk.stdout)
           let __w  := io.write(path, full)
-          let cmd  := str.join(["python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
+          let cmd  := str.join(["timeout 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
           match proc.spawn("bash", ["-c", cmd]) {
             Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
             Ok(r) => {

@@ -103,7 +103,7 @@ fn build_system_prompt(def :: AgentDef, state_json :: Str, entries :: List[mem.M
 # stdin to proc_cmd, returns stdout (or stderr if stdout is empty).
 fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
   let full_input := str.join([def.system_prompt, "\n\n", msg_json], "")
-  match proc.spawn("bash", ["-c", "mktemp /tmp/loom-proc-XXXXXXXX.txt"]) {
+  match proc.spawn("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
     Err(msg) => str.concat("PROC_ERROR: mktemp failed: ", msg),
     Ok(mk) => {
       let path := str.trim(mk.stdout)

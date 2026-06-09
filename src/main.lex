@@ -2,6 +2,7 @@
 #
 # Commands (set via the function name passed to `lex run`):
 #
+#   init_db          — create/migrate DB schema only (no sprint)
 #   run_sprint_cmd   — run a full sprint (Intake→Digest)
 #   sprint_status    — show phase, outcomes, and trail summary for a sprint
 #   sprint_trail     — print the full trail for a sprint
@@ -86,6 +87,15 @@ fn open_db(url_or_path :: Str) -> [sql, fs_write] Result[conn.ConnDb, Str] {
       Err(e) => Err(e),
       Ok(_) => Ok(c),
     },
+  }
+}
+
+# ── init_db ───────────────────────────────────────────────────────────────────
+fn init_db() -> [env, sql, fs_write] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  match open_db(db_path) {
+    Err(_) => (),
+    Ok(_) => (),
   }
 }
 

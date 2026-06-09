@@ -48,7 +48,7 @@ fn row_to_agent(r :: PoolAgentRow) -> PoolAgent {
 }
 
 fn load_pool_for_role(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] List[PoolAgent] {
-  let q := str.join(["SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role='", sq(role), "' ORDER BY attestation_count DESC"], "")
+  let q := str.join(["SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role='", sq(role), "' AND retired_at = '' ORDER BY attestation_count DESC"], "")
   let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => [],
@@ -158,6 +158,25 @@ fn increment_attestation(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, 
   ()
 }
 
+fn decrement_attestation(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
+  let now := time.now_str()
+  let q := str.join(["UPDATE agent_pool SET attestation_count = attestation_count - 1, bounce_count = bounce_count + 1, last_attested_at = '", sq(now), "' WHERE id = '", sq(agent_id), "'"], "")
+  let __r := sql.exec(db.handle, q, [])
+  ()
+}
+
+fn check_and_retire(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
+  let now := time.now_str()
+  let q := str.join(["UPDATE agent_pool SET retired_at = '", sq(now), "' WHERE id = '", sq(agent_id), "' AND attestation_count <= -3 AND retired_at = ''"], "")
+  let __r := sql.exec(db.handle, q, [])
+  ()
+}
+
+fn record_bounce(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
+  let __d := decrement_attestation(db, agent_id)
+  check_and_retire(db, agent_id)
+}
+
 fn update_pool_from_sprint(db :: conn.ConnDb, roster :: Roster, accepted_node_ids :: List[Str]) -> [sql, fs_write, time] Unit {
   let __r := list.map(roster, fn (entry :: RosterEntry) -> [sql, fs_write, time] Unit {
     if str.is_empty(entry.pool_agent_id) {
@@ -173,7 +192,7 @@ fn update_pool_from_sprint(db :: conn.ConnDb, roster :: Roster, accepted_node_id
       if accepted {
         increment_attestation(db, entry.pool_agent_id)
       } else {
-        ()
+        record_bounce(db, entry.pool_agent_id)
       }
     }
   })

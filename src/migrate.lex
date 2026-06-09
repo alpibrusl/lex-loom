@@ -50,7 +50,7 @@ fn ddl_node_results_idx() -> Str {
 }
 
 fn ddl_agent_pool() -> Str {
-  "CREATE TABLE IF NOT EXISTS agent_pool (id TEXT PRIMARY KEY, role TEXT NOT NULL, system_prompt TEXT NOT NULL, model_name TEXT NOT NULL DEFAULT '', domain_tags_json TEXT NOT NULL DEFAULT '[]', attestation_count INTEGER NOT NULL DEFAULT 0, last_attested_at TEXT, created_at TEXT NOT NULL)"
+  "CREATE TABLE IF NOT EXISTS agent_pool (id TEXT PRIMARY KEY, role TEXT NOT NULL, system_prompt TEXT NOT NULL, model_name TEXT NOT NULL DEFAULT '', domain_tags_json TEXT NOT NULL DEFAULT '[]', attestation_count INTEGER NOT NULL DEFAULT 0, bounce_count INTEGER NOT NULL DEFAULT 0, retired_at TEXT NOT NULL DEFAULT '', last_attested_at TEXT, created_at TEXT NOT NULL)"
 }
 
 fn ddl_agent_pool_idx() -> Str {
@@ -106,6 +106,17 @@ fn ddl_traces_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_traces_agent_ts ON traces(agent_id, ts)"
 }
 
+fn try_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Unit {
+  let __r := sql.exec(db, stmt, [])
+  ()
+}
+
+fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
+  let __1 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN bounce_count INTEGER NOT NULL DEFAULT 0")
+  let __2 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN retired_at TEXT NOT NULL DEFAULT ''")
+  ()
+}
+
 fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
   match list.head(stmts) {
     None => Ok(()),
@@ -117,7 +128,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  run_step(db, [
+  match run_step(db, [
     ddl_agents(),
     ddl_relationships(),
     ddl_rel_idx(),
@@ -140,6 +151,12 @@ fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
     ddl_agent_pool_idx(),
     ddl_attention_queue(),
     ddl_attention_queue_idx(),
-  ])
+  ]) {
+    Err(e) => Err(e),
+    Ok(_) => {
+      let __up := run_upgrades(db)
+      Ok(())
+    },
+  }
 }
 

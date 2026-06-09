@@ -458,7 +458,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let __tph6 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Digest\",\"to\":\"Improve\"}")
       let improve_result := match digest_result {
         DigestFailed(_) => improver.empty_result(),
-        DigestOk(d) => improver.run_improvement(cfg.db, cfg.id, d.lessons, cfg.model),
+        DigestOk(d) => improver.run_improvement(cfg.db, next_sprint_id, d.lessons, cfg.model),
       }
       let __tpi := tr.trail(cfg.db, cfg.id, "phase_improved", str.join(["{\"agents_improved\":", int.to_str(list.len(improve_result.new_agent_ids)), ",\"roles\":[", str.join(list.map(improve_result.new_agent_ids, fn (id :: Str) -> Str {
         str.join(["\"", id, "\""], "")

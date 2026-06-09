@@ -4,7 +4,7 @@ Multi-agent **sprint cycles** — give it a task, watch a pipeline of specialise
 
 Every phase transition is evidence-gated. Every artifact is content-addressed. The audit trail is append-only. The system learns: the Digest phase tightens specs and seeds the next sprint's graph from lessons in the current trail.
 
-> **Status: M5 complete.** Full sprint pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with learning loop running on Vertex AI / Anthropic / Ollama.
+> **Status: M5 complete + pool fitness loop.** Full sprint pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with learning loop, agent pool scoring, bounce penalties, and retirement running on Vertex AI / Anthropic / Ollama.
 
 ---
 
@@ -288,6 +288,26 @@ Sprint IDs are auto-generated (`sprint-<hex8>`) if not supplied in the request b
 
 ---
 
+## "The Sprint That Fixes Itself" demo
+
+A scripted two-sprint sequence showing the learning loop in action. No LLM required for Build or Scribe — proc_cmd agents make it deterministic and fast.
+
+**Sprint 1** — User Registration API  
+Build outputs bad code (no email validation). QA catches it and bounces back to Implementation. Build retries with good code. QA passes. Scribe Digest encodes the lesson as a tightened gate: `spec contains EMAIL_REGEX` for `role=build`.
+
+**Sprint 2** — Team Invite API (different task, same rule)  
+Architect reads the tightened spec from Sprint 1's Digest and sets the Build gate before QA runs. Build produces code with `EMAIL_REGEX` on the first attempt — gate fires immediately, QA never needs to catch it.
+
+```bash
+export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
+export VERTEX_PROJECT=your-gcp-project
+./demo/run.sh
+```
+
+The spec is in the substrate. The model did not get smarter. The constraint got earlier.
+
+---
+
 ## Offline demo (no LLM)
 
 Exercises graph validation, metaspec rules, phase state machine, and semantic diff — no API key required:
@@ -344,10 +364,11 @@ Each node in the sprint graph carries a gate expression evaluated against its ou
 | Expression | Meaning |
 |---|---|
 | `spec non-empty` | output must not be empty |
-| `spec starts-with PASS` | output must start with the word PASS (QA nodes) |
 | `spec len-gt N` | output must be longer than N characters |
+| `spec contains <str>` | output must contain the literal string `<str>` |
 | `spec json` | output must be valid JSON |
 | `spec json-field <key>` | output must be JSON containing `<key>` |
+| `spec json-verdict-pass` | output must be JSON `{"verdict":"PASS",...}` (use for QA nodes) |
 | `human <oracle>` | queued for named human attestation |
 
 ### Learning loop
@@ -373,9 +394,14 @@ Between Design and Implementation, a **Cast phase** runs — think HR for agents
 | `strict-qa-v1` | qa | lex, qa, strict |
 | `general-scribe-v1` | scribe | lex, scribe |
 
-**Attestation feedback:** at sprint end, every pool agent whose node was accepted gets `attestation_count + 1`. Specialists that produce accepted work earn reputation sprint by sprint — they win more casts over generic defaults over time.
+**Pool executor types:** `model_name` in the pool drives which executor fires per node:
+- Plain model name (e.g. `gemini-3.5-flash`) → LLM executor
+- `proc:<cmd>` → shell command; full input piped via stdin, stdout is the artifact
+- `a2a:<url>` → remote agent called via A2A JSON-RPC `tasks/send`
 
-**Improver:** after the Scribe's Digest, an LLM rewrites the system prompt of the best current agent for each role that had a tightened spec. The improved agent is saved to the pool as `<role>-improved-<sprint-id>` with `attestation_count = 0`. It starts from zero and must earn its place in future casts.
+**Attestation feedback:** at sprint end, accepted nodes earn `attestation_count + 1`. Denied/bounced nodes lose `attestation_count − 1` and `bounce_count + 1`. Agents that reach `attestation_count ≤ −3` are soft-retired (`retired_at` set) and excluded from future casts. Specialists earn reputation over time; chronically failing agents sink out of contention automatically.
+
+**Improver:** after the Scribe's Digest, an LLM rewrites the system prompt of the best current agent for each role that had a tightened spec. The improved agent is saved to the pool as `<role>-improved-<sprint-id>` with `attestation_count = parent + 2` — it starts two points ahead of its parent, giving it a genuine edge in the next cast while still needing to earn further trust.
 
 This is loom-specific logic — the platform registry (`src/agent/registry.lex`) handles A2A routing for live processes; the pool is about which *prompt* runs for each graph node.
 
@@ -409,7 +435,7 @@ src/
   tenant.lex         Sprint registration in agent registry
   worker.lex         Durable-queue worker process (loom:node queue)
   hello.lex          Offline demo — no LLM, no DB
-  main.lex           CLI entry point (run_sprint_cmd)
+  main.lex           CLI entry point (init_db / run_sprint_cmd / sprint_status / sprint_trail / sprint_digest)
   web/
     server.lex       HTTP server — POST /api/sprints + status/trail/artifact/digest routes
   server/
@@ -465,6 +491,7 @@ Agent runtime (runner, trace, state store, registry, A2A) is vendored directly i
 | M3 | ✓ | Architect emits real `SprintGraph`s; semantic diff re-planning |
 | M4 | ✓ | `digest.lex` — Scribe closes the learning loop |
 | M5 | ✓ | Durable queue + multi-tenancy + HTTP API + Vertex AI / Anthropic / Ollama |
+| M5+ | ✓ | Pool fitness loop — bounce penalty, agent retirement, proc/a2a executors, "Sprint That Fixes Itself" demo |
 | M6 | — | `lex-vcs` — artifacts by content hash on a branch per sprint |
 
 ---

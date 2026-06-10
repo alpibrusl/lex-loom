@@ -22,6 +22,10 @@ import "std.list" as list
 
 import "std.int" as int
 
+import "std.sql" as sql
+
+import "std.time" as time
+
 import "lex-orm/src/connection" as conn
 
 import "lex-schema/json_value" as jv
@@ -55,7 +59,9 @@ fn post_json(url :: Str, body :: Str) -> [net] Result[Str, Str] {
 }
 
 # ── Poll for next sprint ───────────────────────────────────────────────────────
-type PollResult = GotSprint(Str, Str, Str) | NothingQueued | PollError(Str)
+# GotSprint carries the agents JSON (the cloud agent_pool for this user) so the
+# runner can run with cloud-defined agents — the cloud is the source of truth.
+type PollResult = GotSprint(Str, Str, Str, Str) | NothingQueued | PollError(Str)
 
 fn poll(server :: Str, token :: Str) -> [net] PollResult {
   let url := str.concat(server, "/api/runners/poll")
@@ -78,10 +84,60 @@ fn poll(server :: Str, token :: Str) -> [net] PollResult {
             Some(JStr(m)) => m,
             _ => "gpt-4o",
           }
-          GotSprint(sid, request, model)
+          let agents := match jv.get_field(j, "agents") {
+            Some(a) => jv.stringify(a),
+            None => "[]",
+          }
+          GotSprint(sid, request, model, agents)
         },
         Some(_) => NothingQueued,
       },
+    },
+  }
+}
+
+# ── Seed the local agent pool from cloud-supplied agent definitions ─────────────
+fn sq(s :: Str) -> Str {
+  str.replace(s, "'", "''")
+}
+
+fn jstr(o :: jv.Json, k :: Str, dflt :: Str) -> Str {
+  match jv.get_field(o, k) { Some(JStr(v)) => v, _ => dflt }
+}
+
+fn jint(o :: jv.Json, k :: Str, dflt :: Int) -> Int {
+  match jv.get_field(o, k) { Some(JInt(v)) => v, _ => dflt }
+}
+
+fn insert_cloud_agent(db :: conn.ConnDb, now :: Str, o :: jv.Json) -> [sql, fs_write] Unit {
+  let id := jstr(o, "id", "")
+  if str.is_empty(id) {
+    ()
+  } else {
+    let role := jstr(o, "role", "")
+    let prompt := jstr(o, "system_prompt", "")
+    let model_name := jstr(o, "model_name", "")
+    let tags := jstr(o, "domain_tags_json", "[]")
+    let att := jint(o, "attestation_count", 0)
+    let q := str.join(["INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES ('", sq(id), "','", sq(role), "','", sq(prompt), "','", sq(model_name), "','", sq(tags), "',", int.to_str(att), ",'", sq(now), "')"], "")
+    let __r := sql.exec(db.handle, q, [])
+    ()
+  }
+}
+
+# Returns the number of agents seeded from the cloud (0 if none / parse error).
+fn seed_agents_from_cloud(db :: conn.ConnDb, agents_json :: Str) -> [sql, fs_write, time] Int {
+  match jv.parse(agents_json) {
+    Err(_) => 0,
+    Ok(j) => match j {
+      JList(items) => {
+        let now := time.now_str()
+        let __m := list.map(items, fn (o :: jv.Json) -> [sql, fs_write] Unit {
+          insert_cloud_agent(db, now, o)
+        })
+        list.len(items)
+      },
+      _ => 0,
     },
   }
 }
@@ -121,8 +177,18 @@ fn upload_trail(server :: Str, token :: Str, sprint_id :: Str, events :: List[dg
 }
 
 # ── Execute one cloud sprint ───────────────────────────────────────────────────
-fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :: Str, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
-  let __seed := pool_seed.seed(db)
+fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :: Str, agents_json :: Str, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+  # Cloud is the source of truth for agents. Seed the local pool from the
+  # cloud-supplied definitions; fall back to built-in defaults only when the
+  # cloud has none (fresh account / offline).
+  let n_cloud := seed_agents_from_cloud(db, agents_json)
+  let __seed := if n_cloud > 0 {
+    let __l := io.print(str.join(["[cloud] seeded ", int.to_str(n_cloud), " agent(s) from cloud"], ""))
+    ()
+  } else {
+    let __l := io.print("[cloud] no cloud agents; using built-in defaults")
+    pool_seed.seed(db)
+  }
   let cfg := {
     id: sprint_id,
     request: request,
@@ -149,9 +215,9 @@ fn poll_once(db :: conn.ConnDb, server :: Str, token :: Str, max_calls :: Int) -
   match poll(server, token) {
     PollError(e) => io.print(str.join(["[cloud] poll error: ", e], "")),
     NothingQueued => io.print("[cloud] nothing queued"),
-    GotSprint(sprint_id, request, model) => {
+    GotSprint(sprint_id, request, model, agents_json) => {
       let __log := io.print(str.join(["[cloud] claimed sprint=", sprint_id], ""))
-      run_cloud_sprint(db, sprint_id, request, model, server, token, max_calls)
+      run_cloud_sprint(db, sprint_id, request, model, agents_json, server, token, max_calls)
     },
   }
 }

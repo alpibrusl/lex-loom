@@ -35,9 +35,18 @@ import "./cast" as cast
 import "./pool_seed" as pool_seed
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
+fn http_err(e :: HttpError) -> Str {
+  match e {
+    TimeoutError => "timeout",
+    TlsError(m) => str.concat("tls: ", m),
+    NetworkError(m) => str.concat("network: ", m),
+    DecodeError(m) => str.concat("decode: ", m),
+  }
+}
+
 fn post_json(url :: Str, body :: Str) -> [net] Result[Str, Str] {
   match http.post(url, bytes.from_str(body), "application/json") {
-    Err(e) => Err(e),
+    Err(e) => Err(http_err(e)),
     Ok(resp) => match bytes.to_str(resp.body) {
       Err(_) => Err("response body decode failed"),
       Ok(s) => Ok(s),

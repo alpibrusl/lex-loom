@@ -34,6 +34,8 @@ import "std.proc" as proc
 
 import "./agent/runner" as runner
 
+import "./lex_skill" as lexskill
+
 # ── run_code tool (inline — avoids cross-file lex-llm import resolution) ──────
 #
 # Gives QA the ability to *execute* the implementation it received.
@@ -229,12 +231,16 @@ fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) 
 }
 
 fn qa_system_prompt() -> Str {
-  "You are the QA agent for a software sprint. You have access to the run_code tool.\n\nWORKFLOW (mandatory — do not skip):\n1. Extract the implementation code from the previous step output.\n2. Write Python assertions that verify the sprint goal — cover the happy path AND at least two edge cases.\n3. Call run_code with the implementation as `code` and your assertions as `assertions`.\n4. Read the result: if passed=true and exit_code=0, verdict is PASS; otherwise FAIL.\n5. Output ONLY a JSON object — no prose, no markdown fences:\n{\"verdict\":\"PASS\",\"reason\":\"what the tests confirmed\",\"test_output\":\"<first 300 chars of run_code output>\"}\n\nFORBIDDEN: Do not guess or speculate. Your verdict MUST be based on run_code output. Do NOT invent criteria absent from the sprint goal."
+  "You are the QA agent for a Lex language sprint. Lex is a typed-effect functional language that is NOT in your training data — verify everything with tools, never guess.\n\nWORKFLOW (mandatory — do not skip):\n1. Extract every .lex file from the Build output.\n2. Call lex_check on each file (pass filename + code). Every file MUST return ok='true'.\n3. If a test file exists, call lex_run with filename=<test file>, fn_name='run_all', args=''. Tests pass when output shows ok='true' and zero failures.\n4. Output ONLY a JSON object — no prose, no markdown fences:\n{\"verdict\":\"PASS\",\"reason\":\"what compiled and passed\",\"check_output\":\"<first 200 chars>\",\"test_output\":\"<first 200 chars>\"}\n\nVerdict is PASS only if lex_check is ok='true' for ALL files AND tests pass. Otherwise FAIL and list the errors.\n\nFORBIDDEN: Do not guess or speculate. Your verdict MUST be based on lex_check / lex_run output."
+}
+
+fn build_system_prompt() -> Str {
+  "You are the Build agent for a Lex language sprint. Lex is a typed-effect functional language that is NOT in your training data — you MUST learn it from tools, not memory.\n\nWORKFLOW (mandatory — do not skip):\n1. Call lex_guidelines (topic='all') FIRST to learn Lex syntax, effects, types, and the stdlib surface. Do this before writing any code.\n2. Implement the Architect's design as Lex modules.\n3. After writing EACH file, call lex_check (filename + code). Read the JSON errors and repair the code until ok='true'.\n4. Finish only when every file passes lex_check.\n\nOutput the final Lex source for each file, each in its own fenced block labelled with the filename. Never claim code compiles unless lex_check confirmed ok='true'."
 }
 
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_check_tool(), lexskill.make_lex_run_tool()], proc_cmd: "", a2a_url: "" }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -249,7 +255,7 @@ fn scribe(model :: Str) -> [env] runner.AgentDef {
 
 fn build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-build", kind: "build", system_prompt: "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_guidelines_tool(), lexskill.make_lex_check_tool()], proc_cmd: "", a2a_url: "" }
 }
 
 # Resolve a node role string to an AgentDef using a pre-computed Provider.
@@ -262,10 +268,10 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
     Some(mk("loom-architect", "architect", "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum."))
   } else {
     if role == "build" {
-      Some(mk("loom-build", "build", "You are the Build agent for a software sprint. Given the design produced by the Architect, implement the requested software. Produce working, well-structured code with brief inline comments where the logic is non-obvious. Output only the implementation."))
+      Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_guidelines_tool(), lexskill.make_lex_check_tool()], proc_cmd: "", a2a_url: "" })
     } else {
       if role == "qa" {
-        Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" })
+        Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_check_tool(), lexskill.make_lex_run_tool()], proc_cmd: "", a2a_url: "" })
       } else {
         if role == "demo" {
           Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, produce a concise stakeholder-facing summary: what was built, how it works, and what the key outcomes are. Write for a non-technical audience."))

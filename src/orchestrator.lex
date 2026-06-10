@@ -177,8 +177,9 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
 
 # ── Layer execution ───────────────────────────────────────────────────────────
 #
-# Independent nodes in the same topo layer run concurrently via list.par_map.
-# Layers are still sequential -- this is the §VI parallel fan-out.
+# Nodes in a topo layer run sequentially (see run_layer / lex-loom#9). Layers
+# are also sequential. The §VI parallel fan-out is disabled until par_map
+# workers can inherit the process step limit.
 fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   match cache_get(cache, node_id) {
     Some(hash) => {

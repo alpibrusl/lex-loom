@@ -1,19 +1,35 @@
 # LiteLLM proxy config for lex-loom
-# Exposes all your provider subscriptions under one OpenAI-compatible endpoint.
+#
+# Two auth modes:
+#
+# 1. API keys (Anthropic / OpenAI):
+#    Set ANTHROPIC_API_KEY and/or OPENAI_API_KEY in your environment before
+#    running docker compose, then use model names like claude-sonnet-4-6.
+#
+# 2. ChatGPT subscription (no API key needed):
+#    LiteLLM uses an OAuth device flow on first request — it prints a URL,
+#    you open it in a browser, and the token is cached in auth.json.
+#    Use model names prefixed with chatgpt/: chatgpt/gpt-5.3-chat-latest
+#
+# 3. Claude Code Max subscription:
+#    forward_client_headers_to_llm_api forwards the OAuth token that Claude
+#    Code places in the Authorization header. Set ANTHROPIC_BASE_URL=http://localhost:4000
+#    in Claude Code's env to route it through this proxy for cost tracking.
+#    Note: lex-loom itself still needs ANTHROPIC_API_KEY to talk to Claude.
 #
 # Usage:
 #   cd litellm
-#   ANTHROPIC_API_KEY=... OPENAI_API_KEY=... docker compose up
+#   ANTHROPIC_API_KEY=... OPENAI_API_KEY=... docker compose up -d
 #
-# Then run lex-loom with:
+#   # lex-loom via API key:
 #   LITELLM_BASE_URL=http://localhost:4000 MODEL=claude-sonnet-4-6 lex run ...
 #
-# Add LITELLM_API_KEY=any-secret to both here (general_settings.master_key)
-# and your lex-loom env if you want to gate access to the proxy.
+#   # lex-loom via ChatGPT subscription:
+#   LITELLM_BASE_URL=http://localhost:4000 MODEL=chatgpt/gpt-5.3-chat-latest lex run ...
 
 model_list:
 
-  # ── Anthropic ──────────────────────────────────────────────────────────────
+  # ── Anthropic API key ──────────────────────────────────────────────────────
   - model_name: claude-opus-4-7
     litellm_params:
       model: anthropic/claude-opus-4-7
@@ -29,7 +45,7 @@ model_list:
       model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  # ── OpenAI ─────────────────────────────────────────────────────────────────
+  # ── OpenAI API key ─────────────────────────────────────────────────────────
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -45,23 +61,34 @@ model_list:
       model: openai/o3-mini
       api_key: os.environ/OPENAI_API_KEY
 
-  # ── Google Gemini ──────────────────────────────────────────────────────────
-  # Uncomment and set GOOGLE_API_KEY to enable.
+  # ── ChatGPT subscription (device flow OAuth, no API key needed) ────────────
+  # First request prints a browser URL to authenticate. Token is cached.
+  - model_name: chatgpt/gpt-5.3-chat-latest
+    litellm_params:
+      model: chatgpt/gpt-5.3-chat-latest
+
+  - model_name: chatgpt/gpt-5.4
+    litellm_params:
+      model: chatgpt/gpt-5.4
+
+  - model_name: chatgpt/gpt-5.3-codex
+    litellm_params:
+      model: chatgpt/gpt-5.3-codex
+
+  # ── Google Gemini API key (optional) ──────────────────────────────────────
   # - model_name: gemini-2.5-flash
   #   litellm_params:
   #     model: gemini/gemini-2.5-flash
   #     api_key: os.environ/GOOGLE_API_KEY
 
-  # - model_name: gemini-2.5-pro
-  #   litellm_params:
-  #     model: gemini/gemini-2.5-pro
-  #     api_key: os.environ/GOOGLE_API_KEY
-
 litellm_settings:
-  drop_params: true        # silently drop unsupported params per provider
+  drop_params: true
   request_timeout: 120
   num_retries: 2
 
 general_settings:
+  # Enables Claude Code Max subscription forwarding.
+  # Claude Code must be configured with ANTHROPIC_BASE_URL=http://localhost:4000
+  forward_client_headers_to_llm_api: true
   # Uncomment to require a key on all requests:
   # master_key: os.environ/LITELLM_API_KEY

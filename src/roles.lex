@@ -106,9 +106,21 @@ fn make_vertex_provider() -> [env] prov.Provider {
   vtx.make_provider(vtx.config_at(api_key, project, location))
 }
 
-# Provider priority: Vertex AI > Anthropic > OpenAI > Google > Mistral > Ollama
+# Provider priority: LiteLLM > Vertex AI > Anthropic > OpenAI > Google > Mistral > Ollama
+# LiteLLM is selected when LITELLM_BASE_URL is set (default: http://localhost:4000).
 # Vertex AI is selected when VERTEX_ACCESS_TOKEN and VERTEX_PROJECT are both set.
 fn make_provider() -> [env] prov.Provider {
+  match env.get("LITELLM_BASE_URL") {
+    Some(url) => if str.is_empty(url) {
+      make_provider_no_litellm()
+    } else {
+      providers.litellm()
+    },
+    None => make_provider_no_litellm(),
+  }
+}
+
+fn make_provider_no_litellm() -> [env] prov.Provider {
   match env.get("VERTEX_ACCESS_TOKEN") {
     Some(k) => if str.is_empty(k) {
       make_provider_no_vertex()

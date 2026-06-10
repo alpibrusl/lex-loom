@@ -1,0 +1,67 @@
+# LiteLLM proxy config for lex-loom
+# Exposes all your provider subscriptions under one OpenAI-compatible endpoint.
+#
+# Usage:
+#   cd litellm
+#   ANTHROPIC_API_KEY=... OPENAI_API_KEY=... docker compose up
+#
+# Then run lex-loom with:
+#   LITELLM_BASE_URL=http://localhost:4000 MODEL=claude-sonnet-4-6 lex run ...
+#
+# Add LITELLM_API_KEY=any-secret to both here (general_settings.master_key)
+# and your lex-loom env if you want to gate access to the proxy.
+
+model_list:
+
+  # ── Anthropic ──────────────────────────────────────────────────────────────
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── OpenAI ─────────────────────────────────────────────────────────────────
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: o3-mini
+    litellm_params:
+      model: openai/o3-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ── Google Gemini ──────────────────────────────────────────────────────────
+  # Uncomment and set GOOGLE_API_KEY to enable.
+  # - model_name: gemini-2.5-flash
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GOOGLE_API_KEY
+
+  # - model_name: gemini-2.5-pro
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-pro
+  #     api_key: os.environ/GOOGLE_API_KEY
+
+litellm_settings:
+  drop_params: true        # silently drop unsupported params per provider
+  request_timeout: 120
+  num_retries: 2
+
+general_settings:
+  # Uncomment to require a key on all requests:
+  # master_key: os.environ/LITELLM_API_KEY

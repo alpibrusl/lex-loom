@@ -204,9 +204,19 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     "false"
   }
   let __log := io.print(str.join(["[cloud] sprint=", sprint_id, " success=", ok_str], ""))
+  # Always append an explicit sprint_complete event carrying the verdict +
+  # digest summary. The cloud /events ingest updates status/success/summary
+  # on this kind, so the dashboard reflects completion even when the local
+  # trail is empty (see #11 — load_trail can return [] in cloud mode).
+  let complete := {
+    event_kind: "sprint_complete",
+    data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""),
+    ts: time.now_str()
+  }
   let trail := dg.load_trail(db, sprint_id)
-  let __up := upload_trail(server, token, sprint_id, trail)
-  let __log2 := io.print(str.join(["[cloud] uploaded ", int.to_str(list.len(trail)), " trail events"], ""))
+  let full_trail := list.concat(trail, [complete])
+  let __up := upload_trail(server, token, sprint_id, full_trail)
+  let __log2 := io.print(str.join(["[cloud] uploaded ", int.to_str(list.len(full_trail)), " trail events (incl. sprint_complete)"], ""))
   ()
 }
 

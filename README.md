@@ -473,6 +473,34 @@ Tools: `start_sprint` · `sprint_status` · `sprint_trail` · `sprint_digest`.
 
 ---
 
+## Cloud runner (BYOK against loom-cloud)
+
+Execute cloud-queued sprints from your own machine — your keys, your models.
+`cloud_poll` claims one queued sprint, runs the agent pipeline locally, and
+uploads the trail + verdict back to the control plane.
+
+```bash
+export LOOM_SERVER=https://loom.alpibru.com
+export LOOM_RUNNER_TOKEN=<register a runner in the dashboard / via the CLI>
+
+# Pick a provider:
+export VERTEX_PROJECT=my-gcp-project \
+       VERTEX_ACCESS_TOKEN="$(gcloud auth print-access-token)"   # Vertex Gemini
+# or
+export OLLAMA_MODEL=glm-4.7-flash                                # local Ollama
+
+# IMPORTANT: a full 5-agent sprint exceeds the lex VM's default 10M step
+# budget, so pass --max-steps (>= 200M). Without it the runner panics
+# mid-sprint with "step limit exceeded". (#12)
+lex run --max-steps 200000000 \
+  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc \
+  src/main.lex cloud_poll
+```
+
+Loop it (cron / `while true; do … ; sleep 5; done`) to keep claiming sprints.
+
+---
+
 ## Built on
 
 `lex-llm` · `lex-agent` · `lex-spec` · `lex-schema` · `lex-jobs` · `lex-mcp` · `lex-web`

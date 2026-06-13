@@ -30,6 +30,10 @@ import "lex-orm/src/connection" as conn
 
 import "lex-schema/json_value" as jv
 
+import "lex-trail/src/log" as tlog
+
+import "lex-trail/src/event" as tev
+
 import "./digest" as dg
 
 import "./orchestrator" as orch
@@ -213,11 +217,38 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""),
     ts: time.now_str()
   }
-  let trail := dg.load_trail(db, sprint_id)
-  let full_trail := list.concat(trail, [complete])
+  # Trail for the dashboard timeline. The `traces` table (dg.load_trail)
+  # holds the detailed per-node timeline; prefer it. If it's empty for any
+  # reason (a crashed/partial run left it unwritten — #11), fall back to the
+  # per-sprint lex-trail store (<sprint>-trail.db), the authoritative
+  # content-addressed record, for at least the coarse lifecycle events.
+  let detailed := dg.load_trail(db, sprint_id)
+  let base_trail := if list.is_empty(detailed) {
+    load_lex_trail(sprint_id)
+  } else {
+    detailed
+  }
+  let full_trail := list.concat(base_trail, [complete])
   let __up := upload_trail(server, token, sprint_id, full_trail)
   let __log2 := io.print(str.join(["[cloud] uploaded ", int.to_str(list.len(full_trail)), " trail events (incl. sprint_complete)"], ""))
   ()
+}
+
+# Load the sprint's lex-trail events (the authoritative audit record) and
+# map each to a TrailRow for upload. Returns [] if the store is absent.
+fn load_lex_trail(sprint_id :: Str) -> [sql, fs_write, time] List[dg.TrailRow] {
+  match tlog.open(str.concat(sprint_id, "-trail.db")) {
+    Err(_) => [],
+    Ok(log) => match tlog.range(log, 0, 4000000000000000) {
+      Err(_) => [],
+      Ok(events) => {
+        let now := time.now_str()
+        list.map(events, fn (e :: tev.Event) -> dg.TrailRow {
+          { event_kind: e.kind, data_json: e.payload_json, ts: now }
+        })
+      },
+    },
+  }
 }
 
 # ── One poll cycle (call repeatedly from a loop or cron) ──────────────────────

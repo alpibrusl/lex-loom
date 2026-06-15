@@ -4,17 +4,18 @@
 #
 #   init_db          — create/migrate DB schema only (no sprint)
 #   run_sprint_cmd   — run a full sprint (Intake→Digest)
-#   sprint_status    — show phase, outcomes, and trail summary for a sprint
+#   sprint_status    — current phase + success flag, node outcomes, last events, digest
 #   sprint_trail     — print the full trail for a sprint
 #   sprint_digest    — print the Digest artifacts (lessons + tightened specs)
 #
-# Usage:
+# Usage (lex 0.9.8+ checks effects whole-program, so the read-only commands
+# need the same effect row as run_sprint_cmd — main.lex imports the orchestrator):
 #   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc \
 #     src/main.lex run_sprint_cmd
 #
-#   lex run --allow-effects env,io,sql,fs_read src/main.lex sprint_status
-#   lex run --allow-effects env,io,sql,fs_read src/main.lex sprint_trail
-#   lex run --allow-effects env,io,sql,fs_read src/main.lex sprint_digest
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_status
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_trail
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_digest
 #
 # Environment:
 #   DB_PATH       — SQLite file path         (default: loom.db)
@@ -54,6 +55,12 @@ type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str
 type NrRow = { node_id :: Str, phase :: Str, accepted :: Int, artifact :: Str, reason :: Str }
 
 type TrailCountRow = { n :: Int }
+
+type PhaseRow = { to_phase :: Str }
+
+type CompleteRow = { data_json :: Str }
+
+type EventRow = { event_kind :: Str, data_json :: Str, ts :: Str }
 
 fn get_env(key :: Str, default :: Str) -> [env] Str {
   match env.get(key) {
@@ -163,8 +170,40 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
   match conn.open(db_path) {
     Err(_) => io.print("[loom] FATAL open db"),
     Ok(db) => {
+      let esc := str.replace(sprint_id, "'", "''")
       let __h := io.print(str.join(["Sprint: ", sprint_id], ""))
       let __sep := io.print("──────────────────────────────────────")
+      let qc := str.join(["SELECT to_phase FROM phase_transitions WHERE sprint_id='", esc, "' ORDER BY ts DESC LIMIT 1"], "")
+      let cur :: Result[List[PhaseRow], SqlError] := sql.query(db.handle, qc, [])
+      let __cur := match cur {
+        Err(_) => (),
+        Ok(cs) => match list.head(cs) {
+          None => io.print("Current phase: (no transitions yet)"),
+          Some(c) => io.print(str.join(["Current phase: ", c.to_phase], "")),
+        },
+      }
+      let qsc := str.join(["SELECT data_json FROM traces WHERE agent_id='", esc, "' AND event_kind='sprint_complete' ORDER BY id DESC LIMIT 1"], "")
+      let scr :: Result[List[CompleteRow], SqlError] := sql.query(db.handle, qsc, [])
+      let __sc := match scr {
+        Err(_) => (),
+        Ok(ss) => match list.head(ss) {
+          None => io.print("Success: — (sprint not complete)"),
+          Some(s) => {
+            let ok := str.contains(s.data_json, "\"success\":true")
+            let sealed := str.contains(s.data_json, "\"fully_sealed\":true")
+            io.print(str.join(["Success: ", if ok {
+              "✓ PASS"
+            } else {
+              "✗ FAIL"
+            }, if sealed {
+              "  (fully sealed)"
+            } else {
+              "  (awaiting attestation)"
+            }], ""))
+          },
+        },
+      }
+      let __sep0 := io.print("──────────────────────────────────────")
       let q := str.join(["SELECT from_phase, to_phase, evidence, ts FROM phase_transitions WHERE sprint_id='", str.replace(sprint_id, "'", "''"), "' ORDER BY ts"], "")
       let rows :: Result[List[TransRow], SqlError] := sql.query(db.handle, q, [])
       match rows {
@@ -216,6 +255,21 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
           },
         },
       }
+      let qe := str.join(["SELECT event_kind, data_json, ts FROM traces WHERE agent_id='", esc, "' ORDER BY id DESC LIMIT 5"], "")
+      let erows :: Result[List[EventRow], SqlError] := sql.query(db.handle, qe, [])
+      let __ev := match erows {
+        Err(_) => (),
+        Ok(es) => if list.is_empty(es) {
+          ()
+        } else {
+          let __eh := io.print("Last 5 events (most recent first):")
+          let __er := list.map(es, fn (e :: EventRow) -> [io] Unit {
+            io.print(str.join(["  [", e.ts, "] ", e.event_kind, "  ", str.slice(e.data_json, 0, 80)], ""))
+          })
+          ()
+        },
+      }
+      let __sep4 := io.print("──────────────────────────────────────")
       let specs := dg.load_tightened_specs(db, sprint_id)
       let seed := dg.load_seed_graph(db, sprint_id)
       let __ds := if not list.is_empty(specs) {

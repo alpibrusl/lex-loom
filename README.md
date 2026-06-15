@@ -1,5 +1,9 @@
 # lex-loom
 
+[![CI](https://github.com/alpibrusl/lex-loom/actions/workflows/ci.yml/badge.svg)](https://github.com/alpibrusl/lex-loom/actions/workflows/ci.yml)
+
+**Part of the [Lex](https://lexlang.org) project** — Agents · [Manifesto](https://lexlang.org/manifesto) · [All packages](https://lexlang.org)
+
 Multi-agent **sprint cycles** — give it a task, watch a pipeline of specialised agents design, build, verify, document, and learn from the result.
 
 Every phase transition is evidence-gated. Every artifact is content-addressed. The audit trail is append-only. The system learns: the Digest phase tightens specs and seeds the next sprint's graph from lessons in the current trail.

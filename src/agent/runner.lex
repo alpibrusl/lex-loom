@@ -231,18 +231,24 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
       let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
       let conv := [llm_msg.UserMsg(msg_json)]
-      let __clear := if def.kind == "build" { clear_work_dir() } else { () }
+      let __clear := if def.kind == "build" {
+        clear_work_dir()
+      } else {
+        ()
+      }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
       let out0 := extract_answer(steps)
-      # Build agents may put the files only in tool calls (work_dir on disk) and
-      # never restate them as text — recover the artifact so the node isn't empty.
       let out := if def.kind == "build" {
         if has_fence(out0) {
           out0
         } else {
           let recovered := recover_build_artifact()
-          if str.is_empty(str.trim(recovered)) { out0 } else { str.concat(out0, str.concat("\n\n", recovered)) }
+          if str.is_empty(str.trim(recovered)) {
+            out0
+          } else {
+            str.concat(out0, str.concat("\n\n", recovered))
+          }
         }
       } else {
         out0

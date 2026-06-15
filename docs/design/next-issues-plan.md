@@ -89,9 +89,12 @@ event"). Keep #7 open with a scoped follow-up for Slice B after the spike.
 **lex-vcs is not callable from Lex.** There is no `lex-vcs` package in
 `~/.lex/packages` and no `std.vcs`/`std.store` module. lex-vcs is a Rust crate in
 lex-lang exposed only through the `lex` CLI (`lex branch`, `lex publish
---branch`, `lex diff`, `lex ast-diff`, `lex store-merge`). And there is **no
-`crypto.sha256`** in `std.crypto` (only `random`, `random_str_hex`), so true
-content-addressing has no in-language hash source either.
+--branch`, `lex diff`, `lex ast-diff`, `lex store-merge`).
+
+Note (correction): an in-language content hash **is** available —
+`crypto.sha256_str` is a pure `std.crypto` op (it's what lex-trail's `event.lex`
+uses for event ids). So content-addressing artifacts needs no lex-lang change;
+only the branch-per-sprint store does.
 
 So M6 needs one of three foundations, in increasing order of cleanliness/effort:
 
@@ -101,10 +104,11 @@ So M6 needs one of three foundations, in increasing order of cleanliness/effort:
    back. Fastest, but brittle (CLI parsing, per-call subprocess cost, and the
    parallel layers from #6 mean concurrent `lex` invocations against the same
    store — needs the store to tolerate concurrent writers or a mutex).
-2. **`crypto.sha256` builtin (small lex-lang change).** Add `crypto.sha256` to the
-   runtime; switch `artifact_put` to content-address blobs by their own SHA in
-   SQLite (dedup, stable ids) — delivers "true content-addressing" and
-   cross-run dedup **without** lex-vcs. Branch-per-sprint + `lex diff` come later.
+2. **content-address in SQLite (lex-loom only).** Switch `artifact_put` from
+   `crypto.random_str_hex(16)` to `crypto.sha256_str(content)` and key the
+   `artifacts` table by that SHA (dedup via INSERT OR IGNORE, stable ids) —
+   delivers "true content-addressing" + cross-run dedup **without** lex-vcs and
+   **without** a lex-lang change. Branch-per-sprint + `lex diff` come later.
    This is the best *first slice* of M6: high value, low risk, no CLI shelling.
 3. **`std.vcs`/`std.store` effect module (larger lex-lang change).** Expose
    lex-vcs operations (open store, put blob, branch, diff) as a first-class Lex
@@ -112,9 +116,9 @@ So M6 needs one of three foundations, in increasing order of cleanliness/effort:
    §III/§4 (branch per sprint, AST-level cross-sprint diff via `lex diff`).
 
 ### Proposed phasing for #5
-- **M6.0** — option 2: add `crypto.sha256`, make `artifact_put` content-addressed
-  in SQLite, keep `artifact_get` by SHA. Update `graph.lex`'s "once
-  content-addressing lands" comment. Verifiable offline. Small, shippable.
+- **M6.0** — option 2: switch `artifact_put` to `crypto.sha256_str` content
+  addressing in SQLite, keep `artifact_get` by SHA. Update `graph.lex`'s "once
+  content-addressing lands" comment. lex-loom only, verifiable offline, shippable.
 - **M6.1** — decide between proc shim (1) and std module (3) for the lex-vcs
   branch-per-sprint store. Recommend (3) if we're willing to touch lex-lang,
   since (1)'s concurrent-CLI-writer problem fights the #6 parallelism.
@@ -132,6 +136,6 @@ So M6 needs one of three foundations, in increasing order of cleanliness/effort:
 
 ### Recommended global sequence
 1. #7 Slice A (per-node trail wiring + concurrency-safe chain) — lex-loom only.
-2. #5 M6.0 (`crypto.sha256` + content-addressed SQLite) — tiny lex-lang + lex-loom.
+2. #5 M6.0 (`crypto.sha256_str` content-addressed SQLite) — lex-loom only.
 3. Spike #7 Slice B (native replay feasibility).
 4. #5 M6.1/M6.2 (lex-vcs store + `lex diff`) — the milestone proper.

@@ -50,10 +50,14 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
+# Content-addressed (#5 / M6.0): the hash is the SHA-256 of the content itself,
+# so identical content always yields the same id. INSERT OR IGNORE makes a
+# re-store of the same content idempotent (the first writer's sprint_id/node_id
+# metadata stays); the SHA is returned either way so callers get a stable ref.
 fn artifact_put(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, fs_write, time, random, crypto] Result[Str, Str] {
-  let hash := crypto.random_str_hex(16)
+  let hash := crypto.sha256_str(content)
   let now := time.now_str()
-  let q := str.join(["INSERT INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('", sq(hash), "', '", sq(sprint_id), "', '", sq(node_id), "', '", sq(content), "', '", now, "')"], "")
+  let q := str.join(["INSERT OR IGNORE INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('", sq(hash), "', '", sq(sprint_id), "', '", sq(node_id), "', '", sq(content), "', '", now, "')"], "")
   match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(hash),

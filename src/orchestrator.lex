@@ -46,6 +46,8 @@ import "./tenant" as tenant
 
 import "./loom_trail" as ltrail
 
+import "lex-trail/src/log" as tlog
+
 import "./manifests" as manifests
 
 # ── Types ─────────────────────────────────────────────────────────────────────
@@ -55,7 +57,9 @@ type PhaseResult = { phase :: graph.Phase, outcomes :: List[NodeOutcome], succes
 
 type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, fully_sealed :: Bool, summary :: Str }
 
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster }
+# trail_log: the per-sprint lex-trail log (#7). None when the trail DB
+# could not be opened; all emit_* helpers no-op in that case.
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log] }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -91,16 +95,61 @@ fn cache_put(cache :: ArtifactCache, node_id :: Str, artifact :: Str) -> Artifac
   list.concat(cache, [(node_id, artifact)])
 }
 
+# ── lex-trail per-node emission (#7) ──────────────────────────────────────────
+#
+# Each emit_* helper appends a typed event to the per-sprint lex-trail log
+# (cfg.trail_log), or no-ops when the log is absent. emit_node_started returns
+# the new event id (when logging) so node_accepted/node_denied can chain off it,
+# forming a node_started → outcome mini-chain that hangs off the layer parent.
+fn emit_node_started(cfg :: SprintCfg, parent :: Option[Str], node_id :: Str, role :: Str, attempt :: Int) -> [sql, time] Option[Str] {
+  match cfg.trail_log {
+    None => None,
+    Some(log) => match ltrail.node_started(log, cfg.id, node_id, role, attempt, parent) {
+      Err(_) => None,
+      Ok(e) => Some(e.id),
+    },
+  }
+}
+
+fn emit_node_accepted(cfg :: SprintCfg, parent :: Option[Str], node_id :: Str, artifact_hash :: Str) -> [sql, time] Unit {
+  match cfg.trail_log {
+    None => (),
+    Some(log) => {
+      let __e := ltrail.node_accepted(log, cfg.id, node_id, artifact_hash, parent)
+      ()
+    },
+  }
+}
+
+fn emit_node_denied(cfg :: SprintCfg, parent :: Option[Str], node_id :: Str, gate :: Str, reason :: Str, attempt :: Int) -> [sql, time] Unit {
+  match cfg.trail_log {
+    None => (),
+    Some(log) => {
+      let __e := ltrail.node_denied(log, cfg.id, node_id, gate, reason, attempt, parent)
+      ()
+    },
+  }
+}
+
+# The current tip of the lex-trail chain (head event id), or None when the log
+# is absent. Read at layer boundaries (post-barrier) so it is deterministic.
+fn current_parent(cfg :: SprintCfg) -> [sql] Option[Str] {
+  match cfg.trail_log {
+    None => None,
+    Some(log) => ltrail.latest_id(log),
+  }
+}
+
 # ── Node invocation ───────────────────────────────────────────────────────────
 fn max_node_retries() -> Int {
   1
 }
 
-fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
-  invoke_node_attempt(n, input, cfg, 1, "")
+fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+  invoke_node_attempt(n, input, cfg, 1, "", parent)
 }
 
-fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
     None => roles.for_role(n.role, cfg.model),
@@ -124,13 +173,14 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
           str.join([base_input, "\n\nYour previous output was rejected by the gate \"", n.gate, "\" with reason: ", prior_denial, "\nPlease fix your output to satisfy the gate."], "")
         }
         let __ts := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+        let started_id := emit_node_started(cfg, parent, n.id, n.role, attempt)
         let output := runner.step(cfg.db, agent_cfg, prompt)
         if str.is_empty(output) {
           if attempt > max_node_retries() {
             { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
           } else {
             let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"empty output\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-            invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial)
+            invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial, parent)
           }
         } else {
           if gates.is_judgeable(n.gate) {
@@ -140,6 +190,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
               Ok(hash) => {
                 let __tq := tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash)
                 let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+                let __la := emit_node_accepted(cfg, started_id, n.id, hash)
                 { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
               },
             }
@@ -147,22 +198,25 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
             match evaluate_gate(n.gate, output) {
               GateDeny(reason) => {
                 let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
                 if attempt > max_node_retries() {
                   { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
                 } else {
                   let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                  invoke_node_attempt(n, input, cfg, attempt + 1, reason)
+                  invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
                 }
               },
               GateAllow => match evaluate_gate(n.gate, output) {
                 GateDeny(reason) => {
                   let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
                   { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                 },
                 GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
                   Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
                   Ok(hash) => {
                     let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                    let __la := emit_node_accepted(cfg, started_id, n.id, hash)
                     { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
                   },
                 },
@@ -184,7 +238,11 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
 # ceiling still bounds the whole batch) and serialize DB writes on the shared
 # sql connection's mutex — the expensive llm/net calls are what actually overlap.
 # par_map returns results in input order, so outcome ordering is deterministic.
-fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+#
+# `parent` is the layer's entry event id in the lex-trail chain (#7): every node
+# in the layer chains its node_started off this fixed value, so concurrent
+# appends fan out cleanly rather than racing on the log head.
+fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   match cache_get(cache, node_id) {
     Some(hash) => {
       let __ts := tr.trail(cfg.db, cfg.id, "node_reused", str.join(["{\"node\":\"", node_id, "\",\"artifact\":\"", hash, "\"}"], ""))
@@ -193,15 +251,15 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
     None => {
       match find_node_in_graph(g, node_id) {
         None => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "node not found in graph" },
-        Some(n) => invoke_node(n, resolve_input(cfg.db, input_ref), cfg),
+        Some(n) => invoke_node(n, resolve_input(cfg.db, input_ref), cfg, parent),
       }
     },
   }
 }
 
-fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
   let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
-    invoke_node_for_layer(node_id, g, input_ref, cache, cfg)
+    invoke_node_for_layer(node_id, g, input_ref, cache, cfg, parent)
   })
   let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
     if o.attested {
@@ -242,11 +300,12 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
   match graph.topo_sort(g) {
     Err(e) => { phase: p, outcomes: [], success: false },
     Ok(layers) => {
-      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool } {
+      let entry_parent := current_parent(cfg)
+      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] } {
         if not acc.success {
           acc
         } else {
-          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg)
+          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg, acc.parent)
           let all_ok := list.fold(layer_result.outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
             if not ok {
               false
@@ -265,7 +324,7 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
               ref
             }
           })
-          { outcomes: list.concat(acc.outcomes, layer_result.outcomes), last_ref: next_ref, cache: layer_result.cache, success: all_ok }
+          { outcomes: list.concat(acc.outcomes, layer_result.outcomes), last_ref: next_ref, cache: layer_result.cache, success: all_ok, parent: current_parent(cfg) }
         }
       })
       { phase: p, outcomes: result.outcomes, success: result.success }
@@ -406,6 +465,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       Some(llog)
     },
   }
+  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt }
   let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }], edges: [] }
   let intake_result := run_phase(intake_graph, graph.Intake, "", [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
@@ -422,7 +482,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let design_ref := intake_ref
       let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
-      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster }
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log }
       let __ltgv := match llog_opt {
         None => (),
         Some(log) => {

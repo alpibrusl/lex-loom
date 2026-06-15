@@ -54,21 +54,36 @@ run, assert the trail DB contains `node_started`/`node_accepted` for all four
 nodes and that `walk_chain` from `sprint_complete` reaches `sprint_started`
 through the B/C fan-out. No LLM required.
 
-**Slice B — native `lex replay <run_id> --override` (research-heavy, defer).**
-The headline feature. Blockers/unknowns:
-- lex-trail does not do override-re-execution; this is a lex-lang-native
-  trace-store feature (`lex trace`/`lex replay --override NODE=JSON` exist as CLI
-  commands).
-- It's unclear how `lex run` populates the native trace store — no obvious
-  `--trace`/`--record` flag on `lex run`. Need to read `crates/lex-cli` run/replay
-  to learn how a run_id is produced and how NodeIds map to call sites.
-- For `--override node_id=<json>` to re-run a sprint node, `invoke_node` calls
-  must correspond to addressable NodeIds in the native trace. That likely means
-  the sprint must be *run under* the native tracer, and a `sprint_id → run_id`
-  mapping persisted (new column on the sprint record / a row in `traces`).
-- Recommend a spike: instrument a trivial 2-node lex program, run it, and see
-  whether `lex trace <run_id>` shows per-call nodes and whether `lex replay
-  --override` can substitute one. Decide feasibility before committing.
+**Slice B — native `lex replay <run_id> --override` (spike DONE: feasible, multi-part).**
+The headline feature. Spike verified the full loop against lex 0.9.10:
+- `lex run --trace … src/main.lex run_sprint_cmd` attaches a `lex_trace::Recorder`,
+  saves a trace tree to the store, prints `trace saved: <run_id>`.
+- `lex trace <run_id>` prints the tree (hierarchical string node ids like
+  `n_0.1.0`; each `call`/`effect` node carries input/output).
+- `lex replay <run_id> <file> <fn> [args] --override <NodeId>=<JSON>` re-executes,
+  substituting the **effect result** at that node. Proven: overriding an
+  `io.read` result flipped the program's branch.
+
+Corrections to the issue's assumptions:
+- Override is keyed by **trace NodeId** (`n_0.1.0`), NOT sprint `node_id`.
+- Only **effect** results are overridable (call nodes are ignored — tested).
+- Override JSON uses the runtime encoding (variants as `{"$variant":"Ok","args":[…]}`).
+- A sprint build node's output comes from the `runner.step` LLM **effect**, so
+  overriding that effect node re-runs the sprint with a substituted output.
+
+What Slice B requires in lex-loom (each a real piece of work):
+1. Trace-mode runner — run sprints with `--trace` (a runner-invocation flag; no
+   orchestrator change for recording).
+2. `sprint_id → run_id` mapping — THE friction point. run_id is produced by the
+   outer `lex run --trace` process and only emitted to stdout / as a `Trace`
+   attestation *after* `run_sprint` returns; lex code can't read its own run_id.
+   Needs CLI-stdout capture in the runner wrapper, or a small lex-lang affordance
+   to expose the current run_id to the program.
+3. `node_id → trace NodeId` helper — walk the `lex trace` JSON to find the
+   `runner.step` effect node for a given sprint node, so operators don't hand-read
+   the tree.
+
+Verdict: feasible but a multi-part feature; schedule as its own milestone.
 
 ### Recommended order
 Ship Slice A as its own PR (closes the bulk of #7's "every node is a traceable
@@ -137,5 +152,5 @@ So M6 needs one of three foundations, in increasing order of cleanliness/effort:
 ### Recommended global sequence
 1. #7 Slice A (per-node trail wiring + concurrency-safe chain) — lex-loom only.
 2. #5 M6.0 (`crypto.sha256_str` content-addressed SQLite) — lex-loom only.
-3. Spike #7 Slice B (native replay feasibility).
+3. Spike #7 Slice B (native replay feasibility). ✓ DONE — feasible; see Slice B above.
 4. #5 M6.1/M6.2 (lex-vcs store + `lex diff`) — the milestone proper.

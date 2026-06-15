@@ -79,6 +79,36 @@ fn extract_answer(steps :: List[d.Step]) -> Str {
   })
 }
 
+# ── build artifact recovery ────────────────────────────────────────────────
+# A tool-calling model submits each file via the lex_check(filename, code) tool
+# (which writes it to lex_skill's work_dir) and may finish WITHOUT restating the
+# files as a fenced text block — so extract_answer returns "" and the node has
+# no artifact. Recover the artifact from the work_dir in that case. Keep the
+# path in sync with lex_skill.work_dir().
+fn build_work_dir() -> Str {
+  "/tmp/loom-lex-work"
+}
+
+fn has_fence(s :: Str) -> Bool {
+  str.contains(s, "```")
+}
+
+# Start each build attempt from a clean work_dir so stale files don't leak in.
+fn clear_work_dir() -> [proc] Unit {
+  let __ := proc.spawn("bash", ["-c", str.join(["rm -rf ", build_work_dir(), "/* 2>/dev/null; mkdir -p ", build_work_dir()], "")])
+  ()
+}
+
+# Emit every file written to the work_dir as a fenced block labelled with its
+# filename — the format the QA agent extracts.
+fn recover_build_artifact() -> [proc] Str {
+  let cmd := str.join(["cd ", build_work_dir(), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
+  match proc.spawn("bash", ["-c", cmd]) {
+    Err(_) => "",
+    Ok(r) => r.stdout,
+  }
+}
+
 fn build_system_prompt(def :: AgentDef, state_json :: Str, entries :: List[mem.MemoryEntry]) -> Str {
   let state_part := if state_json == "{}" {
     ""
@@ -201,9 +231,22 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
       let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
       let conv := [llm_msg.UserMsg(msg_json)]
+      let __clear := if def.kind == "build" { clear_work_dir() } else { () }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
-      let out := extract_answer(steps)
+      let out0 := extract_answer(steps)
+      # Build agents may put the files only in tool calls (work_dir on disk) and
+      # never restate them as text — recover the artifact so the node isn't empty.
+      let out := if def.kind == "build" {
+        if has_fence(out0) {
+          out0
+        } else {
+          let recovered := recover_build_artifact()
+          if str.is_empty(str.trim(recovered)) { out0 } else { str.concat(out0, str.concat("\n\n", recovered)) }
+        }
+      } else {
+        out0
+      }
       let _dbg := io.print(str.join(["[runner.step] agent=", def.id, " steps=", int.to_str(list.len(steps)), " answer_len=", int.to_str(str.len(out)), " prompt_len=", int.to_str(str.len(msg_json))], ""))
       let _t3 := trace.record(db, run_id, def.id, "llm_done", jv.stringify(JStr(out)))
       out

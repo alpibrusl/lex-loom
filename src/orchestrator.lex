@@ -177,9 +177,13 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
 
 # ── Layer execution ───────────────────────────────────────────────────────────
 #
-# Nodes in a topo layer run sequentially (see run_layer / lex-loom#9). Layers
-# are also sequential. The §VI parallel fan-out is disabled until par_map
-# workers can inherit the process step limit.
+# Nodes in a topo layer fan out concurrently via list.par_map (§VI / lex-loom#6).
+# Independent same-layer nodes run in parallel; layers stay sequential so a
+# layer's inputs are sealed before the next begins. par_map workers each get a
+# fresh effect handler that shares the parent's budget pool (so the step/budget
+# ceiling still bounds the whole batch) and serialize DB writes on the shared
+# sql connection's mutex — the expensive llm/net calls are what actually overlap.
+# par_map returns results in input order, so outcome ordering is deterministic.
 fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   match cache_get(cache, node_id) {
     Some(hash) => {
@@ -196,7 +200,7 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
 }
 
 fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-  let outcomes := list.map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+  let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
     invoke_node_for_layer(node_id, g, input_ref, cache, cfg)
   })
   let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {

@@ -32,3 +32,4 @@ fn save(db :: Db, agent_id :: Str, state_json :: Str) -> [sql, fs_write, time] R
     Ok(_) => Ok(()),
   }
 }
+

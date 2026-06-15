@@ -42,37 +42,42 @@ import "./lex_skill" as lexskill
 # Uses mktemp via proc to get a unique path (safe for parallel QA nodes),
 # writes code + assertions, runs python3, detects exit via ##EXIT:$? sentinel.
 fn make_run_code_tool() -> t.Tool {
-  let params := {
-    title: "RunCode",
-    description: "Execute Python code and assertions, return {passed, exit_code, output}",
-    fields: [s.required_str("code", []), s.required_str("assertions", [])]
-  }
-  t.define(
-    "run_code",
-    "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.",
-    params,
-    fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
-      let code := match jv.get_field(args, "code") { Some(JStr(v)) => v, _ => "" }
-      let assertions := match jv.get_field(args, "assertions") { Some(JStr(v)) => v, _ => "" }
-      let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
-      match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
-        Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
-        Ok(mk) => {
-          let path := str.trim(mk.stdout)
-          let __w  := io.write(path, full)
-          let cmd  := str.join(["timeout 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
-          match proc.spawn("bash", ["-c", cmd]) {
-            Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
-            Ok(r) => {
-              let combined := str.concat(r.stdout, r.stderr)
-              let passed   := str.contains(combined, "##EXIT:0")
-              Ok(JObj([("passed", JStr(if passed { "true" } else { "false" })), ("exit_code", JInt(if passed { 0 } else { 1 })), ("output", JStr(combined))]))
-            },
-          }
-        },
-      }
+  let params := { title: "RunCode", description: "Execute Python code and assertions, return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
+  t.define("run_code", "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let code := match jv.get_field(args, "code") {
+      Some(JStr(v)) => v,
+      _ => "",
     }
-  )
+    let assertions := match jv.get_field(args, "assertions") {
+      Some(JStr(v)) => v,
+      _ => "",
+    }
+    let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
+    match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
+      Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
+      Ok(mk) => {
+        let path := str.trim(mk.stdout)
+        let __w := io.write(path, full)
+        let cmd := str.join(["timeout 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
+        match proc.spawn("bash", ["-c", cmd]) {
+          Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
+          Ok(r) => {
+            let combined := str.concat(r.stdout, r.stderr)
+            let passed := str.contains(combined, "##EXIT:0")
+            Ok(JObj([("passed", JStr(if passed {
+              "true"
+            } else {
+              "false"
+            })), ("exit_code", JInt(if passed {
+              0
+            } else {
+              1
+            })), ("output", JStr(combined))]))
+          },
+        }
+      },
+    }
+  })
 }
 
 # ── Provider helpers ──────────────────────────────────────────────────────────

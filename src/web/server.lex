@@ -371,7 +371,6 @@ fn handle_create_agent(body :: Str, db_path :: Str) -> [io, time, sql, fs_read, 
 # GET  /api/attention               — list all pending items across all oracles
 # POST /api/attention/:id/approve   — mark as approved (sprint can proceed)
 # POST /api/attention/:id/reject    — mark as rejected with reason (learning loop)
-
 fn attention_row_to_json(r :: tr.AttentionRow) -> Str {
   str.join(["{\"id\":", esc(r.id), ",\"sprint_id\":", esc(r.sprint_id), ",\"node_id\":", esc(r.node_id), ",\"gate\":", esc(r.gate), ",\"oracle\":", esc(r.oracle), ",\"artifact_hash\":", esc(r.artifact_hash), ",\"verdict\":", esc(r.verdict), ",\"created_at\":", esc(r.created_at), "}"], "")
 }
@@ -428,7 +427,11 @@ fn env_key_set(var_name :: Str) -> [env] Bool {
 }
 
 fn handle_providers() -> [env] resp.Response {
-  let has_vertex := if env_key_set("VERTEX_ACCESS_TOKEN") { env_key_set("VERTEX_PROJECT") } else { false }
+  let has_vertex := if env_key_set("VERTEX_ACCESS_TOKEN") {
+    env_key_set("VERTEX_PROJECT")
+  } else {
+    false
+  }
   let has_anthropic := env_key_set("ANTHROPIC_API_KEY")
   let has_openai := env_key_set("OPENAI_API_KEY")
   let has_google := env_key_set("GOOGLE_API_KEY")
@@ -475,22 +478,27 @@ fn handle_providers() -> [env] resp.Response {
       }
     }
   }
-  let cv := str.concat(
-    if has_vertex { "\"vertex\"," } else { "" },
-    str.concat(
-      if has_anthropic { "\"anthropic\"," } else { "" },
-      str.concat(
-        if has_openai { "\"openai\"," } else { "" },
-        str.concat(
-          if has_google { "\"google\"," } else { "" },
-          str.concat(
-            if has_mistral { "\"mistral\"," } else { "" },
-            "\"ollama\""
-          )
-        )
-      )
-    )
-  )
+  let cv := str.concat(if has_vertex {
+    "\"vertex\","
+  } else {
+    ""
+  }, str.concat(if has_anthropic {
+    "\"anthropic\","
+  } else {
+    ""
+  }, str.concat(if has_openai {
+    "\"openai\","
+  } else {
+    ""
+  }, str.concat(if has_google {
+    "\"google\","
+  } else {
+    ""
+  }, str.concat(if has_mistral {
+    "\"mistral\","
+  } else {
+    ""
+  }, "\"ollama\"")))))
   let configured_json := str.concat("[", str.concat(cv, "]"))
   resp.json(str.join(["{\"active\":", esc(active), ",\"default_model\":", esc(default_model), ",\"configured\":", configured_json, ",\"models\":{\"vertex\":[\"gemini-2.5-flash\",\"gemini-2.0-flash\",\"gemini-2.5-pro\"],\"anthropic\":[\"claude-opus-4-7\",\"claude-sonnet-4-6\",\"claude-haiku-4-5\"],\"openai\":[\"gpt-4.5\",\"o4-mini\",\"gpt-4o\"],\"google\":[\"gemini-2.5-flash\",\"gemini-2.0-flash\",\"gemini-1.5-pro\"],\"mistral\":[\"mistral-large-latest\",\"mistral-medium-latest\",\"mistral-small-latest\"],\"ollama\":[\"gemma4:latest\",\"llama3.2:latest\",\"qwen3:latest\"]}}"], ""))
 }

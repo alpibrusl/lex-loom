@@ -265,3 +265,4 @@ fn record_transition(db :: conn.ConnDb, sprint_id :: Str, from_phase :: Str, to_
     Ok(_) => Ok(()),
   }
 }
+

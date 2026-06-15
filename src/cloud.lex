@@ -65,7 +65,7 @@ fn post_json(url :: Str, body :: Str) -> [net] Result[Str, Str] {
 # ── Poll for next sprint ───────────────────────────────────────────────────────
 # GotSprint carries the agents JSON (the cloud agent_pool for this user) so the
 # runner can run with cloud-defined agents — the cloud is the source of truth.
-type PollResult = GotSprint(Str, Str, Str, Str) | NothingQueued | PollError(Str)
+type PollResult = GotSprint((Str, Str, Str, Str)) | NothingQueued | PollError(Str)
 
 fn poll(server :: Str, token :: Str) -> [net] PollResult {
   let url := str.concat(server, "/api/runners/poll")
@@ -106,11 +106,17 @@ fn sq(s :: Str) -> Str {
 }
 
 fn jstr(o :: jv.Json, k :: Str, dflt :: Str) -> Str {
-  match jv.get_field(o, k) { Some(JStr(v)) => v, _ => dflt }
+  match jv.get_field(o, k) {
+    Some(JStr(v)) => v,
+    _ => dflt,
+  }
 }
 
 fn jint(o :: jv.Json, k :: Str, dflt :: Int) -> Int {
-  match jv.get_field(o, k) { Some(JInt(v)) => v, _ => dflt }
+  match jv.get_field(o, k) {
+    Some(JInt(v)) => v,
+    _ => dflt,
+  }
 }
 
 fn insert_cloud_agent(db :: conn.ConnDb, now :: Str, o :: jv.Json) -> [sql, fs_write] Unit {
@@ -182,9 +188,6 @@ fn upload_trail(server :: Str, token :: Str, sprint_id :: Str, events :: List[dg
 
 # ── Execute one cloud sprint ───────────────────────────────────────────────────
 fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :: Str, agents_json :: Str, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
-  # Cloud is the source of truth for agents. Seed the local pool from the
-  # cloud-supplied definitions; fall back to built-in defaults only when the
-  # cloud has none (fresh account / offline).
   let n_cloud := seed_agents_from_cloud(db, agents_json)
   let __seed := if n_cloud > 0 {
     let __l := io.print(str.join(["[cloud] seeded ", int.to_str(n_cloud), " agent(s) from cloud"], ""))
@@ -193,14 +196,7 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     let __l := io.print("[cloud] no cloud agents; using built-in defaults")
     pool_seed.seed(db)
   }
-  let cfg := {
-    id: sprint_id,
-    request: request,
-    model: model,
-    db: db,
-    api_calls_max: max_calls,
-    roster: cast.empty_roster()
-  }
+  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_calls, roster: cast.empty_roster() }
   let result := orch.run_sprint(cfg)
   let ok_str := if result.success {
     "true"
@@ -208,20 +204,7 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     "false"
   }
   let __log := io.print(str.join(["[cloud] sprint=", sprint_id, " success=", ok_str], ""))
-  # Always append an explicit sprint_complete event carrying the verdict +
-  # digest summary. The cloud /events ingest updates status/success/summary
-  # on this kind, so the dashboard reflects completion even when the local
-  # trail is empty (see #11 — load_trail can return [] in cloud mode).
-  let complete := {
-    event_kind: "sprint_complete",
-    data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""),
-    ts: time.now_str()
-  }
-  # Trail for the dashboard timeline. The `traces` table (dg.load_trail)
-  # holds the detailed per-node timeline; prefer it. If it's empty for any
-  # reason (a crashed/partial run left it unwritten — #11), fall back to the
-  # per-sprint lex-trail store (<sprint>-trail.db), the authoritative
-  # content-addressed record, for at least the coarse lifecycle events.
+  let complete := { event_kind: "sprint_complete", data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""), ts: time.now_str() }
   let detailed := dg.load_trail(db, sprint_id)
   let base_trail := if list.is_empty(detailed) {
     load_lex_trail(sprint_id)
@@ -262,3 +245,4 @@ fn poll_once(db :: conn.ConnDb, server :: Str, token :: Str, max_calls :: Int) -
     },
   }
 }
+

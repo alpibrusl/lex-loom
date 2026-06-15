@@ -14,11 +14,15 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-type SprintIdRow  = { agent_id :: Str }
-type TsRow        = { ts :: Str }
-type CompleteRow  = { data_json :: Str }
-type QaResultRow  = { data_json :: Str }
-type ArtifactRow  = { content :: Str }
+type SprintIdRow = { agent_id :: Str }
+
+type TsRow = { ts :: Str }
+
+type CompleteRow = { data_json :: Str }
+
+type QaResultRow = { data_json :: Str }
+
+type ArtifactRow = { content :: Str }
 
 type QaInfo = { accepted :: Bool, verdict :: Str }
 
@@ -40,9 +44,9 @@ fn to_json(stats :: List[SprintStat]) -> Str {
 }
 
 fn build_stat(db :: conn.ConnDb, sid :: Str) -> [sql, fs_read] SprintStat {
-  let ts      := load_ts(db, sid)
+  let ts := load_ts(db, sid)
   let success := load_success(db, sid)
-  let qa      := load_qa_info(db, sid)
+  let qa := load_qa_info(db, sid)
   { sprint_id: sid, ts: ts, success: success, qa_accepted: qa.accepted, qa_verdict: qa.verdict }
 }
 
@@ -51,7 +55,10 @@ fn load_ts(db :: conn.ConnDb, sid :: Str) -> [sql, fs_read] Str {
   let rows :: Result[List[TsRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => "",
-    Ok(rs) => match list.head(rs) { None => "", Some(r) => r.ts },
+    Ok(rs) => match list.head(rs) {
+      None => "",
+      Some(r) => r.ts,
+    },
   }
 }
 
@@ -82,7 +89,11 @@ fn load_qa_info(db :: conn.ConnDb, sid :: Str) -> [sql, fs_read] QaInfo {
       None => { accepted: false, verdict: "" },
       Some(r) => {
         let hash := get_str_field(r.data_json, "artifact")
-        let verdict := if str.is_empty(hash) { "" } else { load_verdict(db, hash) }
+        let verdict := if str.is_empty(hash) {
+          ""
+        } else {
+          load_verdict(db, hash)
+        }
         { accepted: true, verdict: verdict }
       },
     },
@@ -122,3 +133,4 @@ fn stat_to_json(s :: SprintStat) -> Str {
     "false"
   }, ",\"qa_verdict\":", jv.stringify(JStr(s.qa_verdict)), "}"], "")
 }
+

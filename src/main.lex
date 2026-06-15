@@ -138,16 +138,16 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
 # Env: LOOM_SERVER (required), LOOM_RUNNER_TOKEN (required), DB_PATH, MAX_API_CALLS
 fn cloud_poll() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
   let server := get_env("LOOM_SERVER", "")
-  let token  := get_env("LOOM_RUNNER_TOKEN", "")
+  let token := get_env("LOOM_RUNNER_TOKEN", "")
   if str.is_empty(server) {
     io.print("[cloud] LOOM_SERVER not set — exiting")
   } else {
     if str.is_empty(token) {
       io.print("[cloud] LOOM_RUNNER_TOKEN not set — exiting")
     } else {
-      let db_path   := resolve_db_url()
+      let db_path := resolve_db_url()
       let max_calls := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
-      let __log     := io.print(str.join(["[cloud] runner connecting to ", server], ""))
+      let __log := io.print(str.join(["[cloud] runner connecting to ", server], ""))
       match open_db(db_path) {
         Err(e) => io.print(str.concat("[cloud] FATAL: ", e)),
         Ok(db) => cloud.poll_once(db, server, token, max_calls),

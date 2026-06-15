@@ -196,14 +196,6 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
 }
 
 fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-  # Nodes run sequentially via list.map (NOT list.par_map). par_map workers are
-  # hard-capped at 10M VM steps regardless of --max-steps, and a single agent
-  # node — a multi-turn tool loop that serialises a growing conversation each
-  # turn — routinely exceeds that. Running on the main thread honours the
-  # process step limit (--max-steps), so a node can use as much budget as the
-  # invocation allows. Sprints are LLM-latency-bound, so losing intra-layer
-  # parallelism costs little wall-clock. Restore par_map only once the runtime
-  # lets workers inherit the process step limit (see lex-loom#9).
   let outcomes := list.map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
     invoke_node_for_layer(node_id, g, input_ref, cache, cfg)
   })

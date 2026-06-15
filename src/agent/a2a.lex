@@ -46,3 +46,4 @@ fn broadcast(db :: conn.ConnDb, from_id :: Str, to_ids :: List[Str], topic :: St
     send(db, from_id, to_id, topic, payload_json)
   })
 }
+

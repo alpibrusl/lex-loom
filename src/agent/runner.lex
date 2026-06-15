@@ -59,16 +59,7 @@ import "lex-orm/src/connection" as conn
 
 import "./trace" as trace
 
-type AgentDef = {
-  id          :: Str,
-  kind        :: Str,
-  system_prompt :: Str,
-  model_name  :: Str,
-  provider    :: prov.Provider,
-  tools       :: List[t.Tool],
-  proc_cmd    :: Str,   # non-empty → use proc executor (stdin/stdout)
-  a2a_url     :: Str,   # non-empty → use A2A executor (JSON-RPC tasks/send)
-}
+type AgentDef = { id :: Str, kind :: Str, system_prompt :: Str, model_name :: Str, provider :: prov.Provider, tools :: List[t.Tool], proc_cmd :: Str, a2a_url :: Str }
 
 type PeerInfo = { id :: Str, kind :: Str, name :: Str, inbox_url :: Str, role :: Str }
 
@@ -126,14 +117,7 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
 # Returns the first text part of the first artifact in the response.
 fn a2a_step(def :: AgentDef, msg_json :: Str, run_id :: Str) -> [net] Str {
   let text := str.join([def.system_prompt, "\n\n", msg_json], "")
-  let body := str.join([
-    "{\"jsonrpc\":\"2.0\",\"id\":\"", run_id,
-    "\",\"method\":\"tasks/send\",\"params\":{\"id\":\"", run_id,
-    "\",\"contextId\":\"ctx-loom\",\"message\":{\"messageId\":\"", run_id,
-    "\",\"role\":\"user\",\"parts\":[{\"kind\":\"text\",\"text\":",
-    jv.stringify(JStr(text)),
-    "}]}}}"
-  ], "")
+  let body := str.join(["{\"jsonrpc\":\"2.0\",\"id\":\"", run_id, "\",\"method\":\"tasks/send\",\"params\":{\"id\":\"", run_id, "\",\"contextId\":\"ctx-loom\",\"message\":{\"messageId\":\"", run_id, "\",\"role\":\"user\",\"parts\":[{\"kind\":\"text\",\"text\":", jv.stringify(JStr(text)), "}]}}}"], "")
   match http.post(def.a2a_url, bytes.from_str(body), "application/json") {
     Err(_) => "A2A_ERROR: http call failed",
     Ok(resp) => match bytes.to_str(resp.body) {
@@ -227,3 +211,4 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
   }
   answer
 }
+

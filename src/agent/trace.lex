@@ -20,3 +20,4 @@ fn record(db :: conn.ConnDb, run_id :: Str, agent_id :: Str, event_kind :: Str, 
 fn new_run_id() -> [random] Str {
   crypto.random_str_hex(16)
 }
+

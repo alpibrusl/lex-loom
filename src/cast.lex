@@ -94,11 +94,23 @@ fn best_agent(agents :: List[PoolAgent], request :: Str) -> Option[PoolAgent] {
 #   "a2a:<url>"   → A2A executor, url is the remote agent endpoint
 #   anything else → LLM executor
 fn pool_agent_to_config(a :: PoolAgent, fallback :: runner.AgentDef, model :: Str) -> runner.AgentDef {
-  let raw := if str.is_empty(a.model_name) { model } else { a.model_name }
+  let raw := if str.is_empty(a.model_name) {
+    model
+  } else {
+    a.model_name
+  }
   let is_proc := str.starts_with(raw, "proc:")
-  let is_a2a  := str.starts_with(raw, "a2a:")
-  let proc_cmd := if is_proc { str.slice(raw, 5, str.len(raw)) } else { "" }
-  let a2a_url  := if is_a2a  { str.slice(raw, 4, str.len(raw)) } else { "" }
+  let is_a2a := str.starts_with(raw, "a2a:")
+  let proc_cmd := if is_proc {
+    str.slice(raw, 5, str.len(raw))
+  } else {
+    ""
+  }
+  let a2a_url := if is_a2a {
+    str.slice(raw, 4, str.len(raw))
+  } else {
+    ""
+  }
   { id: a.id, kind: a.role, system_prompt: a.system_prompt, model_name: raw, provider: fallback.provider, tools: fallback.tools, proc_cmd: proc_cmd, a2a_url: a2a_url }
 }
 

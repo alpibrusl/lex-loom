@@ -4,6 +4,24 @@ Design for #5 / M6.1 (branch-per-sprint artifact store). Written after M6.0
 (content-addressed artifacts in SQLite) landed. Grounded in the lex-lang
 `lex-store`/`lex-vcs`/runtime source as of 0.9.10.
 
+## Decision + status (2026-06-15)
+
+**Direction: build the local store foundation first, with an eye on lex-hub.**
+The store layer is the shared substrate a future hosted endpoint sits on, so it
+is the right thing to build first whether or not artifacts ultimately go hosted.
+
+- **M6.1a — DONE** (lex-lang #647): generic content-addressed blob store +
+  ref namespace in `lex-store`. See "Layer 1" below for what actually shipped.
+- M6.1b / M6.1c / M6.2 — not started; see phasing.
+
+**lex-hub relationship (the "eye on hub").** lex-hub is the multi-tenant SaaS
+gateway that wraps `lex-api` and gives each tenant its own `lex-store` at
+`$LEXHUB_STORE_ROOT/<tenant>/`. So the M6.1a blob object already exists per
+tenant under lex-hub. To *use* it remotely, a future **Layer 4** adds
+`lex-api` + lex-hub endpoints (e.g. `/v1/blob`, `/v1/blobref`); today lex-hub
+exposes only stage/operation routes. Building Layer 1 store-scoped (operating on
+any `Store`) keeps that path open without committing to it now.
+
 ## The central finding (changes the issue's premise)
 
 Issue #5 says "store each node artifact as a file on a branch; use the git blob
@@ -33,41 +51,46 @@ name granted in `Policy.allow_effects` (effect names are open strings, gated at
 
 ## Layered design
 
-### Layer 1 — lex-store: generic blob object (Rust, lex-lang)
-Add a content-addressed blob store alongside stages:
-- `put_blob(&self, bytes: &[u8]) -> Result<String, StoreError>` — SHA-256 of the
-  bytes is the id; write to an `objects/<sha>` CAS dir; idempotent.
-- `get_blob(&self, sha: &str) -> Result<Vec<u8>, StoreError>`.
-- Branch attachment reuses the existing namespace: `branch_head(name) ->
-  BTreeMap<String,String>` already maps name→id. A sprint branch
-  `loom/sprint-{id}` maps `node_id → blob_sha`. Use `create_branch(name, from)`
-  to fork, and a new `branch_set(name, key, id)` (or extend the merge/commit
-  path) to bind `node_id → sha` on it.
+### Layer 1 — lex-store: generic blob object (Rust, lex-lang) — SHIPPED (#647)
+As built (slightly different from the original sketch — see note):
+- `put_blob(&self, content: &str) -> Result<String, StoreError>` — id is the
+  lowercase hex SHA-256 of the content's UTF-8 bytes, written under
+  `<root>/blobs/<sha>`. Idempotent (dedup); concurrency-safe (unique temp +
+  atomic rename) for #6's parallel writers. The sha equals `crypto.sha256_str`,
+  so blobs and loom's M6.0 SQLite artifacts are interchangeable by id.
+- `get_blob(&self, sha) -> Result<String, _>`, `has_blob(&self, sha) -> bool`.
+- `set_blob_ref` / `get_blob_ref` / `list_blob_refs(namespace) -> BTreeMap` — a
+  lightweight `name → sha` namespace (namespace `loom/sprint-{id}`, key node id),
+  with `..`/`/` path-traversal rejection.
 
-Smallest viable version: just `put_blob`/`get_blob` + `create_branch` +
-`branch_set`/`branch_head`. Merge/diff of blob branches can come later.
+Note: the original sketch reused the op-log branch system (`branch_head` /
+`create_branch`). That system is an operation-log/merge model (publish ops,
+`head_op`, `OpId`); binding `node_id → blob_sha` isn't an "operation", so the
+shipped version uses a **separate, lightweight ref namespace** under
+`<root>/blobrefs/<ns>/<key>` instead — lower risk, no op-log entanglement.
+Op-log/merge integration can come later if branch semantics (history, merge) are
+needed for artifacts. 8 tests in `crates/lex-store/tests/blob_cas.rs`.
 
 ### Layer 2 — `std.vcs` effect (Rust, lex-lang)
 Builtins (signatures in `builtins.rs`, all carrying `EffectSet::singleton("vcs")`,
 plus `fs_write`/`fs_read` where they touch the store root):
 - `vcs.put_blob(content :: Str) -> [vcs, fs_write] Result[Str, Str]`  (returns sha)
 - `vcs.get_blob(sha :: Str)     -> [vcs, fs_read]  Result[Str, Str]`
-- `vcs.branch_create(name :: Str, from :: Str) -> [vcs, fs_write] Result[Unit, Str]`
-- `vcs.branch_set(branch :: Str, key :: Str, sha :: Str) -> [vcs, fs_write] Result[Unit, Str]`
-- `vcs.branch_get(branch :: Str, key :: Str) -> [vcs, fs_read] Result[Str, Str]`  (key→sha)
+- `vcs.ref_set(ns :: Str, key :: Str, sha :: Str) -> [vcs, fs_write] Result[Unit, Str]`
+- `vcs.ref_get(ns :: Str, key :: Str) -> [vcs, fs_read] Result[Str, Str]`  (key→sha)
 - (later) `vcs.ast_diff(stage_a :: Str, stage_b :: Str) -> [vcs] Str`  — Lex stages only
 
-Dispatch arms in `handler.rs` open the store (`Store::open(default_store_root())`)
-and call Layer 1. Gate on `vcs` like `sql`/`fs_write`. Concurrency note (#6): the
-parallel layers mean concurrent `vcs.*` calls; the store must tolerate concurrent
-writers (file CAS with atomic rename is fine for `put_blob`; `branch_set` needs a
-lock or atomic head update).
+These map 1:1 to the shipped `Store::put_blob`/`get_blob`/`set_blob_ref`/
+`get_blob_ref`. Dispatch arms in `handler.rs` open the store
+(`Store::open(default_store_root())`) and call Layer 1. Gate on `vcs` like
+`sql`/`fs_write`. Concurrency (#6) is already handled in Layer 1 (atomic-rename
+CAS; ref writes are last-writer-wins per key).
 
 ### Layer 3 — loom transport (Lex, lex-loom)
-- `transport.artifact_put`: when a vcs handle/flag is present, `vcs.put_blob` the
-  content, `vcs.branch_set("loom/sprint-{id}", node_id, sha)`, return the sha.
-  Fall back to the M6.0 SQLite path (already content-addressed by the same SHA!)
-  when vcs is unavailable — so the SHA is identical across both backends.
+- `transport.artifact_put`: when vcs is available, `vcs.put_blob` the content,
+  `vcs.ref_set("loom/sprint-{id}", node_id, sha)`, return the sha. Fall back to
+  the M6.0 SQLite path (already content-addressed by the same SHA!) when vcs is
+  unavailable — so the SHA is identical across both backends.
 - `transport.artifact_get`: try `vcs.get_blob`, fall back to SQLite.
 - `diff.lex` (M6.2): add an artifact-diff entry point that calls `vcs.ast_diff`
   for Lex artifacts; keep the existing graph-field diff as the offline default.
@@ -77,13 +100,17 @@ SHA is the *same* whether stored in SQLite or the blob CAS — the two backends 
 interchangeable by id, which makes the fallback seamless.
 
 ## Phasing
-- **M6.1a** — lex-store `put_blob`/`get_blob` + `branch_create`/`branch_set`/
-  `branch_get` (+ Rust tests). Pure lex-lang; no loom change yet.
-- **M6.1b** — `std.vcs` builtins + handler dispatch + policy; a tiny `.lex`
-  round-trip test (put→branch_set→branch_get→get).
+- **M6.1a — DONE (lex-lang #647)** — lex-store `put_blob`/`get_blob`/`has_blob`
+  + `set_blob_ref`/`get_blob_ref`/`list_blob_refs` (+ 8 Rust tests). No loom
+  change yet.
+- **M6.1b** — `std.vcs` builtins + handler dispatch + `vcs` policy; a tiny `.lex`
+  round-trip test (put→ref_set→ref_get→get).
 - **M6.1c** — loom `transport` writes/reads via vcs with SQLite fallback;
-  verify with the proc-agent harness that artifacts land on `loom/sprint-{id}`.
+  verify with the proc-agent harness that artifacts land under
+  `loom/sprint-{id}` refs.
 - **M6.2** — `vcs.ast_diff` + `diff.lex` wiring (Lex artifacts only).
+- **Layer 4 (hosted, optional)** — `/v1/blob` + `/v1/blobref` endpoints in
+  `lex-api`/lex-hub if sprint artifacts go multi-tenant/hosted.
 
 ## Effort / risk
 - Spans three layers across two repos; M6.1a (Rust store) is the critical path

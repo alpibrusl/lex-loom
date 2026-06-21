@@ -51,14 +51,19 @@ type DigestArtifacts = { sprint_id :: Str, next_sprint_id :: Str, summary :: Str
 
 type DigestResult = DigestOk(DigestArtifacts) | DigestFailed(Str)
 
-type TrailRow = { event_kind :: Str, data_json :: Str, ts :: Str }
+type TrailRow = { id :: Str, event_kind :: Str, data_json :: Str, ts :: Str }
+
+# The shape the `traces` SELECT returns (no content id column).
+type TraceQ = { event_kind :: Str, data_json :: Str, ts :: Str }
 
 fn load_trail(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[TrailRow] {
   let qd := ormq.for_dialect({ sql: "SELECT event_kind, data_json, ts FROM traces WHERE agent_id=? ORDER BY ts", params: [PStr(sprint_id)] }, db.dialect)
-  let rows :: Result[List[TrailRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
+  let rows :: Result[List[TraceQ], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => [],
-    Ok(rs) => rs,
+    Ok(rs) => list.map(rs, fn (r :: TraceQ) -> TrailRow {
+      { id: "", event_kind: r.event_kind, data_json: r.data_json, ts: r.ts }
+    }),
   }
 }
 

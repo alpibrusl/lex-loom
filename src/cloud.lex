@@ -152,27 +152,49 @@ fn seed_agents_from_cloud(db :: conn.ConnDb, agents_json :: Str) -> [sql, fs_wri
   }
 }
 
-# ── Serialize trail event to JSON ──────────────────────────────────────────────
-fn event_json(e :: dg.TrailRow, seq :: Int) -> Str {
-  let k := jv.stringify(JStr(e.event_kind))
-  let ts := jv.stringify(JStr(e.ts))
-  let data := if str.is_empty(e.data_json) {
+# ── Content-addressed event hash ───────────────────────────────────────────────
+# The uploaded `hash` is a real lex-trail content id — the SAME compute_id the
+# arena uses — so a loom sprint trail is content-addressed and tamper-evident,
+# not the old "<seq>-<kind>-<ts>" placeholder. Events that came from a lex-trail
+# log keep their original id (e.id); events from the SQL trail get one computed
+# here, chained to the previous event's hash (seq is the positional component).
+fn event_data(e :: dg.TrailRow) -> Str {
+  if str.is_empty(e.data_json) {
     "{}"
   } else {
     e.data_json
   }
-  let hash := str.join([int.to_str(seq), "-", e.event_kind, "-", e.ts], "")
-  str.join(["{\"kind\":", k, ",\"data\":", data, ",\"ts\":", ts, ",\"seq\":", int.to_str(seq), ",\"hash\":", jv.stringify(JStr(hash)), "}"], "")
+}
+
+fn event_hash(e :: dg.TrailRow, seq :: Int, parent :: Str) -> Str {
+  if str.is_empty(e.id) {
+    let parent_opt := if str.is_empty(parent) {
+      None
+    } else {
+      Some(parent)
+    }
+    tev.compute_id(e.event_kind, parent_opt, event_data(e), seq)
+  } else {
+    e.id
+  }
+}
+
+# ── Serialize trail event to JSON (hash supplied by the caller) ─────────────────
+fn event_json(e :: dg.TrailRow, seq :: Int, hash :: Str) -> Str {
+  let k := jv.stringify(JStr(e.event_kind))
+  let ts := jv.stringify(JStr(e.ts))
+  str.join(["{\"kind\":", k, ",\"data\":", event_data(e), ",\"ts\":", ts, ",\"seq\":", int.to_str(seq), ",\"hash\":", jv.stringify(JStr(hash)), "}"], "")
 }
 
 fn events_to_json(events :: List[dg.TrailRow]) -> Str {
-  let result := list.fold(events, { items: "", idx: 0, first: true }, fn (acc :: { items :: Str, idx :: Int, first :: Bool }, e :: dg.TrailRow) -> { items :: Str, idx :: Int, first :: Bool } {
+  let result := list.fold(events, { items: "", idx: 0, first: true, parent: "" }, fn (acc :: { items :: Str, idx :: Int, first :: Bool, parent :: Str }, e :: dg.TrailRow) -> { items :: Str, idx :: Int, first :: Bool, parent :: Str } {
+    let h := event_hash(e, acc.idx, acc.parent)
     let sep := if acc.first {
       ""
     } else {
       ","
     }
-    { items: str.concat(acc.items, str.concat(sep, event_json(e, acc.idx))), idx: acc.idx + 1, first: false }
+    { items: str.concat(acc.items, str.concat(sep, event_json(e, acc.idx, h))), idx: acc.idx + 1, first: false, parent: h }
   })
   str.join(["[", result.items, "]"], "")
 }
@@ -204,7 +226,7 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     "false"
   }
   let __log := io.print(str.join(["[cloud] sprint=", sprint_id, " success=", ok_str], ""))
-  let complete := { event_kind: "sprint_complete", data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""), ts: time.now_str() }
+  let complete := { id: "", event_kind: "sprint_complete", data_json: str.join(["{\"success\":", ok_str, ",\"summary\":", jv.stringify(JStr(result.summary)), "}"], ""), ts: time.now_str() }
   let detailed := dg.load_trail(db, sprint_id)
   let base_trail := if list.is_empty(detailed) {
     load_lex_trail(sprint_id)
@@ -227,7 +249,7 @@ fn load_lex_trail(sprint_id :: Str) -> [sql, fs_write, time] List[dg.TrailRow] {
       Ok(events) => {
         let now := time.now_str()
         list.map(events, fn (e :: tev.Event) -> dg.TrailRow {
-          { event_kind: e.kind, data_json: e.payload_json, ts: now }
+          { id: e.id, event_kind: e.kind, data_json: e.payload_json, ts: now }
         })
       },
     },

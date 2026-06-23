@@ -484,7 +484,7 @@ Execute cloud-queued sprints from your own machine — your keys, your models.
 uploads the trail + verdict back to the control plane.
 
 ```bash
-export LOOM_SERVER=https://loom.alpibru.com
+export LOOM_SERVER=https://loom.lexlang.org
 export LOOM_RUNNER_TOKEN=<register a runner in the dashboard / via the CLI>
 
 # Pick a provider:
@@ -528,4 +528,4 @@ Agent runtime (runner, trace, state store, registry, A2A) is vendored directly i
 
 ---
 
-Built under the principles of [Trust Without Comprehension](https://alpibru.com/manifesto).
+Built under the principles of [Trust Without Comprehension](https://lexlang.org/manifesto).

@@ -1,6 +1,6 @@
 [package]
 name        = "lex-loom"
-version     = "0.0.0"
+version     = "0.1.0"
 edition     = "2025"
 license     = "EUPL-1.2"
 description = "Multi-agent sprint cycles built on lex-soft (design stage)"

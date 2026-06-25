@@ -85,8 +85,34 @@ fn extract_answer(steps :: List[d.Step]) -> Str {
 # files as a fenced text block — so extract_answer returns "" and the node has
 # no artifact. Recover the artifact from the work_dir in that case. Keep the
 # path in sync with lex_skill.work_dir().
+# Lex and Python builds run in parallel, so each gets its OWN work dir — they
+# must never share, or recover_build_artifact would mix one language's files into
+# the other's artifact. Keep the Lex path in sync with lex_skill.work_dir() and
+# the Python path with lex_skill.py_work_dir().
 fn build_work_dir() -> Str {
   "/tmp/loom-lex-work"
+}
+
+fn py_work_dir() -> Str {
+  "/tmp/loom-py-work"
+}
+
+# Which work dir a build kind writes to (build → Lex, py_build → Python).
+fn work_dir_for(kind :: Str) -> Str {
+  if kind == "py_build" {
+    py_work_dir()
+  } else {
+    build_work_dir()
+  }
+}
+
+# True for any code-producing build node (Lex or Python).
+fn is_build_kind(kind :: Str) -> Bool {
+  if kind == "build" {
+    true
+  } else {
+    kind == "py_build"
+  }
 }
 
 fn has_fence(s :: Str) -> Bool {
@@ -94,18 +120,77 @@ fn has_fence(s :: Str) -> Bool {
 }
 
 # Start each build attempt from a clean work_dir so stale files don't leak in.
-fn clear_work_dir() -> [proc] Unit {
-  let __ := proc.spawn("bash", ["-c", str.join(["rm -rf ", build_work_dir(), "/* 2>/dev/null; mkdir -p ", build_work_dir()], "")])
+fn clear_work_dir(kind :: Str) -> [proc] Unit {
+  let d := work_dir_for(kind)
+  let __ := proc.spawn("bash", ["-c", str.join(["rm -rf ", d, "/* 2>/dev/null; mkdir -p ", d], "")])
   ()
 }
 
 # Emit every file written to the work_dir as a fenced block labelled with its
 # filename — the format the QA agent extracts.
-fn recover_build_artifact() -> [proc] Str {
-  let cmd := str.join(["cd ", build_work_dir(), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
+fn recover_build_artifact(kind :: Str) -> [proc] Str {
+  let cmd := str.join(["cd ", work_dir_for(kind), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
   match proc.spawn("bash", ["-c", cmd]) {
     Err(_) => "",
     Ok(r) => r.stdout,
+  }
+}
+
+# Build gate: compile EVERY file the build agent wrote, not just the ones it
+# bothered to check. Without this a build node can ship a correct server.lex
+# alongside a test.lex that doesn't even parse — QA then fails and burns bounces.
+# Compiles each file in the kind's work dir (lex check for .lex, py_compile for
+# .py). Returns Ok(()) if all compile and at least one source file exists, else
+# Err(<first failing file + compiler output>). Pure [proc] — runs the real
+# compiler, same as the agent's own check tool.
+fn verify_build_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
+  if is_build_kind(kind) {
+    verify_compiles(kind)
+  } else {
+    Ok(())
+  }
+}
+
+# Gate-driven compile check (#32, "spec compiles"). Unlike verify_build_compiles
+# this runs regardless of role — the GATE, not the kind, decides it should run —
+# so any code-producing node can declare `spec compiles` and have it enforced.
+# Compiles every source file in the node's work dir; py_compile for py_build,
+# `lex check` otherwise. Returns Ok(()) iff all compile and ≥1 source file exists.
+fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
+  {
+    let dir := work_dir_for(kind)
+    let check := if kind == "py_build" {
+      "python3 -m py_compile"
+    } else {
+      "${LEX:-lex} check"
+    }
+    let ext := if kind == "py_build" {
+      "py"
+    } else {
+      "lex"
+    }
+    # Loop over *.<ext>; fail loud on the first that doesn't compile; also fail
+    # if no source files were produced at all (prose-only output).
+    let script := str.join(["cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; echo OK"], "")
+    match proc.spawn("bash", ["-c", script]) {
+      Err(msg) => Err(str.concat("compile check could not run: ", msg)),
+      Ok(r) => {
+        let combined := str.concat(r.stdout, r.stderr)
+        if str.contains(combined, "OK") {
+          Ok(())
+        } else {
+          if str.contains(combined, "NO_SOURCE_FILES") {
+            Err(str.concat("build produced no ", str.concat(ext, " source files — output was prose, not code")))
+          } else {
+            if str.contains(combined, "NO_WORKDIR") {
+              Err("build produced no files (work dir missing)")
+            } else {
+              Err(str.concat("a source file failed to compile:\n", combined))
+            }
+          }
+        }
+      },
+    }
   }
 }
 
@@ -208,6 +293,53 @@ fn extract_text_from_parts(parts :: List[jv.Json]) -> Str {
   })
 }
 
+# ── conversation memory across QA bounces ─────────────────────────────────────
+# A build node that is bounced back from QA receives a structured "bounce
+# envelope" instead of a flat string. We rebuild it into a proper multi-turn
+# conversation so the model sees its OWN previous attempt (AssistantMsg) and the
+# QA critique (UserMsg) and edits its code, rather than re-deriving from scratch.
+# Non-build kinds (or non-envelope input) keep the single-UserMsg behaviour.
+fn jstr_field(j :: jv.Json, key :: Str, default :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JStr(s)) => s,
+    _ => default,
+  }
+}
+
+# Pull the Nth section of a delimiter-split list, or "" if absent.
+fn nth_or_empty(parts :: List[Str], i :: Int) -> Str {
+  match list.head(parts) {
+    None => "",
+    Some(h) => if i == 0 {
+      h
+    } else {
+      nth_or_empty(list.tail(parts), i - 1)
+    },
+  }
+}
+
+fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
+  let is_bounce := if is_build_kind(kind) {
+    str.starts_with(msg_json, "<<<LOOM_BOUNCE>>>")
+  } else {
+    false
+  }
+  if is_bounce {
+    # Linear split on the sentinel — no JSON parser (which is quadratic and
+    # blows the VM step limit on multi-KB prior_code). Layout:
+    # <<<LOOM_BOUNCE>>>task<<<LOOM_SEP>>>prior_code<<<LOOM_SEP>>>qa_feedback
+    let body := str.slice(msg_json, 17, str.len(msg_json))
+    let parts := str.split(body, "<<<LOOM_SEP>>>")
+    let task := nth_or_empty(parts, 0)
+    let prior := nth_or_empty(parts, 1)
+    let feedback := nth_or_empty(parts, 2)
+    let critique := str.join(["Your previous attempt above did NOT pass QA.", "", "Reason: ", feedback, "", "Fix YOUR code: keep what worked, change only what failed. Call lex_check and repair until ok='true', then output the corrected file."], "\n")
+    [llm_msg.UserMsg(task), llm_msg.AssistantMsg(prior, []), llm_msg.UserMsg(critique)]
+  } else {
+    [llm_msg.UserMsg(msg_json)]
+  }
+}
+
 # ── main step ─────────────────────────────────────────────────────────────────
 fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
   let run_id := trace.new_run_id()
@@ -230,20 +362,20 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       let all_tools := def.tools
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
       let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
-      let conv := [llm_msg.UserMsg(msg_json)]
-      let __clear := if def.kind == "build" {
-        clear_work_dir()
+      let conv := conv_from_msg(def.kind, msg_json)
+      let __clear := if is_build_kind(def.kind) {
+        clear_work_dir(def.kind)
       } else {
         ()
       }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
       let out0 := extract_answer(steps)
-      let out := if def.kind == "build" {
+      let out := if is_build_kind(def.kind) {
         if has_fence(out0) {
           out0
         } else {
-          let recovered := recover_build_artifact()
+          let recovered := recover_build_artifact(def.kind)
           if str.is_empty(str.trim(recovered)) {
             out0
           } else {

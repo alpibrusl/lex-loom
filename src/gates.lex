@@ -58,6 +58,58 @@ fn is_grounded(gate :: Str) -> Bool {
   str.trim(gate) == "spec compiles"
 }
 
+# True iff `gate` is a recognized gate expression — i.e. `evaluate` has a real
+# rule for it and will NOT silently fall back to the non-empty default. The
+# metaspec uses this (#33) to reject graphs whose gates would otherwise pass on
+# a silent-allow. Keep in sync with the branches in `evaluate` below.
+fn is_well_formed(gate :: Str) -> Bool {
+  let g := str.trim(gate)
+  if g == "spec non-empty" {
+    true
+  } else {
+    if g == "spec compiles" {
+      true
+    } else {
+      if g == "spec json" {
+        true
+      } else {
+        if g == "spec json-verdict-pass" {
+          true
+        } else {
+          let has_arg := fn (prefix :: Str) -> Bool {
+            if str.starts_with(g, prefix) {
+              str.len(str.trim(str.slice(g, str.len(prefix), str.len(g)))) > 0
+            } else {
+              false
+            }
+          }
+          if has_arg("spec contains ") {
+            true
+          } else {
+            if has_arg("spec not-contains ") {
+              true
+            } else {
+              if has_arg("spec starts-with ") {
+                true
+              } else {
+                if has_arg("spec json-field ") {
+                  true
+                } else {
+                  if has_arg("spec len-gt ") {
+                    true
+                  } else {
+                    has_arg("human ")
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 fn classify(gate :: Str) -> Lane {
   let trimmed := str.trim(gate)
   if str.starts_with(trimmed, "spec ") {

@@ -51,14 +51,58 @@ GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -
 docker compose up -d
 ```
 
-### With Ollama (local, no API key)
+### With Ollama via LiteLLM (local, no API key, recommended)
+
+LiteLLM gives cleaner OpenAI-compatible tool calling over Ollama than the native Ollama adapter. Pull a model, start the proxy, then point lex-loom at it:
 
 ```bash
-# Requires Ollama running at localhost:11434 with a model pulled
-# (qwen3-coder:30b and gemma4:latest work well)
+# 1. Pull the recommended local model
+ollama pull qwen3-coder:30b
+
+# 2. Start the LiteLLM proxy (includes qwen3-coder:30b and others)
+cd litellm && docker compose up -d && cd ..
+
+# 3. Build and run lex-loom
 touch .env
 GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
-docker compose up -d
+
+# 4. Run with a local model via the proxy
+LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b \
+  docker compose up -d
+```
+
+The LiteLLM proxy config (`litellm/config.yaml`) includes:
+
+| Model | VRAM | Best for |
+|-------|------|----------|
+| `qwen3-coder:30b` | 45 GB | Code tasks (recommended) |
+| `devstral-small-2:latest` | ~14 GB | Code tasks, lighter |
+| `gemma4:26b` | 19 GB | General tasks (thinking model — see note below) |
+| `gemma4:latest` | 10 GB | General tasks, lightest local option |
+
+> **Thinking models (gemma4:26b):** These models generate 500–700 chain-of-thought tokens before producing any visible output. They also tend to emit tool calls as plain JSON text rather than using the `tool_calls` wire format, which degrades reliability under the large (10+ tool) schemas used by lex-loom agents. Use `qwen3-coder:30b` or `devstral-small-2` for Lex code generation tasks.
+
+#### Running without Docker (host-direct)
+
+```bash
+# Start the proxy directly (no Docker)
+litellm --config litellm/config.yaml --port 4000 &
+
+# Run lex-loom against it
+LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b \
+  lex run --allow-effects env,io,net,llm,proc,sql,fs_write,time,concurrent \
+  src/main.lex main
+```
+
+### With Ollama (native API, fallback)
+
+The native Ollama adapter is used automatically when no cloud keys or `LITELLM_BASE_URL` are set. It uses the Ollama `/api/chat` wire format with an XML-based tool parser — functional but less reliable than LiteLLM for complex tool schemas.
+
+```bash
+touch .env
+GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
+OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3-coder:30b \
+  docker compose up -d
 ```
 
 ---
@@ -484,7 +528,7 @@ Execute cloud-queued sprints from your own machine — your keys, your models.
 uploads the trail + verdict back to the control plane.
 
 ```bash
-export LOOM_SERVER=https://loom.alpibru.com
+export LOOM_SERVER=https://loom.lexlang.org
 export LOOM_RUNNER_TOKEN=<register a runner in the dashboard / via the CLI>
 
 # Pick a provider:

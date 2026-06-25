@@ -1,0 +1,7 @@
+{
+  "sprint_id": "portfolio-s1",
+  "request": "Build sprint 1 of a developer portfolio and blog for Alfonso Bribiesca, founder of the Lex ecosystem (alpibrusl). The portfolio showcases the Lex language and its packages: lex-lang (typed-effect language), lex-loom (multi-agent sprint orchestrator), lex-code (AI coding assistant), lex-hub (package registry), lex-os (agent sandbox), lex-agent (A2A protocol), lex-llm (LLM runtime), lex-guard (spending guardrails), and lex-robot (robot governance). Implement in BOTH Python and Lex in parallel so we can compare the implementations. Sprint 1 scope: static site with About page, Projects list, and Contact. Serve over HTTP on port 8080.",
+  "model": "qwen3-coder:30b",
+  "max_api_calls": 300,
+  "target": "both"
+}

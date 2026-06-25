@@ -34,6 +34,8 @@ import "./transport" as tr
 
 import "./roles" as roles
 
+import "./lex_skill" as lexskill
+
 import "./cast" as cast
 
 import "./diff" as diff
@@ -59,7 +61,7 @@ type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: 
 
 # trail_log: the per-sprint lex-trail log (#7). None when the trail DB
 # could not be opened; all emit_* helpers no-op in that case.
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log] }
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -142,7 +144,7 @@ fn current_parent(cfg :: SprintCfg) -> [sql] Option[Str] {
 
 # ── Node invocation ───────────────────────────────────────────────────────────
 fn max_node_retries() -> Int {
-  1
+  3
 }
 
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
@@ -212,14 +214,39 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                   let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
                   { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                 },
-                GateAllow => match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                  Ok(hash) => {
-                    let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                    let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                    { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-                  },
+                GateAllow => match (if gates.is_grounded(n.gate) {
+                  runner.verify_compiles(n.role)
+                } else {
+                  runner.verify_build_compiles(n.role)
+                }) {
+                Err(compile_err) => {
+                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
+                  if attempt > max_node_retries() {
+                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
+                  } else {
+                    let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                    invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                  }
                 },
+                Ok(_) => {
+                  # Record grounded-gate evidence (#32): the gate passed because a
+                  # real tool verified the artifact, not because of a string check.
+                  let __ge := if gates.is_grounded(n.gate) {
+                    tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                  } else {
+                    ()
+                  }
+                  match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                    Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                    Ok(hash) => {
+                      let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                      let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                      { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                    },
+                  }
+                },
+              },
               },
             }
           }
@@ -242,6 +269,96 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
 # `parent` is the layer's entry event id in the lex-trail chain (#7): every node
 # in the layer chains its node_started off this fixed value, so concurrent
 # appends fan out cleanly rather than racing on the log head.
+# ── Transition review (intake) ────────────────────────────────────────────────
+# Opt-in (cfg.review_transitions). Before a node works, its agent assesses
+# whether the handed-in input is sufficient; if not, the inadequate handoff is
+# bounced back to the node that PRODUCED it, which revises, and the receiving
+# node re-assesses the revised input. Bounded by max_transition_rounds.
+fn max_transition_rounds() -> Int {
+  1
+}
+
+type Assessment = { ready :: Bool, missing :: Str }
+
+# Linear, format-tolerant extraction of `{ready, missing}` — avoids depending on
+# the model returning perfectly-shaped JSON. Defaults to ready=true on ambiguity
+# so a parse hiccup never causes a wasteful bounce.
+fn extract_missing(resp :: Str) -> Str {
+  let parts := str.split(resp, "\"missing\"")
+  match list.head(list.tail(parts)) {
+    None => "",
+    Some(after) => {
+      let segs := str.split(after, "\"")
+      match list.head(list.tail(segs)) {
+        Some(v) => v,
+        None => "",
+      }
+    },
+  }
+}
+
+fn parse_assessment(resp :: Str) -> Assessment {
+  let not_ready := if str.contains(resp, "\"ready\": false") {
+    true
+  } else {
+    str.contains(resp, "\"ready\":false")
+  }
+  if not_ready {
+    { ready: false, missing: extract_missing(resp) }
+  } else {
+    { ready: true, missing: "" }
+  }
+}
+
+fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Assessment {
+  match roles.assessor_agent(n.role, cfg.model) {
+    assessor => {
+      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""))
+      parse_assessment(resp)
+    },
+  }
+}
+
+# Resolve a node's input, running the intake-review loop when enabled. Returns
+# the (possibly upstream-revised) input string to hand to the node.
+fn prepare_input(n :: graph.Node, input_ref :: Str, g :: graph.SprintGraph, cfg :: SprintCfg, parent :: Option[Str], round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Str {
+  let input := resolve_input(cfg.db, input_ref)
+  if cfg.review_transitions {
+    if str.is_empty(input) {
+      input
+    } else {
+      if round > max_transition_rounds() {
+        input
+      } else {
+        let a := assess_input(n, input, cfg)
+        if a.ready {
+          let __t := tr.trail(cfg.db, cfg.id, "transition_review", str.join(["{\"node\":\"", n.id, "\",\"ready\":true,\"round\":", int.to_str(round), "}"], ""))
+          input
+        } else {
+          match tr.artifact_node_id(cfg.db, input_ref) {
+            None => input,
+            Some(producer_id) => match find_node_in_graph(g, producer_id) {
+              None => input,
+              Some(producer) => {
+                let __tb := tr.trail(cfg.db, cfg.id, "transition_bounced", str.join(["{\"to_node\":\"", n.id, "\",\"from_node\":\"", producer_id, "\",\"missing\":", jv.stringify(JStr(a.missing)), ",\"round\":", int.to_str(round), "}"], ""))
+                let revise_prompt := str.join([input, "\n\nA downstream ", n.role, " agent cannot proceed because: ", a.missing, "\n\nRevise YOUR output above to add exactly this, keeping everything else intact. Output the full revised result."], "")
+                let revised := invoke_node(producer, revise_prompt, cfg, parent)
+                if revised.attested {
+                  prepare_input(n, revised.artifact, g, cfg, parent, round + 1)
+                } else {
+                  input
+                }
+              },
+            },
+          }
+        }
+      }
+    }
+  } else {
+    input
+  }
+}
+
 fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
   match cache_get(cache, node_id) {
     Some(hash) => {
@@ -251,7 +368,7 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
     None => {
       match find_node_in_graph(g, node_id) {
         None => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "node not found in graph" },
-        Some(n) => invoke_node(n, resolve_input(cfg.db, input_ref), cfg, parent),
+        Some(n) => invoke_node(n, prepare_input(n, input_ref, g, cfg, parent, 1), cfg, parent),
       }
     },
   }
@@ -342,26 +459,27 @@ fn max_design_retries() -> Int {
   3
 }
 
-fn design_prompt(request :: Str) -> Str {
-  str.join(["You are the Architect for a software sprint.\n\n", "Project request:\n", request, "\n\n", "Output ONLY a JSON object with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"id\": \"<sprint-graph-id>\",\n", "  \"phase\": \"Design\",\n", "  \"nodes\": [\n", "    {\"id\": \"<node-id>\", \"role\": \"<role>\", \"gate\": \"<gate-expr>\"}\n", "  ],\n", "  \"edges\": [\n", "    {\"from\": \"<node-id>\", \"to\": \"<node-id>\", \"handoff\": \"schema {}\"}\n", "  ]\n", "}\n\n", "Valid roles: architect, build, qa, demo, scribe.\n\n", "Valid gate expressions (choose the most specific one for each role):\n", "  spec non-empty              -- Formal: output must not be empty (use for architect/scribe/demo nodes)\n", "  spec json-verdict-pass      -- Formal: output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS use for qa nodes)\n", "  spec len-gt 50              -- Formal: output must be longer than 50 chars (use for build nodes)\n", "  spec len-gt 200             -- Formal: output must be longer than 200 chars (use for large build tasks)\n", "  spec json                   -- Formal: output must be valid JSON\n", "  spec json-field <key>       -- Formal: output must be JSON with field <key>\n", "  spec len-gt <N>             -- Formal: output must be longer than N characters\n", "  human <oracle>              -- Judgeable: output is queued for named oracle attestation\n", "                                 (use for high-stakes nodes where a human must approve)\n", "                                 e.g. 'human product', 'human tech-lead', 'human security'\n\n", "Rules: every node must have a gate; edges must reference existing node ids; ", "no cycles; every demo node must have a qa ancestor. QA nodes MUST use 'spec json-verdict-pass'."], "")
+# design_prompt: the Architect reads the PM's PRD (prd) plus the original request for context.
+fn design_prompt(prd :: Str, request :: Str) -> Str {
+  str.join(["PM PRD:\n", prd, "\n\nOriginal request (for context):\n", request, "\n\nOutput ONLY the JSON sprint graph — no prose, no markdown fences."], "")
 }
 
-fn design_retry_prompt(request :: Str, errors :: Str) -> Str {
-  str.join([design_prompt(request), "\n\nYour previous graph was rejected with these errors:\n", errors, "\nFix all errors and output only the corrected JSON."], "")
+fn design_retry_prompt(prd :: Str, request :: Str, errors :: Str) -> Str {
+  str.join([design_prompt(prd, request), "\n\nYour previous graph was rejected with these errors:\n", errors, "\nFix all errors and output only the corrected JSON."], "")
 }
 
 type DesignResult = DesignOk(graph.SprintGraph) | DesignFailed(Str)
 
-fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DesignResult {
+fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int, errors :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DesignResult {
   if attempts > max_design_retries() {
     DesignFailed(str.join(["Architect failed after ", int.to_str(max_design_retries()), " attempts. Last errors: ", errors], ""))
   } else {
     let prompt := if str.is_empty(errors) {
-      design_prompt(request)
+      design_prompt(prd, request)
     } else {
-      design_retry_prompt(request, errors)
+      design_retry_prompt(prd, request, errors)
     }
-    let agent_cfg := roles.architect_with_context(cfg.model, specs_context, cfg.id)
+    let agent_cfg := roles.architect_agent(cfg.model)
     let direct := runner.step(cfg.db, agent_cfg, prompt)
     let tmp_path := roles.graph_tmp_path(cfg.id)
     let output := match io.read(tmp_path) {
@@ -375,12 +493,12 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
     match graph.from_json_str(output) {
       Err(parse_err) => {
         let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", parse_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-        run_design(request, specs_context, attempts + 1, str.join(["JSON parse error: ", parse_err], ""), cfg)
+        run_design(prd, request, specs_context, attempts + 1, str.join(["JSON parse error: ", parse_err], ""), cfg)
       },
       Ok(g) => match graph.validate(g) {
         Err(struct_err) => {
           let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-          run_design(request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
+          run_design(prd, request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
         },
         Ok(_) => match metaspec.check(g) {
           Invalid(vs) => {
@@ -388,7 +506,7 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
               str.join([acc, v.rule, ": ", v.message, "; "], "")
             })
             let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"metaspec: ", error_str, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
-            run_design(request, specs_context, attempts + 1, str.join(["metaspec violations: ", error_str], ""), cfg)
+            run_design(prd, request, specs_context, attempts + 1, str.join(["metaspec violations: ", error_str], ""), cfg)
           },
           Valid => {
             let __tv := tr.trail(cfg.db, cfg.id, "graph_validated", str.join(["{\"graph_id\":\"", g.id, "\",\"nodes\":", int.to_str(list.len(g.nodes)), "}"], ""))
@@ -405,22 +523,21 @@ fn run_design(request :: Str, specs_context :: Str, attempts :: Int, errors :: S
 # ── run_sprint ────────────────────────────────────────────────────────────────
 #
 fn max_qa_bounces() -> Int {
-  2
+  4
 }
 
 # Run QA; if it fails, bounce back to Implementation and retry (up to max_qa_bounces).
 # Returns both the final QA result and the latest impl result (possibly updated).
 type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
 
-fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
+fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
-  let qa_passed := list.fold(qa_result.outcomes, false, fn (found :: Bool, o :: NodeOutcome) -> Bool {
-    if found {
-      true
-    } else {
-      o.attested
-    }
-  })
+  # qa_passed must mean "the QA run fully succeeded" — every node attested.
+  # The old "any outcome attested" check let a passing build/pm node mask a
+  # denied qa node, so qa_passed was true while the sprint failed, and the
+  # bounce-back-to-Implementation loop never fired (phase_bounced=0).
+  let qa_passed := qa_result.success
+
   if qa_passed {
     { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
   } else {
@@ -436,7 +553,13 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
           acc
         }
       })
-      let bounce_input := str.join([resolve_input(cfg.db, impl_ref), "\n\nQA feedback (your previous output did not pass): ", qa_denial], "")
+      # Bounce envelope: the build runner (runner.conv_from_msg) rebuilds this
+      # into a proper multi-turn conversation — prior code as the assistant's own
+      # turn, the QA critique as the next user turn — so the model edits its
+      # previous attempt instead of starting over. Delimiter-joined, NOT JSON:
+      # lex-schema's json parser is quadratic and blows the VM step limit on the
+      # multi-KB prior_code. str.split on the sentinel is linear.
+      let bounce_input := str.join(["<<<LOOM_BOUNCE>>>", task_input, "<<<LOOM_SEP>>>", resolve_input(cfg.db, impl_ref), "<<<LOOM_SEP>>>", qa_denial], "")
       let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
       let new_impl_ref := match new_impl_ref_result {
         Ok(h) => h,
@@ -445,7 +568,7 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
       let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
       let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
       let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
-      run_qa_with_bounce(qa_graph, impl_graph, new_impl_ref2, cfg, bounce + 1)
+      run_qa_with_bounce(qa_graph, impl_graph, new_impl_ref2, task_input, cfg, bounce + 1)
     }
   }
 }
@@ -465,14 +588,15 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       Some(llog)
     },
   }
-  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt }
-  let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty" }], edges: [] }
-  let intake_result := run_phase(intake_graph, graph.Intake, "", [], cfg)
+  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions }
+  let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "pm", gate: "spec len-gt 50" }], edges: [] }
+  let intake_result := run_phase(intake_graph, graph.Intake, cfg.request, [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
+  let prd := resolve_input(cfg.db, intake_ref)
   let __tph1 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Intake\",\"to\":\"Design\"}")
   let prior_specs := digest.load_tightened_specs(cfg.db, cfg.id)
   let specs_context := digest.specs_context(prior_specs)
-  let design_dr := run_design(cfg.request, specs_context, 1, "", cfg)
+  let design_dr := run_design(prd, cfg.request, specs_context, 1, "", cfg)
   match design_dr {
     DesignFailed(reason) => {
       let __tf := tr.trail(cfg.db, cfg.id, "sprint_failed", str.join(["{\"reason\":\"", reason, "\"}"], ""))
@@ -482,7 +606,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let design_ref := intake_ref
       let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
-      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log }
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions }
       let __ltgv := match llog_opt {
         None => (),
         Some(log) => {
@@ -511,7 +635,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       } else {
         sprint_graph
       }
-      let qa_impl_result := run_qa_with_bounce(qa_demo_graph, sprint_graph, impl_ref, cfg, 1)
+      let qa_impl_result := run_qa_with_bounce(qa_demo_graph, sprint_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl
       let demo_ref := first_accepted_artifact(qa_result.outcomes)

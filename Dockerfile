@@ -41,6 +41,10 @@ ENV PORT=8880 \
 
 VOLUME ["/data"]
 
-CMD ["lex", "run", \
+# --max-steps raises the VM step budget above the 10M default: a full sprint —
+# especially nodes parsing large LLM responses inside par_map workers — exceeds
+# 10M and panics ("step limit exceeded"). Requires a lex with the par_map
+# step-limit-inheritance fix so workers honour this budget, not a hardcoded 10M.
+CMD ["lex", "run", "--max-steps", "200000000", \
      "--allow-effects", "env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent", \
      "src/web/server.lex", "serve_loom"]

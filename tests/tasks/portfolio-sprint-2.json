@@ -1,0 +1,7 @@
+{
+  "sprint_id": "portfolio-s2",
+  "request": "Add a blog engine to the portfolio site built in sprint 1. The blog should: read markdown files from a posts/ directory, convert them to HTML, list all posts on /blog with title and date, and serve individual posts at /blog/<slug>. Implement in BOTH Python and Lex in parallel. Add a Dockerfile and docker-compose.yml so the site can be deployed with a single command.",
+  "model": "qwen3-coder:30b",
+  "max_api_calls": 400,
+  "target": "both"
+}

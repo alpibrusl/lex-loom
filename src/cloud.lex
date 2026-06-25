@@ -218,7 +218,7 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     let __l := io.print("[cloud] no cloud agents; using built-in defaults")
     pool_seed.seed(db)
   }
-  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_calls, roster: cast.empty_roster(), trail_log: None }
+  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_calls, roster: cast.empty_roster(), trail_log: None, review_transitions: false }
   let result := orch.run_sprint(cfg)
   let ok_str := if result.success {
     "true"

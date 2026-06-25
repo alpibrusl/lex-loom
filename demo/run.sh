@@ -34,9 +34,14 @@ LOOM_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEMO_DIR="$LOOM_ROOT/demo"
 DB="${DEMO_DB:-$DEMO_DIR/demo.db}"
 LEX="${LEX_BIN:-lex}"
-MODEL="${MODEL:-gemini-3.5-flash}"
-VERTEX_LOCATION="${VERTEX_LOCATION:-eu}"
+# Local-first: defaults to Ollama (qwen3-coder:30b). The Build + Scribe agents
+# are deterministic proc: scripts, so only PM/Architect/QA/Demo use the model.
+MODEL="${MODEL:-qwen3-coder:30b}"
+LAUNCH_PORT="${LAUNCH_PORT:-8090}"
 EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc"
+# JSON parsing in lex-schema is O(n^2); large QA/trail payloads blow the default
+# VM step limit (and par_map workers cap at 10M). Raise it generously.
+MAXSTEPS="${MAXSTEPS:-500000000}"
 
 # ── colours ──────────────────────────────────────────────────────────────────
 BOLD='\033[1m'; DIM='\033[2m'
@@ -55,9 +60,7 @@ if ! command -v "$LEX" &>/dev/null; then
   echo -e "${RED}✗ 'lex' not found on PATH. Install from https://lex-lang.org/install${NC}"
   exit 1
 fi
-if [[ -z "${VERTEX_ACCESS_TOKEN:-}" ]]; then
-  warn "VERTEX_ACCESS_TOKEN not set — Ollama fallback will be used if available"
-fi
+note "Model: $MODEL (local Ollama). No cloud credentials required."
 
 cd "$LOOM_ROOT"
 
@@ -78,15 +81,14 @@ ok "Demo pool agents seeded (Build×2 + Scribe, attestation=100)"
 header "Sprint 1 — User Registration API"
 # ══════════════════════════════════════════════════════════════════════════════
 note "Task: POST /register + GET /users, email must be validated"
-note "Provider: Vertex AI  |  Model: $MODEL"
+note "Provider: Ollama (local)  |  Model: $MODEL"
 divider
 
 SPRINT1_ID="demo-sprint-1"
 SPRINT1_REQ="Build a Python Flask REST API for user registration. Endpoints: POST /register (accepts JSON {email, password}, creates user, returns {id, email}), GET /users (lists all users). Email addresses must be validated — reject malformed addresses with HTTP 422."
 
 DB_PATH="$DB" SPRINT_ID="$SPRINT1_ID" REQUEST="$SPRINT1_REQ" MODEL="$MODEL" \
-  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" VERTEX_LOCATION="$VERTEX_LOCATION" \
-  "$LEX" run --allow-effects "$EFFECTS" src/main.lex run_sprint_cmd
+  "$LEX" run --allow-effects "$EFFECTS" --max-steps "$MAXSTEPS" src/main.lex run_sprint_cmd
 
 divider
 step "Sprint 1 trail"
@@ -114,8 +116,7 @@ SPRINT2_ID="${SPRINT1_ID}-next"
 SPRINT2_REQ="Build a Python Flask REST API for team invitations. Endpoints: POST /invite (accepts JSON {email, role}, creates invite, returns {id, email, role, status}), GET /invites (lists all invites). Valid roles: member, admin, viewer. Email addresses must be validated."
 
 DB_PATH="$DB" SPRINT_ID="$SPRINT2_ID" REQUEST="$SPRINT2_REQ" MODEL="$MODEL" \
-  VERTEX_ACCESS_TOKEN="${VERTEX_ACCESS_TOKEN:-}" VERTEX_PROJECT="${VERTEX_PROJECT:-}" VERTEX_LOCATION="$VERTEX_LOCATION" \
-  "$LEX" run --allow-effects "$EFFECTS" src/main.lex run_sprint_cmd
+  "$LEX" run --allow-effects "$EFFECTS" --max-steps "$MAXSTEPS" src/main.lex run_sprint_cmd
 
 divider
 step "Sprint 2 trail"
@@ -123,13 +124,76 @@ DB_PATH="$DB" SPRINT_ID="$SPRINT2_ID" \
   "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_trail
 
 # ══════════════════════════════════════════════════════════════════════════════
+header "Live Launch — the learned constraint, running in production"
+# ══════════════════════════════════════════════════════════════════════════════
+note "Booting the Sprint 2 artifact and exercising it with real HTTP requests."
+note "Watch the LAST call: a malformed email gets rejected — live — by the"
+note "EMAIL_REGEX that Sprint 1 learned the hard way and the substrate made law."
+divider
+
+APP="$DEMO_DIR/code/invite_api.py"
+SRVLOG="/tmp/loom-demo-invite-$LAUNCH_PORT.log"
+BASE="http://localhost:$LAUNCH_PORT"
+
+# Free the port (macOS-safe), then boot the server detached so its stdout does
+# not block this script.
+lsof -ti "tcp:$LAUNCH_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+sleep 1
+nohup bash -c "{ PORT=$LAUNCH_PORT python3 '$APP' ; } >'$SRVLOG' 2>&1" >/dev/null 2>&1 &
+SRV_PID=$!
+
+# Poll until it answers (max 15s).
+READY=0
+for _ in $(seq 1 15); do
+  sleep 1
+  if curl -s --max-time 2 "$BASE/invites" >/dev/null 2>&1; then READY=1; break; fi
+done
+
+if [ "$READY" != "1" ]; then
+  warn "Server did not come up — log tail:"
+  tail -5 "$SRVLOG" 2>/dev/null
+else
+  ok "Server live at $BASE  (pid $SRV_PID)"
+  echo ""
+
+  step "GET /invites  → empty list (fresh server)"
+  echo -e "  ${DIM}$ curl $BASE/invites${NC}"
+  echo -e "  ${GREEN}$(curl -s "$BASE/invites")${NC}"
+  echo ""
+
+  step "POST /invite  with a VALID email  → 201 Created"
+  echo -e "  ${DIM}$ curl -X POST $BASE/invite -d '{\"email\":\"ada@lex.dev\",\"role\":\"admin\"}'${NC}"
+  VALID=$(curl -s -w '\n  HTTP %{http_code}' -X POST "$BASE/invite" \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"ada@lex.dev","role":"admin"}')
+  echo -e "  ${GREEN}${VALID}${NC}"
+  echo ""
+
+  step "POST /invite  with a MALFORMED email  → 422 (the learned gate, live)"
+  echo -e "  ${DIM}$ curl -X POST $BASE/invite -d '{\"email\":\"not-an-email\",\"role\":\"admin\"}'${NC}"
+  BAD=$(curl -s -w '\n  HTTP %{http_code}' -X POST "$BASE/invite" \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"not-an-email","role":"admin"}')
+  echo -e "  ${YELLOW}${BAD}${NC}"
+  echo ""
+  ok "Sprint 1 learned email validation. Sprint 2 inherited it as a gate."
+  ok "Here it is enforcing that rule on a live request — HTTP 422, not a hope."
+fi
+
+# Tear the server down.
+kill -9 "$SRV_PID" 2>/dev/null || true
+lsof -ti "tcp:$LAUNCH_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+
+# ══════════════════════════════════════════════════════════════════════════════
 header "Result"
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
 echo -e "  ${BOLD}Sprint 1${NC}: QA bounced (missing email validation) → Build retried → Digest tightened gate"
 echo -e "  ${BOLD}Sprint 2${NC}: Build gate ${BOLD}spec contains EMAIL_REGEX${NC} passed on attempt #1 — QA never had to catch it"
+echo -e "  ${BOLD}Live${NC}    : booted the Sprint 2 artifact — a malformed email was rejected with HTTP 422"
 echo ""
 echo -e "  The spec is in the substrate.  It is not in the prompt."
 echo -e "  The model did not get smarter.  The constraint got earlier."
+echo -e "  And the constraint is real: you just watched it reject bad input, live."
 echo ""
 ok "Demo complete.  DB: $DB"

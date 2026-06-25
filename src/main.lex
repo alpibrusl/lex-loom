@@ -127,7 +127,12 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
       } else {
         io.print(str.join(["[loom] ", int.to_str(list.len(prior_specs)), " tightened spec(s) from prior sprint loaded"], ""))
       }
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: None }
+      let review := if get_env("REVIEW_TRANSITIONS", "") == "1" {
+        true
+      } else {
+        get_env("REVIEW_TRANSITIONS", "") == "true"
+      }
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: None, review_transitions: review }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"

@@ -76,6 +76,22 @@ fn artifact_get(db :: conn.ConnDb, hash :: Str) -> [sql, fs_read] Result[Str, St
   }
 }
 
+# Which node produced a given artifact hash. Used by transition review to bounce
+# an insufficient handoff back to the agent that produced it. None if unknown.
+type NodeIdRow = { node_id :: Str }
+
+fn artifact_node_id(db :: conn.ConnDb, hash :: Str) -> [sql, fs_read] Option[Str] {
+  let q := str.join(["SELECT node_id FROM artifacts WHERE hash='", sq(hash), "'"], "")
+  let rows :: Result[List[NodeIdRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => Some(r.node_id),
+    },
+  }
+}
+
 # ── Plane 2: Inter-agent A2A ──────────────────────────────────────────────────
 fn send_a2a(db :: conn.ConnDb, from_id :: Str, to_id :: Str, topic :: Str, payload :: Str) -> [sql, fs_read, net, crypto, random] Result[Unit, Str] {
   a2a.send(db, from_id, to_id, topic, payload)

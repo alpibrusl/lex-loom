@@ -29,6 +29,44 @@
 
 model_list:
 
+  # ── Ollama local models (host machine) ────────────────────────────────────
+  # Requires Ollama running on the host at port 11434.
+  # From Docker: api_base uses host.docker.internal (add extra_hosts in compose).
+  # From host: set OLLAMA_HOST=http://localhost:11434 or leave default.
+  #
+  # Recommended for code tasks: qwen3-coder:30b
+  #   ollama pull qwen3-coder:30b
+  #   LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b lex run src/main.lex
+  #
+  # NOTE on thinking models (gemma4:26b, deepseek-r1):
+  #   These models spend 500-700 tokens on chain-of-thought BEFORE producing output.
+  #   max_tokens must be >= 2000 or they return empty content. merge_reasoning_content_in_choices
+  #   is required so the visible text is not silently dropped by LiteLLM.
+  #   Tool calling with these models is unreliable under large context (10+ tools).
+  #   Prefer qwen3-coder:30b or devstral-small-2 for code agent tasks.
+
+  - model_name: qwen3-coder:30b
+    litellm_params:
+      model: ollama/qwen3-coder:30b
+      api_base: http://host.docker.internal:11434
+
+  - model_name: devstral-small-2:latest
+    litellm_params:
+      model: ollama/devstral-small-2:latest
+      api_base: http://host.docker.internal:11434
+
+  - model_name: gemma4:26b
+    litellm_params:
+      model: ollama/gemma4:26b
+      api_base: http://host.docker.internal:11434
+      merge_reasoning_content_in_choices: true
+
+  - model_name: gemma4:latest
+    litellm_params:
+      model: ollama/gemma4:latest
+      api_base: http://host.docker.internal:11434
+      merge_reasoning_content_in_choices: true
+
   # ── Anthropic API key ──────────────────────────────────────────────────────
   - model_name: claude-opus-4-7
     litellm_params:

@@ -288,6 +288,17 @@ fn make_provider_no_google() -> [env] prov.Provider {
     Some(k) => if key_is_set(k) {
       make_mistral_provider()
     } else {
+      make_provider_no_mistral()
+    },
+    None => make_provider_no_mistral(),
+  }
+}
+
+fn make_provider_no_mistral() -> [env] prov.Provider {
+  match env.get("OPENCODE_API_KEY") {
+    Some(k) => if key_is_set(k) {
+      providers.opencode_go()
+    } else {
       make_ollama_provider()
     },
     None => make_ollama_provider(),

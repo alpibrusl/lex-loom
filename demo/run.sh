@@ -102,8 +102,6 @@ DB_PATH="$DB" SPRINT_ID="${SPRINT1_ID}-next" \
 
 echo ""
 ok "Sprint 1 complete"
-echo -e "  ${DIM}Key moment: QA bounced on missing email validation, Build retried, Digest"
-echo -e "  encoded the lesson as gate  ${BOLD}spec contains EMAIL_REGEX${NC}${DIM}  for role=build${NC}"
 
 # ══════════════════════════════════════════════════════════════════════════════
 header "Sprint 2 — Team Invite API  (different task, same email rule)"
@@ -185,11 +183,21 @@ kill -9 "$SRV_PID" 2>/dev/null || true
 lsof -ti "tcp:$LAUNCH_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # ══════════════════════════════════════════════════════════════════════════════
-header "Result"
+header "Result  (trail-derived — no hardcoded claims)"
 # ══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo -e "  ${BOLD}Sprint 1${NC}: QA bounced (missing email validation) → Build retried → Digest tightened gate"
-echo -e "  ${BOLD}Sprint 2${NC}: Build gate ${BOLD}spec contains EMAIL_REGEX${NC} passed on attempt #1 — QA never had to catch it"
+echo -e "  ${BOLD}Sprint 1 report${NC}  (from trail):"
+DB_PATH="$DB" SPRINT_ID="$SPRINT1_ID" \
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_report \
+  | sed 's/^/  /'
+
+echo ""
+echo -e "  ${BOLD}Sprint 2 report${NC}  (from trail):"
+DB_PATH="$DB" SPRINT_ID="$SPRINT2_ID" \
+  "$LEX" run --allow-effects "$EFFECTS" src/main.lex sprint_report \
+  | sed 's/^/  /'
+
+echo ""
 echo -e "  ${BOLD}Live${NC}    : booted the Sprint 2 artifact — a malformed email was rejected with HTTP 422"
 echo ""
 echo -e "  The spec is in the substrate.  It is not in the prompt."

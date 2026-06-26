@@ -10,8 +10,8 @@
 #                      on success, attests the child result. Requires a model.
 #
 # Run:
-#   DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/demo_expand.lex demo_depth_cap
-#   MODEL=qwen3-coder:30b DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/demo_expand.lex demo_live_child
+#   DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc examples/demo_expand.lex demo_depth_cap
+#   MODEL=qwen3-coder:30b DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc examples/demo_expand.lex demo_live_child
 
 import "std.env" as env
 
@@ -23,15 +23,15 @@ import "std.int" as int
 
 import "lex-orm/src/connection" as conn
 
-import "./migrate" as migrate
+import "../src/migrate" as migrate
 
-import "./orchestrator" as orch
+import "../src/orchestrator" as orch
 
-import "./graph" as graph
+import "../src/graph" as graph
 
-import "./cast" as cast
+import "../src/cast" as cast
 
-import "./pool_seed" as pool_seed
+import "../src/pool_seed" as pool_seed
 
 fn get_env(key :: Str, default :: Str) -> [env] Str {
   match env.get(key) {

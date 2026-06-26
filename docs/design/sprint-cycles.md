@@ -13,7 +13,7 @@
 > (lex-llm, lex-agent, lex-spec, lex-trail, lex-jobs, lex-hub, lex-vcs,
 > lex-code).
 >
-> **Grounding.** Built under [Trust Without Comprehension](https://alpibru.com/manifesto).
+> **Grounding.** Built under [Trust Without Comprehension](https://lexlang.org/manifesto).
 > This document cites the manifesto sections the existing repos already
 > demonstrate: **§III** semantic (AST) diff, **§IV** honest effect rows,
 > **§VI** effect-typed parallel orchestration, **§VIII** hash-chain
@@ -433,4 +433,4 @@ alongside `orchestrator.lex` + `transport.lex`.
 
 ---
 
-Built under the principles of [Trust Without Comprehension](https://alpibru.com/manifesto).
+Built under the principles of [Trust Without Comprehension](https://lexlang.org/manifesto).

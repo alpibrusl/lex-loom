@@ -30,7 +30,7 @@ import "lex-schema/json_value" as jv
 
 import "lex-schema/error" as e
 
-import "std.proc" as proc
+import "std.process" as proc
 
 import "./agent/runner" as runner
 
@@ -93,7 +93,7 @@ fn make_run_server_tool() -> t.Tool {
         "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n",
         "exit 1"
       ], "")
-      match proc.spawn("bash", ["-c", script]) {
+      match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {
           let combined := str.concat(r.stdout, r.stderr)
@@ -129,13 +129,13 @@ fn make_run_code_tool() -> t.Tool {
       _ => "",
     }
     let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
-    match proc.spawn("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
+    match proc.run("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
       Ok(mk) => {
         let path := str.trim(mk.stdout)
         let __w := io.write(path, full)
         let cmd := str.join(["perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
-        match proc.spawn("bash", ["-c", cmd]) {
+        match proc.run("bash", ["-c", cmd]) {
           Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
           Ok(r) => {
             let combined := str.concat(r.stdout, r.stderr)

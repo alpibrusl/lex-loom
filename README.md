@@ -572,4 +572,4 @@ Agent runtime (runner, trace, state store, registry, A2A) is vendored directly i
 
 ---
 
-Built under the principles of [Trust Without Comprehension](https://alpibru.com/manifesto).
+Built under the principles of [Trust Without Comprehension](https://lexlang.org/manifesto).

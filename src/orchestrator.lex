@@ -617,6 +617,139 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
   }
 }
 
+# ── Dynamic DAG extension (#41) ───────────────────────────────────────────────
+#
+# After Implementation, the Architect may EXTEND the sprint graph in response to
+# intermediate results — adding gated nodes for sub-tasks discovered at runtime.
+# Safety envelope (identical to Design): the FULL extended graph must pass the
+# metaspec before any new node runs; an invalid delta is rejected (not the
+# sprint); a hard node budget + round cap bound runaway growth. Already-run
+# nodes are cache-hit (node_reused), so only genuinely new nodes execute.
+#
+# Opt-in via env DYNAMIC_DAG=1 — default behaviour is unchanged.
+type ExtResult = { graph :: graph.SprintGraph, impl_result :: PhaseResult, ref :: Str }
+
+fn max_extension_rounds() -> Int {
+  2
+}
+
+# Total nodes a sprint graph may reach via dynamic extension. Success compounds
+# as ~p^n, so an unbounded graph is both unpredictable and likely to fail.
+fn max_total_nodes() -> Int {
+  12
+}
+
+fn dynamic_enabled() -> [env] Bool {
+  match env.get("DYNAMIC_DAG") {
+    None => false,
+    Some(v) => if v == "1" {
+      true
+    } else {
+      v == "true"
+    },
+  }
+}
+
+# Seed an ArtifactCache from a phase's accepted outcomes so re-running the
+# extended graph skips (node_reused) every node that already produced an artifact.
+fn cache_from_outcomes(outcomes :: List[NodeOutcome]) -> ArtifactCache {
+  list.fold(outcomes, [], fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
+    if o.attested {
+      if str.is_empty(o.artifact) {
+        acc
+      } else {
+        cache_put(acc, o.node_id, o.artifact)
+      }
+    } else {
+      acc
+    }
+  })
+}
+
+# Node ids present in `ext` but not in `base` — the genuinely new work.
+fn new_node_ids(base :: graph.SprintGraph, ext :: graph.SprintGraph) -> List[Str] {
+  let base_ids := graph.node_ids(base)
+  graph.str_filter(graph.node_ids(ext), fn (id :: Str) -> Bool {
+    not graph.str_contains(base_ids, id)
+  })
+}
+
+fn extension_prompt(request :: Str, artifact :: Str, current_graph_json :: Str) -> Str {
+  str.join(["The Implementation phase produced this accepted artifact:\n", artifact, "\n\nThe current sprint graph is:\n", current_graph_json, "\n\nOriginal request:\n", request, "\n\nDecide whether additional gated nodes are needed to finish the request", " (e.g. a sub-task the work surfaced). If the work is COMPLETE, output the", " current graph UNCHANGED. If extension is needed, output the FULL graph —", " every existing node (same ids) PLUS the new gated nodes and the edges that", " connect them. Output ONLY the JSON sprint graph — no prose, no fences."], "")
+}
+
+# One extension round: ask the Architect for an extended graph, validate it the
+# same way Design does, run only the new nodes, then recurse. Returns the final
+# graph + impl outcomes + result ref. Any rejection or fixed point ends the loop
+# with the inputs unchanged (the sprint proceeds on what it already has).
+fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, cfg :: SprintCfg, round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] ExtResult {
+  if not dynamic_enabled() {
+    { graph: base, impl_result: impl_result, ref: impl_ref }
+  } else {
+    if round > max_extension_rounds() {
+      { graph: base, impl_result: impl_result, ref: impl_ref }
+    } else {
+      let agent_cfg := roles.architect_agent(cfg.model)
+      let prompt := extension_prompt(cfg.request, resolve_input(cfg.db, impl_ref), graph.to_json_str(base))
+      let direct := runner.step(cfg.db, agent_cfg, prompt)
+      let tmp_path := roles.graph_tmp_path(cfg.id)
+      let output := match io.read(tmp_path) {
+        Ok(file_content) => {
+          let __rm := io.write(tmp_path, "")
+          file_content
+        },
+        Err(_) => direct,
+      }
+      match graph.from_json_str(output) {
+        Err(parse_err) => {
+          let __tr := tr.trail(cfg.db, cfg.id, "graph_extension_rejected", str.join(["{\"reason\":\"parse: ", parse_err, "\",\"round\":", int.to_str(round), "}"], ""))
+          { graph: base, impl_result: impl_result, ref: impl_ref }
+        },
+        Ok(ext) => {
+          let news := new_node_ids(base, ext)
+          if list.is_empty(news) {
+            let __tr := tr.trail(cfg.db, cfg.id, "graph_extension_fixpoint", str.join(["{\"round\":", int.to_str(round), ",\"nodes\":", int.to_str(list.len(graph.node_ids(ext))), "}"], ""))
+            { graph: base, impl_result: impl_result, ref: impl_ref }
+          } else {
+            if list.len(graph.node_ids(ext)) > max_total_nodes() {
+              let __tb := tr.trail(cfg.db, cfg.id, "budget_exhausted", str.join(["{\"reason\":\"max nodes\",\"round\":", int.to_str(round), ",\"nodes\":", int.to_str(list.len(graph.node_ids(ext))), ",\"limit\":", int.to_str(max_total_nodes()), "}"], ""))
+              { graph: base, impl_result: impl_result, ref: impl_ref }
+            } else {
+              match graph.validate(ext) {
+                Err(struct_err) => {
+                  let __tr := tr.trail(cfg.db, cfg.id, "graph_extension_rejected", str.join(["{\"reason\":\"structural: ", struct_err, "\",\"round\":", int.to_str(round), "}"], ""))
+                  { graph: base, impl_result: impl_result, ref: impl_ref }
+                },
+                Ok(_) => match metaspec.check(ext) {
+                  Invalid(vs) => {
+                    let error_str := list.fold(vs, "", fn (acc :: Str, v :: metaspec.Violation) -> Str {
+                      str.join([acc, v.rule, ": ", v.message, "; "], "")
+                    })
+                    let __tr := tr.trail(cfg.db, cfg.id, "graph_extension_rejected", str.join(["{\"reason\":\"metaspec: ", error_str, "\",\"round\":", int.to_str(round), "}"], ""))
+                    { graph: base, impl_result: impl_result, ref: impl_ref }
+                  },
+                  Valid => {
+                    let __ts := tr.trail(cfg.db, cfg.id, "graph_extended", str.join(["{\"round\":", int.to_str(round), ",\"new_nodes\":", int.to_str(list.len(news)), ",\"total_nodes\":", int.to_str(list.len(graph.node_ids(ext))), "}"], ""))
+                    let cache := cache_from_outcomes(impl_result.outcomes)
+                    let ext_phase := run_phase(ext, graph.Implementation, impl_ref, cache, cfg)
+                    let ext_ref := first_accepted_artifact(ext_phase.outcomes)
+                    let next_ref := if str.is_empty(ext_ref) {
+                      impl_ref
+                    } else {
+                      ext_ref
+                    }
+                    run_extensions(ext, ext_phase, next_ref, cfg, round + 1)
+                  },
+                },
+              }
+            }
+          }
+        },
+      }
+    }
+  }
+}
+
 # Full Intake → Design → Implementation → QA → Demo pass.
 # M3: Design produces a real SprintGraph used for all subsequent phases.
 # Re-planning: if the Architect emits a refined graph after Design, semantic
@@ -660,8 +793,12 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       }
       let __tph2 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Design\",\"to\":\"Implementation\"}")
       let __tpm2 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"Implementation\",\"grant\":\"", manifests.grant_summary_for_phase("Implementation"), "\"}"], ""))
-      let impl_result := run_phase(sprint_graph, graph.Implementation, design_ref, [], cfg)
-      let impl_ref := first_accepted_artifact(impl_result.outcomes)
+      let impl_result0 := run_phase(sprint_graph, graph.Implementation, design_ref, [], cfg)
+      let impl_ref0 := first_accepted_artifact(impl_result0.outcomes)
+      let ext := run_extensions(sprint_graph, impl_result0, impl_ref0, cfg, 1)
+      let sprint_graph := ext.graph
+      let impl_result := ext.impl_result
+      let impl_ref := ext.ref
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
       let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
       let qa_demo_nodes := graph.str_filter(graph.node_ids(sprint_graph), fn (id :: Str) -> Bool {

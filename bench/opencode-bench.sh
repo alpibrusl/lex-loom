@@ -30,12 +30,24 @@ ok()     { echo -e "  ${GREEN}✓${NC} $*"; }
 fail()   { echo -e "  ${RED}✗${NC} $*"; }
 dim()    { echo -e "  ${DIM}$*${NC}"; }
 
-# Models to test (Go plan)
+# Models to test (Go plan) — all run in thinking mode, tool_choice=auto required
 MODELS=(
   "deepseek-v4-flash"
   "deepseek-v4-pro"
   "qwen3.7-max"
+  "qwen3.7-plus"
+  "qwen3.6-plus"
+  "qwen3.5-plus"
+  "kimi-k2.7"
   "kimi-k2.6"
+  "minimax-m3"
+  "minimax-m2.7"
+  "glm-5.2"
+  "glm-5.1"
+  "mimo-v2.5-pro"
+  "mimo-v2.5"
+  "mimo-v2-pro"
+  "mimo-v2-omni"
 )
 
 # Task — simple enough to be achievable, hard enough to need real Lex/Python knowledge

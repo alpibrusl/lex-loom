@@ -8,7 +8,7 @@
 #   GET  /api/sprints/:id/digest  — tightened specs + seed-graph flag
 #
 # Run:
-#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent \
+#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
 #     src/web/server.lex serve_loom
 #
 # Environment:
@@ -237,7 +237,7 @@ fn handle_digest(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql
 }
 
 # ── POST /api/sprints (carries [env]) ─────────────────────────────────────────
-fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] resp.Response {
   match jv.parse(body) {
     Err(_) => resp.bad_request("invalid JSON"),
     Ok(j) => match open_loom_db(db_path) {
@@ -562,7 +562,7 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypto, random, concurrent] Unit {
+fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypto, random, concurrent, vcs] Unit {
   let port := parse_int_or_l(get_env_l("PORT", "8880"), 8880)
   let db_url := get_env_l("DB_URL", "")
   let db_path := if str.is_empty(db_url) {
@@ -577,7 +577,7 @@ fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypt
   }
   let r := build_loom_router(web_dir, db_path)
   let __p := io.print(str.join(["[lex-loom] web on :", int.to_str(port), "  db=", db_path], ""))
-  net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
+  net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Response {
     if req.method == "POST" and req.path == "/api/sprints" {
       let rsp := handle_launch_body(req.body, db_path)
       { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }

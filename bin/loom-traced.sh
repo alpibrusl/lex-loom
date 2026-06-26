@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SPRINT_ID="${SPRINT_ID:-sprint-1}"
-EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc
+EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs
 
 # `trace saved: <run_id>` is printed to STDERR; tee it through so the user still
 # sees live sprint output on stdout while we capture stderr for the run_id.

@@ -209,7 +209,7 @@ fn upload_trail(server :: Str, token :: Str, sprint_id :: Str, events :: List[dg
 }
 
 # ── Execute one cloud sprint ───────────────────────────────────────────────────
-fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :: Str, agents_json :: Str, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :: Str, agents_json :: Str, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let n_cloud := seed_agents_from_cloud(db, agents_json)
   let __seed := if n_cloud > 0 {
     let __l := io.print(str.join(["[cloud] seeded ", int.to_str(n_cloud), " agent(s) from cloud"], ""))
@@ -258,7 +258,7 @@ fn load_lex_trail(sprint_id :: Str) -> [sql, fs_write, time] List[dg.TrailRow] {
 }
 
 # ── One poll cycle (call repeatedly from a loop or cron) ──────────────────────
-fn poll_once(db :: conn.ConnDb, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn poll_once(db :: conn.ConnDb, server :: Str, token :: Str, max_calls :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   match poll(server, token) {
     PollError(e) => io.print(str.join(["[cloud] poll error: ", e], "")),
     NothingQueued => io.print("[cloud] nothing queued"),

@@ -155,7 +155,7 @@ fn max_expand_depth() -> Int {
   3
 }
 
-fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   match n.expand {
     Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
     None => invoke_node_attempt(n, input, cfg, 1, "", parent),
@@ -166,7 +166,7 @@ fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option
 # The child sprint shares the same DB and budget pool. Its trail events are
 # identifiable by child sprint id = "<parent_id>/<node_id>".
 # If the child sprint passes, the node is accepted; if it fails, denied.
-fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   if cfg.depth >= max_expand_depth() {
     let __tb := tr.trail(cfg.db, cfg.id, "budget_exhausted", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"max expand depth\",\"depth\":", int.to_str(cfg.depth), "}"], ""))
     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["expand refused: max depth (", int.to_str(max_expand_depth()), ") reached"], "") }
@@ -208,7 +208,7 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
   }
 }
 
-fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
     None => roles.for_role(n.role, cfg.model),
@@ -365,7 +365,7 @@ fn parse_assessment(resp :: Str) -> Assessment {
   }
 }
 
-fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Assessment {
+fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Assessment {
   match roles.assessor_agent(n.role, cfg.model) {
     assessor => {
       let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""))
@@ -376,7 +376,7 @@ fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, ti
 
 # Resolve a node's input, running the intake-review loop when enabled. Returns
 # the (possibly upstream-revised) input string to hand to the node.
-fn prepare_input(n :: graph.Node, input_ref :: Str, g :: graph.SprintGraph, cfg :: SprintCfg, parent :: Option[Str], round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Str {
+fn prepare_input(n :: graph.Node, input_ref :: Str, g :: graph.SprintGraph, cfg :: SprintCfg, parent :: Option[Str], round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Str {
   let input := resolve_input(cfg.db, input_ref)
   if cfg.review_transitions {
     if str.is_empty(input) {
@@ -414,7 +414,7 @@ fn prepare_input(n :: graph.Node, input_ref :: Str, g :: graph.SprintGraph, cfg 
   }
 }
 
-fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   match cache_get(cache, node_id) {
     Some(hash) => {
       let __ts := tr.trail(cfg.db, cfg.id, "node_reused", str.join(["{\"node\":\"", node_id, "\",\"artifact\":\"", hash, "\"}"], ""))
@@ -429,8 +429,8 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
   }
 }
 
-fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-  let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+  let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
     invoke_node_for_layer(node_id, g, input_ref, cache, cfg, parent)
   })
   let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
@@ -456,7 +456,7 @@ fn find_node_in_graph(g :: graph.SprintGraph, node_id :: Str) -> Option[graph.No
   })
 }
 
-fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read] Str {
+fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read, vcs] Str {
   if str.is_empty(input_ref) {
     ""
   } else {
@@ -468,12 +468,12 @@ fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read] Str {
 }
 
 # ── run_phase ─────────────────────────────────────────────────────────────────
-fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] PhaseResult {
+fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] PhaseResult {
   match graph.topo_sort(g) {
     Err(e) => { phase: p, outcomes: [], success: false },
     Ok(layers) => {
       let entry_parent := current_parent(cfg)
-      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] } {
+      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] } {
         if not acc.success {
           acc
         } else {
@@ -525,7 +525,7 @@ fn design_retry_prompt(prd :: Str, request :: Str, errors :: Str) -> Str {
 
 type DesignResult = DesignOk(graph.SprintGraph) | DesignFailed(Str)
 
-fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int, errors :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] DesignResult {
+fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int, errors :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] DesignResult {
   if attempts > max_design_retries() {
     DesignFailed(str.join(["Architect failed after ", int.to_str(max_design_retries()), " attempts. Last errors: ", errors], ""))
   } else {
@@ -585,7 +585,7 @@ fn max_qa_bounces() -> Int {
 # Returns both the final QA result and the latest impl result (possibly updated).
 type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
 
-fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
+fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
   let qa_passed := qa_result.success
   if qa_passed {
@@ -682,7 +682,7 @@ fn extension_prompt(request :: Str, artifact :: Str, current_graph_json :: Str) 
 # same way Design does, run only the new nodes, then recurse. Returns the final
 # graph + impl outcomes + result ref. Any rejection or fixed point ends the loop
 # with the inputs unchanged (the sprint proceeds on what it already has).
-fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, cfg :: SprintCfg, round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] ExtResult {
+fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, cfg :: SprintCfg, round :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] ExtResult {
   if not dynamic_enabled() {
     { graph: base, impl_result: impl_result, ref: impl_ref }
   } else {
@@ -754,7 +754,7 @@ fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_re
 # M3: Design produces a real SprintGraph used for all subsequent phases.
 # Re-planning: if the Architect emits a refined graph after Design, semantic
 # diff identifies which nodes need re-running.
-fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] SprintResult {
+fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] SprintResult {
   let __reg := tenant.register(cfg.db, cfg.id, cfg.request, "")
   let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request\":", jv.stringify(JStr(cfg.request)), ",\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
   let __tm := tr.trail(cfg.db, cfg.id, "sprint_manifest", manifests.sprint_manifest_json(cfg.id))

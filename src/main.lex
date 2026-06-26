@@ -10,12 +10,12 @@
 #
 # Usage (lex 0.9.8+ checks effects whole-program, so the read-only commands
 # need the same effect row as run_sprint_cmd — main.lex imports the orchestrator):
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
 #     src/main.lex run_sprint_cmd
 #
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_status
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_trail
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc src/main.lex sprint_digest
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs src/main.lex sprint_status
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs src/main.lex sprint_trail
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs src/main.lex sprint_digest
 #
 # Environment:
 #   DB_PATH       — SQLite file path         (default: loom.db)
@@ -115,7 +115,7 @@ fn init_db() -> [env, sql, fs_write] Unit {
 }
 
 # ── run_sprint_cmd ────────────────────────────────────────────────────────────
-fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let db_path := resolve_db_url()
   let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
@@ -155,7 +155,7 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
 # ── cloud_poll ────────────────────────────────────────────────────────────────
 # Poll Loom Cloud for a queued sprint, execute it, upload trail events.
 # Env: LOOM_SERVER (required), LOOM_RUNNER_TOKEN (required), DB_PATH, MAX_API_CALLS
-fn cloud_poll() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn cloud_poll() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let server := get_env("LOOM_SERVER", "")
   let token := get_env("LOOM_RUNNER_TOKEN", "")
   if str.is_empty(server) {

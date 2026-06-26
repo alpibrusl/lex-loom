@@ -14,5 +14,23 @@ jobs:
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
-      - name: lex ci
-        run: lex ci
+      # Equivalent to `lex ci` (pkg install + check --strict + fmt --check +
+      # test), but the test step grants the `vcs` effect (#5) — `lex ci` bundles
+      # test with a default effect set that doesn't include the new effect.
+      - name: Install deps
+        run: lex pkg install
+      - name: Check (strict)
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in $(find src tests examples -name '*.lex'); do
+            lex check --strict "$f" || fail=1
+          done
+          [ "$fail" -eq 0 ]
+      - name: Format check
+        run: lex fmt --check src tests examples
+      - name: Test
+        run: |
+          lex test --allow-effects \
+            concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs \
+            tests

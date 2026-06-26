@@ -31,7 +31,7 @@ import "std.bytes" as bytes
 
 import "std.int" as int
 
-import "std.proc" as proc
+import "std.process" as proc
 
 import "std.io" as io
 
@@ -95,7 +95,7 @@ fn has_fence(s :: Str) -> Bool {
 
 # Start each build attempt from a clean work_dir so stale files don't leak in.
 fn clear_work_dir() -> [proc] Unit {
-  let __ := proc.spawn("bash", ["-c", str.join(["rm -rf ", build_work_dir(), "/* 2>/dev/null; mkdir -p ", build_work_dir()], "")])
+  let __ := proc.run("bash", ["-c", str.join(["rm -rf ", build_work_dir(), "/* 2>/dev/null; mkdir -p ", build_work_dir()], "")])
   ()
 }
 
@@ -103,7 +103,7 @@ fn clear_work_dir() -> [proc] Unit {
 # filename — the format the QA agent extracts.
 fn recover_build_artifact() -> [proc] Str {
   let cmd := str.join(["cd ", build_work_dir(), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
-  match proc.spawn("bash", ["-c", cmd]) {
+  match proc.run("bash", ["-c", cmd]) {
     Err(_) => "",
     Ok(r) => r.stdout,
   }
@@ -124,13 +124,13 @@ fn build_system_prompt(def :: AgentDef, state_json :: Str, entries :: List[mem.M
 # stdin to proc_cmd, returns stdout (or stderr if stdout is empty).
 fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
   let full_input := str.join([def.system_prompt, "\n\n", msg_json], "")
-  match proc.spawn("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
+  match proc.run("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
     Err(msg) => str.concat("PROC_ERROR: mktemp failed: ", msg),
     Ok(mk) => {
       let path := str.trim(mk.stdout)
       let __w := io.write(path, full_input)
       let cmd := str.join([def.proc_cmd, " < ", path, "; echo '##PROC_EXIT:'$?"], "")
-      match proc.spawn("bash", ["-c", cmd]) {
+      match proc.run("bash", ["-c", cmd]) {
         Err(msg) => str.concat("PROC_ERROR: spawn failed: ", msg),
         Ok(r) => if str.contains(r.stdout, "##PROC_EXIT:0") {
           str.trim(str.replace(r.stdout, "##PROC_EXIT:0", ""))

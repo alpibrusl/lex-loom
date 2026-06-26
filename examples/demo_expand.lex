@@ -72,7 +72,7 @@ fn print_outcome(label :: Str, o :: orch.NodeOutcome) -> [io] Unit {
 }
 
 # ── Scenario 1: depth cap refusal (offline) ───────────────────────────────────
-fn demo_depth_cap() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn demo_depth_cap() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let db_path := get_env("DB_PATH", "/tmp/demo-expand.db")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("FATAL: ", e)),
@@ -88,7 +88,7 @@ fn demo_depth_cap() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
 }
 
 # ── Scenario 2: live child sprint (needs a model) ─────────────────────────────
-fn demo_live_child() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn demo_live_child() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let db_path := get_env("DB_PATH", "/tmp/demo-expand.db")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("FATAL: ", e)),

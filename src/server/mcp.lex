@@ -44,7 +44,7 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
   }
 }
 
-fn run_mcp_server() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn run_mcp_server() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let model := get_env("MODEL", "claude-haiku-4-5-20251001")
   let base_url := get_env("LOOM_BASE_URL", "http://localhost:9100")

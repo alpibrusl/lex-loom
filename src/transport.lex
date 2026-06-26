@@ -24,6 +24,8 @@ import "lex-jobs/src/jobs" as jobs
 
 import "lex-schema/json_value" as jv
 
+import "std.vcs" as vcs
+
 # ── Plane 4: Trail ────────────────────────────────────────────────────────────
 fn trail(db :: conn.ConnDb, sprint_id :: Str, event_kind :: Str, data :: Str) -> [sql, fs_write, time, random, crypto] Unit {
   trace.record(db, sprint_id, sprint_id, event_kind, data)
@@ -50,28 +52,62 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
+# Branch-per-sprint ref namespace in the vcs store (#5): one namespace per
+# sprint, keyed by node id → blob sha. e.g. "loom/sprint-portfolio-1".
+fn sprint_ns(sprint_id :: Str) -> Str {
+  str.concat("loom/sprint-", sprint_id)
+}
+
+# Mirror an artifact into the content-addressed vcs store + branch-per-sprint
+# ref (#5 / M6.1c). Best-effort: the SQLite row is the source of truth, so a
+# missing/unwritable store does not fail the put. The vcs blob sha is identical
+# to the SQLite hash (both crypto.sha256_str), so the two backends are
+# interchangeable by id — `lex` store tooling can read sprint artifacts, and
+# `vcs.ref_get(sprint_ns(id), node)` lists a sprint's outputs.
+fn mirror_vcs(sprint_id :: Str, node_id :: Str, content :: Str, hash :: Str) -> [vcs, fs_write, fs_read] Unit {
+  match vcs.put_blob(content) {
+    Err(_) => (),
+    Ok(_) => {
+      let __r := vcs.ref_set(sprint_ns(sprint_id), node_id, hash)
+      ()
+    },
+  }
+}
+
 # Content-addressed (#5 / M6.0): the hash is the SHA-256 of the content itself,
 # so identical content always yields the same id. INSERT OR IGNORE makes a
 # re-store of the same content idempotent (the first writer's sprint_id/node_id
 # metadata stays); the SHA is returned either way so callers get a stable ref.
-fn artifact_put(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, fs_write, time, random, crypto] Result[Str, Str] {
+# M6.1c: also mirrored into the vcs blob store + branch-per-sprint ref.
+fn artifact_put(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, fs_write, fs_read, time, random, crypto, vcs] Result[Str, Str] {
   let hash := crypto.sha256_str(content)
   let now := time.now_str()
   let q := str.join(["INSERT OR IGNORE INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('", sq(hash), "', '", sq(sprint_id), "', '", sq(node_id), "', '", sq(content), "', '", now, "')"], "")
   match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
-    Ok(_) => Ok(hash),
+    Ok(_) => {
+      let __m := mirror_vcs(sprint_id, node_id, content, hash)
+      Ok(hash)
+    },
   }
 }
 
-fn artifact_get(db :: conn.ConnDb, hash :: Str) -> [sql, fs_read] Result[Str, Str] {
-  let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
-  let rows :: Result[List[ArtifactRow], SqlError] := sql.query(db.handle, q, [])
-  match rows {
-    Err(e) => Err(e.message),
-    Ok(rs) => match list.head(rs) {
-      None => Err(str.concat("artifact not found: ", hash)),
-      Some(r) => Ok(r.content),
+# Read by content hash: try the vcs blob store first (cross-sprint, store-backed),
+# fall back to the SQLite artifacts table (offline / single-process). The sha is
+# the same in both, so either backend answers correctly.
+fn artifact_get(db :: conn.ConnDb, hash :: Str) -> [sql, fs_read, vcs] Result[Str, Str] {
+  match vcs.get_blob(hash) {
+    Ok(content) => Ok(content),
+    Err(_) => {
+      let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
+      let rows :: Result[List[ArtifactRow], SqlError] := sql.query(db.handle, q, [])
+      match rows {
+        Err(e) => Err(e.message),
+        Ok(rs) => match list.head(rs) {
+          None => Err(str.concat("artifact not found: ", hash)),
+          Some(r) => Ok(r.content),
+        },
+      }
     },
   }
 }

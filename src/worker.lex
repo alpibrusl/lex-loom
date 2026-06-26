@@ -57,7 +57,7 @@ fn get_env(key :: Str, fallback :: Str) -> [env] Str {
 
 # Parse and execute a single node-job payload.
 # Writes the result to node_results via transport.write_node_result.
-fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
+fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] jobs.WorkOutcome {
   match jv.parse(payload) {
     Err(_) => Fail("invalid JSON payload"),
     Ok(j) => {
@@ -180,7 +180,7 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   match jobs.try_claim(db.handle, queue) {
     Err(e) => io.print(str.concat("[loom/worker] claim error: ", e)),
     Ok(None) => {
@@ -199,7 +199,7 @@ fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, prov
   }
 }
 
-fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Unit {
+fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let model := get_env("MODEL", "claude-haiku-4-5-20251001")
   let poll_ms := match str.to_int(get_env("POLL_MS", "500")) {

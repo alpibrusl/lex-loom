@@ -271,39 +271,37 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                   let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
                   { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                 },
-                GateAllow => match (if gates.is_grounded(n.gate) {
+                GateAllow => match if gates.is_grounded(n.gate) {
                   runner.verify_compiles(n.role)
                 } else {
                   runner.verify_build_compiles(n.role)
-                }) {
-                Err(compile_err) => {
-                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
-                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
-                  if attempt > max_node_retries() {
-                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
-                  } else {
-                    let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                    invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
-                  }
+                } {
+                  Err(compile_err) => {
+                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                    let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
+                    if attempt > max_node_retries() {
+                      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
+                    } else {
+                      let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                      invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                    }
+                  },
+                  Ok(_) => {
+                    let __ge := if gates.is_grounded(n.gate) {
+                      tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                    } else {
+                      ()
+                    }
+                    match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                      Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                      Ok(hash) => {
+                        let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                        let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                        { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                      },
+                    }
+                  },
                 },
-                Ok(_) => {
-                  # Record grounded-gate evidence (#32): the gate passed because a
-                  # real tool verified the artifact, not because of a string check.
-                  let __ge := if gates.is_grounded(n.gate) {
-                    tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
-                  } else {
-                    ()
-                  }
-                  match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                    Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                    Ok(hash) => {
-                      let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                      let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                      { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-                    },
-                  }
-                },
-              },
               },
             }
           }
@@ -589,12 +587,7 @@ type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
 
 fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
-  # qa_passed must mean "the QA run fully succeeded" — every node attested.
-  # The old "any outcome attested" check let a passing build/pm node mask a
-  # denied qa node, so qa_passed was true while the sprint failed, and the
-  # bounce-back-to-Implementation loop never fired (phase_bounced=0).
   let qa_passed := qa_result.success
-
   if qa_passed {
     { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
   } else {
@@ -610,12 +603,6 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
           acc
         }
       })
-      # Bounce envelope: the build runner (runner.conv_from_msg) rebuilds this
-      # into a proper multi-turn conversation — prior code as the assistant's own
-      # turn, the QA critique as the next user turn — so the model edits its
-      # previous attempt instead of starting over. Delimiter-joined, NOT JSON:
-      # lex-schema's json parser is quadratic and blows the VM step limit on the
-      # multi-KB prior_code. str.split on the sentinel is linear.
       let bounce_input := str.join(["<<<LOOM_BOUNCE>>>", task_input, "<<<LOOM_SEP>>>", resolve_input(cfg.db, impl_ref), "<<<LOOM_SEP>>>", qa_denial], "")
       let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
       let new_impl_ref := match new_impl_ref_result {

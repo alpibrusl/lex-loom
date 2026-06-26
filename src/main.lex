@@ -49,6 +49,7 @@ import "./cast" as cast
 import "./pool_seed" as pool_seed
 
 import "./cloud" as cloud
+
 import "lex-trail/src/log" as tlog
 
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
@@ -322,37 +323,42 @@ fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
       let esc := str.replace(sprint_id, "'", "''")
       let __h := io.print(str.join(["Sprint report: ", sprint_id], ""))
       let __sep := io.print("──────────────────────────────────────")
-      # Count node_accepted events
       let qa := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_accepted'"], "")
       let qa_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qa, [])
       let accepted_count := match qa_rows {
         Err(_) => 0,
-        Ok(rs) => match list.head(rs) { None => 0, Some(r) => r.n },
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
       }
-      # Count node_denied events (each bounce is one denied event)
       let qd := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_denied'"], "")
       let qd_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qd, [])
       let denied_count := match qd_rows {
         Err(_) => 0,
-        Ok(rs) => match list.head(rs) { None => 0, Some(r) => r.n },
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
       }
-      # Count QA phase bounces (rounds of rework)
       let qb := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='phase_bounced'"], "")
       let qb_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qb, [])
       let bounce_count := match qb_rows {
         Err(_) => 0,
-        Ok(rs) => match list.head(rs) { None => 0, Some(r) => r.n },
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
       }
-      # Count node_retrying events (per-node retry attempts)
       let qr := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_retrying'"], "")
       let qr_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qr, [])
       let retry_count := match qr_rows {
         Err(_) => 0,
-        Ok(rs) => match list.head(rs) { None => 0, Some(r) => r.n },
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
       }
-      # Read final phase to determine pass/fail
-      # sprint_complete event: {"success":true,...} or {"success":false,...}
-      # sprint_failed event: emitted on fatal errors before completion
       let qp := str.join(["SELECT data_json FROM traces WHERE agent_id='", esc, "' AND (event_kind='sprint_complete' OR event_kind='sprint_failed') ORDER BY id DESC LIMIT 1"], "")
       let qp_rows :: Result[List[CompleteRow], SqlError] := sql.query(db.handle, qp, [])
       let outcome := match qp_rows {
@@ -370,7 +376,6 @@ fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
           },
         },
       }
-      # Determine QA pass attempt from phase_bounced count: attempt = bounces + 1
       let qa_attempt := bounce_count + 1
       let __r1 := io.print(str.join(["Outcome:         ", outcome], ""))
       let __r2 := io.print(str.join(["Nodes accepted:  ", int.to_str(accepted_count)], ""))

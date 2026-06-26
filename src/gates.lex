@@ -47,13 +47,6 @@ import "lex-schema/json_value" as jv
 # below + the orchestrator), never in the pure `evaluate`.
 type Lane = Formal | Testable | Judgeable(Str)
 
-# ── Grounded gates (#32) ──────────────────────────────────────────────────────
-#
-# A grounded gate names a deterministic, tool-backed check. Currently:
-#   "spec compiles"  — every source file the node produced must compile
-#                      (py_compile / lex check), verified in the node work dir.
-# Pure classifier — the orchestrator routes grounded gates through the effectful
-# runner check and records the tool evidence in the trail.
 fn is_grounded(gate :: Str) -> Bool {
   str.trim(gate) == "spec compiles"
 }
@@ -176,7 +169,6 @@ fn extract_verdict(output :: Str) -> Option[Str] {
   match list.head(list.tail(after_key)) {
     None => None,
     Some(after) => {
-      # `after` ~= ` : "PASS", ...` — split on the quote; element 1 is the value.
       let segs := str.split(after, "\"")
       list.head(list.tail(segs))
     },
@@ -233,9 +225,6 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                 }
               } else {
                 if str.starts_with(trimmed, "spec len-gt ") {
-                  # Take only the first token after "len-gt": architects sometimes
-                  # emit compound gates like "spec len-gt 200 && call X first",
-                  # where the trailing text is guidance, not part of the number.
                   let rest := str.trim(str.slice(trimmed, 12, str.len(trimmed)))
                   let n_str := match list.head(str.split(rest, " ")) {
                     Some(tok) => tok,

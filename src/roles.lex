@@ -70,29 +70,7 @@ fn make_run_server_tool() -> t.Tool {
       let port_str := int.to_str(port)
       let url := str.join(["http://localhost:", port_str, endpoint], "")
       let srv_log := str.join(["/tmp/loom-server-", port_str, ".log"], "")
-      let script := str.join([
-        "lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n",
-        "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n",
-        "sleep 1\n",
-        "# Detach server: redirect its stdout/stderr to a logfile so it does not\n",
-        "# hold this script's stdout pipe open (which would block the parent read).\n",
-        "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n",
-        "PID=$!\n",
-        "echo \"PID:$PID\"\n",
-        "OK=0\n",
-        "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n",
-        "  sleep 1\n",
-        "  RESP=$(curl -s --max-time 2 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n",
-        "done\n",
-        "if [ \"$OK\" = \"1\" ]; then\n",
-        "  echo \"READY\"\n",
-        "  echo \"RESPONSE:$RESP\"\n",
-        "  exit 0\n",
-        "fi\n",
-        "echo \"TIMEOUT\"\n",
-        "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n",
-        "exit 1"
-      ], "")
+      let script := str.join(["lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n", "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n", "sleep 1\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"PID:$PID\"\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {
@@ -100,7 +78,10 @@ fn make_run_server_tool() -> t.Tool {
           let ok := str.contains(combined, "READY")
           let pid_part := match list.head(list.tail(str.split(combined, "PID:"))) {
             None => "",
-            Some(s) => str.trim(match list.head(str.split(s, "\n")) { None => s, Some(line) => line }),
+            Some(s) => str.trim(match list.head(str.split(s, "\n")) {
+              None => s,
+              Some(line) => line,
+            }),
           }
           let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
             None => "",
@@ -341,24 +322,64 @@ fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) 
 fn lex_topic_for_request(request :: Str) -> Str {
   let low := str.to_lower(request)
   let has_http := str.contains(low, "rest") or str.contains(low, "api") or str.contains(low, "server") or str.contains(low, "endpoint") or str.contains(low, "route") or str.contains(low, "http")
-  let has_mcp  := str.contains(low, "mcp") or str.contains(low, "a2a") or str.contains(low, "agent2agent") or str.contains(low, "tool server") or str.contains(low, "skill")
-  let has_sql  := str.contains(low, "sql") or str.contains(low, "database") or str.contains(low, "sqlite") or str.contains(low, "persist") or str.contains(low, "store") or str.contains(low, "trail")
+  let has_mcp := str.contains(low, "mcp") or str.contains(low, "a2a") or str.contains(low, "agent2agent") or str.contains(low, "tool server") or str.contains(low, "skill")
+  let has_sql := str.contains(low, "sql") or str.contains(low, "database") or str.contains(low, "sqlite") or str.contains(low, "persist") or str.contains(low, "store") or str.contains(low, "trail")
   let has_agent := str.contains(low, "agent") or str.contains(low, "llm") or str.contains(low, "dispatch") or str.contains(low, "orchestrat")
   let has_stream := str.contains(low, "stream") or str.contains(low, "sse") or str.contains(low, "chunk")
-  let n := (if has_http { 1 } else { 0 }) + (if has_mcp { 1 } else { 0 }) + (if has_sql { 1 } else { 0 }) + (if has_agent { 1 } else { 0 }) + (if has_stream { 1 } else { 0 })
+  let n := if has_http {
+    1
+  } else {
+    0
+  } + if has_mcp {
+    1
+  } else {
+    0
+  } + if has_sql {
+    1
+  } else {
+    0
+  } + if has_agent {
+    1
+  } else {
+    0
+  } + if has_stream {
+    1
+  } else {
+    0
+  }
   if n >= 3 {
     "all"
   } else {
     if has_mcp {
-      if has_sql { "mcp" } else { "mcp" }
+      if has_sql {
+        "mcp"
+      } else {
+        "mcp"
+      }
     } else {
       if has_http {
-        if has_stream { "streaming" } else { if has_sql { "sql" } else { "http" } }
+        if has_stream {
+          "streaming"
+        } else {
+          if has_sql {
+            "sql"
+          } else {
+            "http"
+          }
+        }
       } else {
         if has_agent {
           "agent"
         } else {
-          if has_sql { "sql" } else { if has_stream { "streaming" } else { "core" } }
+          if has_sql {
+            "sql"
+          } else {
+            if has_stream {
+              "streaming"
+            } else {
+              "core"
+            }
+          }
         }
       }
     }
@@ -370,123 +391,18 @@ fn lex_topic_for_request(request :: Str) -> Str {
 fn architect_lex(model :: Str, request :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
   let topic := lex_topic_for_request(request)
-  let lex_hint := str.join([
-    "\n\nLEX CONTEXT HINT: This sprint targets the Lex language. When specifying Build nodes, ",
-    "include in the gate field: 'call lex_guidelines(topic=",
-    topic,
-    ") before writing any code'. ",
-    "Lex is NOT in the model's training data. The Build agent has lex_guidelines and lex_check tools. ",
-    "The QA agent has lex_check and lex_run tools.",
-  ], "")
-  let system_prompt := str.join([
-    "You are the Architect for a Lex language software sprint. ",
-    "Given a project request, output ONLY a JSON sprint graph — no prose, no markdown fences. ",
-    "Each node needs an id, a role ('build', 'qa', 'demo', 'scribe'), and a gate. ",
-    "Each edge needs from, to, and a handoff describing what artifact passes. ",
-    "Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],",
-    "\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}",
-    lex_hint,
-  ], "")
+  let lex_hint := str.join(["\n\nLEX CONTEXT HINT: This sprint targets the Lex language. When specifying Build nodes, ", "include in the gate field: 'call lex_guidelines(topic=", topic, ") before writing any code'. ", "Lex is NOT in the model's training data. The Build agent has lex_guidelines and lex_check tools. ", "The QA agent has lex_check and lex_run tools."], "")
+  let system_prompt := str.join(["You are the Architect for a Lex language software sprint. ", "Given a project request, output ONLY a JSON sprint graph — no prose, no markdown fences. ", "Each node needs an id, a role ('build', 'qa', 'demo', 'scribe'), and a gate. ", "Each edge needs from, to, and a handoff describing what artifact passes. ", "Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],", "\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}", lex_hint], "")
   { id: "loom-architect-lex", kind: "architect", system_prompt: system_prompt, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
 # ── System prompt helpers ─────────────────────────────────────────────────────
-
 fn pm_system_prompt() -> Str {
   "You are the Product Manager for a software sprint. Your job is to turn a raw request into a structured PRD that the Architect can design from.\n\nOUTPUT FORMAT — plain text with these sections (no JSON, no markdown fences):\n\n## Goal\nOne sentence: what the product does and who it is for.\n\n## User Stories\n- As a [user], I want [action] so that [outcome].\n(3-6 stories maximum)\n\n## Acceptance Criteria\nNumbered list of concrete, testable conditions. Be specific: file names, HTTP status codes, output format.\n\n## Out of Scope\nExplicit list of what this sprint does NOT include.\n\n## Tech Notes\nAny constraints: language preference (Python / Lex / both), deployment target, dependencies to avoid.\n\nKeep it tight. The Architect reads this — not a human executive."
 }
 
 fn architect_system_prompt() -> Str {
-  str.join([
-    "You are the Architect for a software sprint. You read the PM's PRD and output ONLY a JSON sprint graph — no prose, no markdown fences.\n\n",
-    "GRAPH SHAPE:\n",
-    "{\"id\":\"<sprint-id>\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}\n\n",
-    "AVAILABLE ROLES:\n",
-    "  pm          — Product Manager: raw request → PRD\n",
-    "  architect   — you; PRD → sprint graph\n",
-    "  ux_designer      — UX spec: IA, user flows, component inventory, a11y (no styling)\n",
-    "  brand_designer   — Visual design system: CSS custom-property tokens (colour/type/spacing)\n",
-    "  content_designer — UX writing: exact interface copy, keyed by location\n",
-    "  build       — Lex implementation (has lex_guidelines + lex_check tools)\n",
-    "  py_build    — Python implementation (writes Python files, runs via bash)\n",
-    "  fe_build    — Frontend: HTML/CSS/JS (reads UX spec + design tokens + content)\n",
-    "  devops      — Dockerfile, docker-compose, CI config\n",
-    "  qa          — Lex QA: lex_check + lex_run, emits JSON verdict\n",
-    "  py_qa       — Python QA: runs code + assertions, emits JSON verdict\n",
-    "  security    — OWASP review, blocks demo on critical findings\n",
-    "  docs        — README, API reference, usage examples\n",
-    "  launch      — Actually starts the built server, curls an endpoint, returns live JSON {ok,url,response}\n",
-    "  demo        — Stakeholder summary (non-technical), leads with Launch's live URL if available\n",
-    "  scribe      — Digest: lessons learned + tightened specs for sprint N+1\n\n",
-    "AVAILABLE LEX PACKAGES (for build nodes):\n",
-    "  std.net      — HTTP server (net.serve / net.serve_fn), HTTP client (net.get/post)\n",
-    "  std.sql      — SQLite queries (sql.open, sql.exec, sql.query)\n",
-    "  std.io       — file read/write, stdin/stdout\n",
-    "  std.str      — string operations\n",
-    "  std.list     — list operations (map, filter, fold)\n",
-    "  std.json     — JSON parse/stringify\n",
-    "  std.proc     — spawn subprocesses\n",
-    "  std.crypto   — Ed25519, HMAC, SHA-256, base64url\n",
-    "  lex-agent    — A2A protocol server (cap.inbound, srv.make_agent_def, card.make)\n",
-    "  lex-llm      — LLM agent loop (ag.run_loop, providers.*)\n",
-    "  lex-mcp      — MCP server: stdio (mcp.server.run), HTTP (http.run_http), dual (compose.serve_both)\n",
-    "  lex-mcp-client — connect to MCP servers, adapt tools for lex-llm agents\n",
-    "  lex-spec     — capability preconditions, spec gating, SMT export\n",
-    "  lex-trail    — append-only audit log (trail_log.open, trail_log.append)\n",
-    "  lex-guard    — budget tokens + spending guardrails\n",
-    "  lex-jose     — JWT/JWS/JWK (jwt.encode, jwt.decode, jws.sign_compact)\n",
-    "  lex-agent-llm — bridge: LLM loop → A2A skill (bridge.skill_of_loop)\n\n",
-    "AVAILABLE PYTHON PACKAGES (for py_build nodes):\n",
-    "  stdlib only  — http.server, argparse, json, sqlite3, pathlib, subprocess\n",
-    "  flask        — lightweight HTTP server (use for REST APIs)\n",
-    "  fastapi      — async REST API with auto docs (use for larger APIs)\n",
-    "  jinja2       — HTML templating\n",
-    "  markdown     — markdown → HTML conversion\n",
-    "  pytest       — test runner\n\n",
-    "GATE EXPRESSIONS:\n",
-    "  spec non-empty          — output must not be empty\n",
-    "  spec compiles           — GROUNDED: every source file the node produced must actually compile\n",
-    "                            (py_compile / lex check). Use for build/py_build/fe_build nodes —\n",
-    "                            this is a real tool check, not a string check. Prefer it over len-gt.\n",
-    "  spec json-verdict-pass  — output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS for qa/py_qa nodes)\n",
-    "  spec len-gt 200         — output longer than 200 chars (weak; prefer 'spec compiles' for code)\n",
-    "  spec len-gt 50          — output longer than 50 chars (for pm/demo/docs prose nodes)\n",
-    "  spec json               — output must be valid JSON (ALWAYS for launch nodes)\n\n",
-    "STANDARD GRAPH PATTERN:\n",
-    "  HTTP server task:  build → qa → launch → demo → scribe\n",
-    "  Library/CLI task:  build → qa → demo → scribe  (NO launch node)\n",
-    "  The launch node runs AFTER qa passes. Gate: 'spec json'. It starts the server and returns {ok,url,response}.\n",
-    "  demo reads launch output and leads with the live URL.\n",
-    "  CRITICAL: Only add a launch node if the task explicitly produces a running HTTP server.\n",
-    "  Pure libraries, CLI tools, data modules, and scripts do NOT need a launch node.\n\n",
-    "DUAL LAUNCH PATTERN (when building in BOTH Lex AND Python):\n",
-    "  build → qa → launch-lex (PORT=8080)  ↘\n",
-    "                                          demo → scribe\n",
-    "  py_build → py_qa → launch-py (PORT=8081) ↗\n\n",
-    "  - launch-lex gate: 'spec json — Lex server on PORT=8080'\n",
-    "  - launch-py gate: 'spec json — Python server on PORT=8081'\n",
-    "  - build/qa nodes: Lex uses env PORT (default 8080); py_build/py_qa: Python uses os.environ PORT (default 8081)\n",
-    "  - demo compares both live responses side by side\n\n",
-    "EXPAND NODES (node-as-loom):\n",
-    "  A node may carry an 'expand' field — a sub-task description that the orchestrator runs as a full child sprint.\n",
-    "  Use expand ONLY when a sub-task is large enough to need its own PM → build → QA → demo pipeline.\n",
-    "  An expand node replaces the LLM agent call with a recursive sprint. If the child sprint passes, the node is accepted.\n",
-    "  Expand node JSON shape: {\"id\":\"...\",\"role\":\"build\",\"gate\":\"spec json\",\"expand\":\"<sub-task description>\"}\n",
-    "  Rules for expand nodes:\n",
-    "  - gate MUST be 'spec json' or 'spec non-empty' (never 'spec len-gt' — too weak for a full sprint result)\n",
-    "  - max expand depth is 3 — do not nest expand nodes inside expand nodes unless the task demands it\n",
-    "  - Only use expand when the sub-task is independently deliverable and testable\n\n",
-    "RULES:\n",
-    "  - Every node must have a gate.\n",
-    "  - No cycles. All qa/py_qa nodes must use 'spec json-verdict-pass'. All launch nodes use 'spec json'.\n",
-    "  - demo writes PROSE, not JSON. demo gate MUST be 'spec len-gt 50' — NEVER 'spec json' (demo is not machine output).\n",
-    "  - pm/docs/scribe also write prose: use 'spec len-gt 50' or 'spec non-empty', never 'spec json'.\n",
-    "  - launch is ONLY for HTTP server tasks. Do NOT add a launch node for libraries, CLI tools, or data modules.\n",
-    "  - launch runs after qa, before demo. It gives demo the live URL.\n",
-    "  - demo must have launch (or at least qa) as an ancestor.\n",
-    "  - devops and docs run after QA, before or parallel to demo.\n",
-    "  - scribe is always last.",
-  ], "")
+  str.join(["You are the Architect for a software sprint. You read the PM's PRD and output ONLY a JSON sprint graph — no prose, no markdown fences.\n\n", "GRAPH SHAPE:\n", "{\"id\":\"<sprint-id>\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}\n\n", "AVAILABLE ROLES:\n", "  pm          — Product Manager: raw request → PRD\n", "  architect   — you; PRD → sprint graph\n", "  ux_designer      — UX spec: IA, user flows, component inventory, a11y (no styling)\n", "  brand_designer   — Visual design system: CSS custom-property tokens (colour/type/spacing)\n", "  content_designer — UX writing: exact interface copy, keyed by location\n", "  build       — Lex implementation (has lex_guidelines + lex_check tools)\n", "  py_build    — Python implementation (writes Python files, runs via bash)\n", "  fe_build    — Frontend: HTML/CSS/JS (reads UX spec + design tokens + content)\n", "  devops      — Dockerfile, docker-compose, CI config\n", "  qa          — Lex QA: lex_check + lex_run, emits JSON verdict\n", "  py_qa       — Python QA: runs code + assertions, emits JSON verdict\n", "  security    — OWASP review, blocks demo on critical findings\n", "  docs        — README, API reference, usage examples\n", "  launch      — Actually starts the built server, curls an endpoint, returns live JSON {ok,url,response}\n", "  demo        — Stakeholder summary (non-technical), leads with Launch's live URL if available\n", "  scribe      — Digest: lessons learned + tightened specs for sprint N+1\n\n", "AVAILABLE LEX PACKAGES (for build nodes):\n", "  std.net      — HTTP server (net.serve / net.serve_fn), HTTP client (net.get/post)\n", "  std.sql      — SQLite queries (sql.open, sql.exec, sql.query)\n", "  std.io       — file read/write, stdin/stdout\n", "  std.str      — string operations\n", "  std.list     — list operations (map, filter, fold)\n", "  std.json     — JSON parse/stringify\n", "  std.proc     — spawn subprocesses\n", "  std.crypto   — Ed25519, HMAC, SHA-256, base64url\n", "  lex-agent    — A2A protocol server (cap.inbound, srv.make_agent_def, card.make)\n", "  lex-llm      — LLM agent loop (ag.run_loop, providers.*)\n", "  lex-mcp      — MCP server: stdio (mcp.server.run), HTTP (http.run_http), dual (compose.serve_both)\n", "  lex-mcp-client — connect to MCP servers, adapt tools for lex-llm agents\n", "  lex-spec     — capability preconditions, spec gating, SMT export\n", "  lex-trail    — append-only audit log (trail_log.open, trail_log.append)\n", "  lex-guard    — budget tokens + spending guardrails\n", "  lex-jose     — JWT/JWS/JWK (jwt.encode, jwt.decode, jws.sign_compact)\n", "  lex-agent-llm — bridge: LLM loop → A2A skill (bridge.skill_of_loop)\n\n", "AVAILABLE PYTHON PACKAGES (for py_build nodes):\n", "  stdlib only  — http.server, argparse, json, sqlite3, pathlib, subprocess\n", "  flask        — lightweight HTTP server (use for REST APIs)\n", "  fastapi      — async REST API with auto docs (use for larger APIs)\n", "  jinja2       — HTML templating\n", "  markdown     — markdown → HTML conversion\n", "  pytest       — test runner\n\n", "GATE EXPRESSIONS:\n", "  spec non-empty          — output must not be empty\n", "  spec compiles           — GROUNDED: every source file the node produced must actually compile\n", "                            (py_compile / lex check). Use for build/py_build/fe_build nodes —\n", "                            this is a real tool check, not a string check. Prefer it over len-gt.\n", "  spec json-verdict-pass  — output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS for qa/py_qa nodes)\n", "  spec len-gt 200         — output longer than 200 chars (weak; prefer 'spec compiles' for code)\n", "  spec len-gt 50          — output longer than 50 chars (for pm/demo/docs prose nodes)\n", "  spec json               — output must be valid JSON (ALWAYS for launch nodes)\n\n", "STANDARD GRAPH PATTERN:\n", "  HTTP server task:  build → qa → launch → demo → scribe\n", "  Library/CLI task:  build → qa → demo → scribe  (NO launch node)\n", "  The launch node runs AFTER qa passes. Gate: 'spec json'. It starts the server and returns {ok,url,response}.\n", "  demo reads launch output and leads with the live URL.\n", "  CRITICAL: Only add a launch node if the task explicitly produces a running HTTP server.\n", "  Pure libraries, CLI tools, data modules, and scripts do NOT need a launch node.\n\n", "DUAL LAUNCH PATTERN (when building in BOTH Lex AND Python):\n", "  build → qa → launch-lex (PORT=8080)  ↘\n", "                                          demo → scribe\n", "  py_build → py_qa → launch-py (PORT=8081) ↗\n\n", "  - launch-lex gate: 'spec json — Lex server on PORT=8080'\n", "  - launch-py gate: 'spec json — Python server on PORT=8081'\n", "  - build/qa nodes: Lex uses env PORT (default 8080); py_build/py_qa: Python uses os.environ PORT (default 8081)\n", "  - demo compares both live responses side by side\n\n", "EXPAND NODES (node-as-loom):\n", "  A node may carry an 'expand' field — a sub-task description that the orchestrator runs as a full child sprint.\n", "  Use expand ONLY when a sub-task is large enough to need its own PM → build → QA → demo pipeline.\n", "  An expand node replaces the LLM agent call with a recursive sprint. If the child sprint passes, the node is accepted.\n", "  Expand node JSON shape: {\"id\":\"...\",\"role\":\"build\",\"gate\":\"spec json\",\"expand\":\"<sub-task description>\"}\n", "  Rules for expand nodes:\n", "  - gate MUST be 'spec json' or 'spec non-empty' (never 'spec len-gt' — too weak for a full sprint result)\n", "  - max expand depth is 3 — do not nest expand nodes inside expand nodes unless the task demands it\n", "  - Only use expand when the sub-task is independently deliverable and testable\n\n", "RULES:\n", "  - Every node must have a gate.\n", "  - No cycles. All qa/py_qa nodes must use 'spec json-verdict-pass'. All launch nodes use 'spec json'.\n", "  - demo writes PROSE, not JSON. demo gate MUST be 'spec len-gt 50' — NEVER 'spec json' (demo is not machine output).\n", "  - pm/docs/scribe also write prose: use 'spec len-gt 50' or 'spec non-empty', never 'spec json'.\n", "  - launch is ONLY for HTTP server tasks. Do NOT add a launch node for libraries, CLI tools, or data modules.\n", "  - launch runs after qa, before demo. It gives demo the live URL.\n", "  - demo must have launch (or at least qa) as an ancestor.\n", "  - devops and docs run after QA, before or parallel to demo.\n", "  - scribe is always last."], "")
 }
 
 fn qa_system_prompt() -> Str {
@@ -669,31 +585,31 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
                     if role == "ux_designer" {
                       Some(mk("loom-ux-designer", "ux_designer", ux_designer_system_prompt()))
                     } else {
-                    if role == "brand_designer" {
-                      Some(mk("loom-brand-designer", "brand_designer", brand_designer_system_prompt()))
-                    } else {
-                    if role == "content_designer" {
-                      Some(mk("loom-content-designer", "content_designer", content_designer_system_prompt()))
-                    } else {
-                    if role == "fe_build" {
-                      Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
-                    } else {
-                    if role == "launch" {
-                      Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: [make_run_server_tool()], proc_cmd: "", a2a_url: "" })
-                    } else {
-                    if role == "demo" {
-                      Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
-                    } else {
-                      if role == "scribe" {
-                        Some(mk("loom-scribe", "scribe", "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages."))
+                      if role == "brand_designer" {
+                        Some(mk("loom-brand-designer", "brand_designer", brand_designer_system_prompt()))
                       } else {
-                        None
+                        if role == "content_designer" {
+                          Some(mk("loom-content-designer", "content_designer", content_designer_system_prompt()))
+                        } else {
+                          if role == "fe_build" {
+                            Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
+                          } else {
+                            if role == "launch" {
+                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: [make_run_server_tool()], proc_cmd: "", a2a_url: "" })
+                            } else {
+                              if role == "demo" {
+                                Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
+                              } else {
+                                if role == "scribe" {
+                                  Some(mk("loom-scribe", "scribe", "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages."))
+                                } else {
+                                  None
+                                }
+                              }
+                            }
+                          }
+                        }
                       }
-                    }
-                    }
-                    }
-                    }
-                    }
                     }
                   }
                 }
@@ -738,31 +654,31 @@ fn for_role(role :: Str, model :: Str) -> [env] Option[runner.AgentDef] {
                     if role == "ux_designer" {
                       Some(ux_designer(model))
                     } else {
-                    if role == "brand_designer" {
-                      Some(brand_designer(model))
-                    } else {
-                    if role == "content_designer" {
-                      Some(content_designer(model))
-                    } else {
-                    if role == "fe_build" {
-                      Some(fe_build(model))
-                    } else {
-                    if role == "launch" {
-                      Some(launch(model))
-                    } else {
-                    if role == "demo" {
-                      Some(demo(model))
-                    } else {
-                      if role == "scribe" {
-                        Some(scribe(model))
+                      if role == "brand_designer" {
+                        Some(brand_designer(model))
                       } else {
-                        None
+                        if role == "content_designer" {
+                          Some(content_designer(model))
+                        } else {
+                          if role == "fe_build" {
+                            Some(fe_build(model))
+                          } else {
+                            if role == "launch" {
+                              Some(launch(model))
+                            } else {
+                              if role == "demo" {
+                                Some(demo(model))
+                              } else {
+                                if role == "scribe" {
+                                  Some(scribe(model))
+                                } else {
+                                  None
+                                }
+                              }
+                            }
+                          }
+                        }
                       }
-                    }
-                    }
-                    }
-                    }
-                    }
                     }
                   }
                 }

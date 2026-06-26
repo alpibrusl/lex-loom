@@ -56,8 +56,16 @@ fn open_db(path :: Str) -> [sql, fs_write] Result[conn.ConnDb, Str] {
 
 fn print_outcome(label :: Str, o :: orch.NodeOutcome) -> [io] Unit {
   let __h := io.print(str.join(["── ", label, " ──"], ""))
-  let __a := io.print(str.join(["  attested: ", if o.attested { "true" } else { "false" }], ""))
-  let __s := io.print(str.join(["  sealed:   ", if o.sealed { "true" } else { "false" }], ""))
+  let __a := io.print(str.join(["  attested: ", if o.attested {
+    "true"
+  } else {
+    "false"
+  }], ""))
+  let __s := io.print(str.join(["  sealed:   ", if o.sealed {
+    "true"
+  } else {
+    "false"
+  }], ""))
   let __ar := io.print(str.join(["  artifact: ", o.artifact], ""))
   let __r := io.print(str.join(["  reason:   ", o.reason], ""))
   ()
@@ -95,3 +103,4 @@ fn demo_live_child() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     },
   }
 }
+

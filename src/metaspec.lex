@@ -70,7 +70,6 @@ fn rule_qa_dominates_demo(g :: graph.SprintGraph) -> List[Violation] {
     if str_role_is(n.role, "qa") {
       list.concat(acc, [n])
     } else {
-      # py_qa also counts as a QA node (starts_with "py_qa", not "qa")
       if n.role == "py_qa" {
         list.concat(acc, [n])
       } else {

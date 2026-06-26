@@ -169,8 +169,6 @@ fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
     } else {
       "lex"
     }
-    # Loop over *.<ext>; fail loud on the first that doesn't compile; also fail
-    # if no source files were produced at all (prose-only output).
     let script := str.join(["cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; echo OK"], "")
     match proc.run("bash", ["-c", script]) {
       Err(msg) => Err(str.concat("compile check could not run: ", msg)),
@@ -325,9 +323,6 @@ fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
     false
   }
   if is_bounce {
-    # Linear split on the sentinel — no JSON parser (which is quadratic and
-    # blows the VM step limit on multi-KB prior_code). Layout:
-    # <<<LOOM_BOUNCE>>>task<<<LOOM_SEP>>>prior_code<<<LOOM_SEP>>>qa_feedback
     let body := str.slice(msg_json, 17, str.len(msg_json))
     let parts := str.split(body, "<<<LOOM_SEP>>>")
     let task := nth_or_empty(parts, 0)

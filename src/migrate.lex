@@ -67,6 +67,18 @@ fn ddl_attention_queue_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_aq_oracle_verdict ON attention_queue(oracle, verdict)"
 }
 
+# sprint_runs — maps a sprint_id to the native `lex run --trace` run_id (#7),
+# so a finished sprint can be inspected with `lex trace <run_id>` and re-run
+# with `lex replay <run_id> ... --override`. A sprint may be traced more than
+# once (re-runs); the latest row by created_at is the canonical native run.
+fn ddl_sprint_runs() -> Str {
+  "CREATE TABLE IF NOT EXISTS sprint_runs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, run_id TEXT NOT NULL, created_at TEXT NOT NULL)"
+}
+
+fn ddl_sprint_runs_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_sprint_runs_sprint ON sprint_runs(sprint_id, created_at)"
+}
+
 fn exec_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Result[Unit, Str] {
   match sql.exec(db, stmt, []) {
     Err(e) => Err(e.message),
@@ -128,7 +140,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __up := run_upgrades(db)

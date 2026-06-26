@@ -52,7 +52,11 @@ import "./cloud" as cloud
 
 import "lex-trail/src/log" as tlog
 
+import "std.time" as time
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
+
+type RunRow = { run_id :: Str }
 
 type NrRow = { node_id :: Str, phase :: Str, accepted :: Int, artifact :: Str, reason :: Str }
 
@@ -286,6 +290,56 @@ fn sprint_status() -> [env, io, sql, fs_read, fs_write] Unit {
         io.print("Digest: not yet produced")
       }
       ()
+    },
+  }
+}
+
+# ── link_native_run ───────────────────────────────────────────────────────────
+# Record sprint_id → native `lex run --trace` run_id (#7). Called by the
+# bin/loom-traced.sh wrapper after a traced sprint, with RUN_ID in the env.
+# Idempotent on run_id (PRIMARY KEY); a re-run gets a new run_id → a new row.
+fn link_native_run() -> [env, io, sql, fs_read, fs_write, time] Unit {
+  let db_path := resolve_db_url()
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  let run_id := get_env("RUN_ID", "")
+  if str.is_empty(run_id) {
+    io.print("[loom] link_native_run: RUN_ID not set — nothing to link")
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[loom] FATAL: ", e)),
+      Ok(db) => {
+        let esc_s := str.replace(sprint_id, "'", "''")
+        let esc_r := str.replace(run_id, "'", "''")
+        let now := time.now_str()
+        let q := str.join(["INSERT OR REPLACE INTO sprint_runs (id, sprint_id, run_id, created_at) VALUES ('", esc_r, "','", esc_s, "','", esc_r, "','", now, "')"], "")
+        let __ins := sql.exec(db.handle, q, [])
+        let __p := io.print(str.join(["[loom] linked sprint ", sprint_id, " → native run ", run_id], ""))
+        ()
+      },
+    }
+  }
+}
+
+# ── sprint_run ────────────────────────────────────────────────────────────────
+# Print ONLY the latest native run_id for SPRINT_ID (empty line if none), so
+# bin/loom-replay.sh can capture it. Use `lex trace <run_id>` /
+# `lex replay <run_id> src/main.lex run_sprint_cmd --override NODE=JSON`.
+fn sprint_run() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  match conn.open(db_path) {
+    Err(_) => io.print(""),
+    Ok(db) => {
+      let esc := str.replace(sprint_id, "'", "''")
+      let q := str.join(["SELECT run_id FROM sprint_runs WHERE sprint_id='", esc, "' ORDER BY created_at DESC LIMIT 1"], "")
+      let r :: Result[List[RunRow], SqlError] := sql.query(db.handle, q, [])
+      match r {
+        Err(_) => io.print(""),
+        Ok(rs) => match list.head(rs) {
+          None => io.print(""),
+          Some(row) => io.print(row.run_id),
+        },
+      }
     },
   }
 }

@@ -61,7 +61,9 @@ type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: 
 
 # trail_log: the per-sprint lex-trail log (#7). None when the trail DB
 # could not be opened; all emit_* helpers no-op in that case.
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool }
+# depth: how many expand-node levels deep we are (0 = top-level sprint).
+# Capped at max_expand_depth() to prevent runaway recursion (#35).
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool, depth :: Int }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -147,8 +149,63 @@ fn max_node_retries() -> Int {
   3
 }
 
+# Max recursive expansion depth (#35). At depth 3 a top-level sprint can
+# expand into sub-sprints that themselves expand — 3 levels total.
+fn max_expand_depth() -> Int {
+  3
+}
+
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
-  invoke_node_attempt(n, input, cfg, 1, "", parent)
+  match n.expand {
+    Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
+    None => invoke_node_attempt(n, input, cfg, 1, "", parent),
+  }
+}
+
+# Run the node as a child sprint (#35 — node-as-loom / recursive nodes).
+# The child sprint shares the same DB and budget pool. Its trail events are
+# identifiable by child sprint id = "<parent_id>/<node_id>".
+# If the child sprint passes, the node is accepted; if it fails, denied.
+fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
+  if cfg.depth >= max_expand_depth() {
+    let __tb := tr.trail(cfg.db, cfg.id, "budget_exhausted", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"max expand depth\",\"depth\":", int.to_str(cfg.depth), "}"], ""))
+    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["expand refused: max depth (", int.to_str(max_expand_depth()), ") reached"], "") }
+  } else {
+    let child_id := str.join([cfg.id, "/", n.id], "")
+    let child_request := if str.is_empty(input) {
+      subtask
+    } else {
+      str.join([subtask, "\n\nContext from parent sprint:\n", input], "")
+    }
+    let __te := tr.trail(cfg.db, cfg.id, "node_expand_started", str.join(["{\"node\":\"", n.id, "\",\"child_sprint\":\"", child_id, "\",\"depth\":", int.to_str(cfg.depth + 1), "}"], ""))
+    let started_id := emit_node_started(cfg, parent, n.id, n.role, 1)
+    let child_cfg := { id: child_id, request: child_request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cast.empty_roster(), trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth + 1 }
+    let child_result :: SprintResult := run_sprint(child_cfg)
+    let result_json := str.join(["{\"success\":", if child_result.success {
+      "true"
+    } else {
+      "false"
+    }, ",\"sprint_id\":\"", child_id, "\",\"depth\":", int.to_str(cfg.depth + 1), "}"], "")
+    let __tc := tr.trail(cfg.db, cfg.id, "node_expand_complete", str.join(["{\"node\":\"", n.id, "\",\"child_sprint\":\"", child_id, "\",\"success\":", if child_result.success {
+      "true"
+    } else {
+      "false"
+    }, "}"], ""))
+    if child_result.success {
+      match tr.artifact_put(cfg.db, cfg.id, n.id, result_json) {
+        Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+        Ok(hash) => {
+          let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+          let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+          { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+        },
+      }
+    } else {
+      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"child sprint failed\"}"], ""))
+      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, child_result.summary, 1)
+      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["child sprint failed: ", child_result.summary], "") }
+    }
+  }
 }
 
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] NodeOutcome {
@@ -588,8 +645,8 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       Some(llog)
     },
   }
-  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions }
-  let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "pm", gate: "spec len-gt 50" }], edges: [] }
+  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions, depth: cfg.depth }
+  let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "pm", gate: "spec len-gt 50", expand: None }], edges: [] }
   let intake_result := run_phase(intake_graph, graph.Intake, cfg.request, [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
   let prd := resolve_input(cfg.db, intake_ref)
@@ -606,7 +663,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let design_ref := intake_ref
       let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
-      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions }
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth }
       let __ltgv := match llog_opt {
         None => (),
         Some(log) => {
@@ -631,7 +688,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }
       })
       let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
-        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass" }, { id: "demo", role: "demo", gate: "spec non-empty" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
       } else {
         sprint_graph
       }

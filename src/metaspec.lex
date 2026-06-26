@@ -198,19 +198,36 @@ fn rule_gates_well_formed(g :: graph.SprintGraph) -> List[Violation] {
   })
 }
 
+# ── Rule 9: expand nodes must use a gatable gate (#35) ───────────────────────
+# An expand node runs a full child sprint; its gate is evaluated against the
+# child sprint result JSON. It must use a real gate (not len-gt which is a
+# vibe check) so the expansion is honestly auditable.
+fn rule_expand_gates(g :: graph.SprintGraph) -> List[Violation] {
+  list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+    match n.expand {
+      None => acc,
+      Some(_) => if str.starts_with(n.gate, "spec len-gt") {
+        list.concat(acc, [{ rule: "expand-gate", message: str.join(["expand node ", n.id, " uses weak gate '", n.gate, "' — use 'spec json' or stronger"], "") }])
+      } else {
+        acc
+      },
+    }
+  })
+}
+
 # ── Public API ────────────────────────────────────────────────────────────────
 fn check(g :: graph.SprintGraph) -> MetaspecResult
   examples {
-    check({ id: "g0", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec non-empty" }], edges: [] }) => Valid,
+    check({ id: "g0", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec non-empty", expand: None }], edges: [] }) => Valid,
     check({ id: "g1", phase: graph.Intake, nodes: [], edges: [] }) => Invalid([{ rule: "non-empty", message: "SprintGraph has no nodes" }]),
-    check({ id: "g2", phase: graph.QA, nodes: [{ id: "d", role: "demo", gate: "spec non-empty" }], edges: [] }) => Invalid([{ rule: "qa-dominates-demo", message: "demo node d has no qa node ancestor (cannot demo unverified work)" }]),
-    check({ id: "g3", phase: graph.QA, nodes: [{ id: "q", role: "qa", gate: "spec non-empty" }, { id: "d", role: "demo", gate: "spec non-empty" }], edges: [{ from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
-    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty" }, { id: "b", role: "qa", gate: "spec non-empty" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
-    check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
-    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }])
+    check({ id: "g2", phase: graph.QA, nodes: [{ id: "d", role: "demo", gate: "spec non-empty", expand: None }], edges: [] }) => Invalid([{ rule: "qa-dominates-demo", message: "demo node d has no qa node ancestor (cannot demo unverified work)" }]),
+    check({ id: "g3", phase: graph.QA, nodes: [{ id: "q", role: "qa", gate: "spec non-empty", expand: None }, { id: "d", role: "demo", gate: "spec non-empty", expand: None }], edges: [{ from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
+    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None }, { id: "b", role: "qa", gate: "spec non-empty", expand: None }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
+    check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
+    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

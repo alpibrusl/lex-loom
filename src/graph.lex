@@ -11,7 +11,10 @@ import "./phase" as ph
 # ── Types ────────────────────────────────────────────────────────────────────
 type Phase = ph.Phase
 
-type Node = { id :: Str, role :: Str, gate :: Str }
+# `expand` is an optional sub-task description. When set, the orchestrator
+# runs a child sprint on the sub-task instead of invoking an LLM agent.
+# The child sprint must pass for the node to be accepted (#35).
+type Node = { id :: Str, role :: Str, gate :: Str, expand :: Option[Str] }
 
 # `handoff` is the schema source validated by lex-schema at runtime.
 # On the wire only a content-hash ref travels, not the payload itself.
@@ -133,7 +136,7 @@ fn validate_edge_refs(g :: SprintGraph) -> Result[Unit, Str] {
 # (use metaspec iteration budgets to allow bounded cycles).
 fn topo_sort(g :: SprintGraph) -> Result[List[List[Str]], Str]
   examples {
-    topo_sort({ id: "g5", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }, { id: "b", role: "test", gate: "spec true" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }] }) => Ok([["a"], ["b"]])
+    topo_sort({ id: "g5", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true", expand: None }, { id: "b", role: "test", gate: "spec true", expand: None }], edges: [{ from: "a", to: "b", handoff: "schema {}" }] }) => Ok([["a"], ["b"]])
   }
 {
   topo_step(g, node_ids(g), [])
@@ -169,10 +172,10 @@ fn topo_step(g :: SprintGraph, remaining :: List[Str], acc :: List[List[Str]]) -
 fn validate(g :: SprintGraph) -> Result[Unit, Str]
   examples {
     validate({ id: "g0", phase: Intake, nodes: [], edges: [] }) => Ok(()),
-    validate({ id: "g1", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true" }, { id: "n1", role: "test", gate: "spec true" }], edges: [] }) => Err("duplicate node id: n1"),
-    validate({ id: "g2", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "" }], edges: [] }) => Err("node n1 has no gate (ungated output not allowed)"),
-    validate({ id: "g3", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true" }], edges: [{ from: "n1", to: "n2", handoff: "schema {}" }] }) => Err("edge references unknown target node: n2"),
-    validate({ id: "g4", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }, { id: "b", role: "test", gate: "spec true" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Err("cycle detected in SprintGraph — add an iteration budget to allow bounded cycles")
+    validate({ id: "g1", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true", expand: None }, { id: "n1", role: "test", gate: "spec true", expand: None }], edges: [] }) => Err("duplicate node id: n1"),
+    validate({ id: "g2", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "", expand: None }], edges: [] }) => Err("node n1 has no gate (ungated output not allowed)"),
+    validate({ id: "g3", phase: Intake, nodes: [{ id: "n1", role: "build", gate: "spec true", expand: None }], edges: [{ from: "n1", to: "n2", handoff: "schema {}" }] }) => Err("edge references unknown target node: n2"),
+    validate({ id: "g4", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec true", expand: None }, { id: "b", role: "test", gate: "spec true", expand: None }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Err("cycle detected in SprintGraph — add an iteration budget to allow bounded cycles")
   }
 {
   match validate_unique_ids(g) {
@@ -264,10 +267,18 @@ fn node_from_json(j :: jv.Json) -> Result[Node, Str] {
     Some(JStr(s)) => s,
     _ => "",
   }
+  let expand := match jv.get_field(j, "expand") {
+    Some(JStr(s)) => if str.is_empty(str.trim(s)) {
+      None
+    } else {
+      Some(s)
+    },
+    _ => None,
+  }
   if str.is_empty(id) {
     Err("node missing id field")
   } else {
-    Ok({ id: id, role: role, gate: gate })
+    Ok({ id: id, role: role, gate: gate, expand: expand })
   }
 }
 

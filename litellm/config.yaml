@@ -113,6 +113,53 @@ model_list:
     litellm_params:
       model: chatgpt/gpt-5.3-codex
 
+  # ── OpenCode Go plan ───────────────────────────────────────────────────────
+  # Set OPENCODE_API_KEY=$(cat ~/.credentials/opencode/key) before compose up.
+  # LiteLLM merges reasoning_content into content automatically, so DeepSeek
+  # thinking mode works without any per-model adapter changes.
+  #
+  # Full Go plan model list: deepseek-v4-flash, deepseek-v4-pro, qwen3.7-max,
+  # qwen3.5-plus, kimi-k2.6, minimax-m3, glm-5.1, mimo-v2-pro, mimo-v2-omni
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      merge_reasoning_content_in_choices: true
+
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: openai/deepseek-v4-pro
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      merge_reasoning_content_in_choices: true
+
+  - model_name: qwen3.7-max
+    litellm_params:
+      model: openai/qwen3.7-max
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+
+  - model_name: qwen3.5-plus
+    litellm_params:
+      model: openai/qwen3.5-plus
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+
+  - model_name: kimi-k2.6
+    litellm_params:
+      model: openai/kimi-k2.6
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+
+  - model_name: minimax-m3
+    litellm_params:
+      model: openai/minimax-m3
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      merge_reasoning_content_in_choices: true
+
   # ── Google Gemini API key (optional) ──────────────────────────────────────
   # - model_name: gemini-2.5-flash
   #   litellm_params:

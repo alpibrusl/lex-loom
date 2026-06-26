@@ -23,7 +23,7 @@ import "lex-schema/json_value" as jv
 
 import "lex-schema/error" as e
 
-import "std.proc" as proc
+import "std.process" as proc
 
 fn work_dir() -> Str {
   "/tmp/loom-lex-work"
@@ -63,12 +63,12 @@ fn make_lex_check_tool() -> t.Tool {
       _ => "",
     }
     let path := str.join([dir, "/", filename], "")
-    match proc.spawn("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+    match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
       Ok(_) => {
         let __w := io.write(path, code)
         let cmd := str.join(["${LEX:-lex} check ", path, " 2>&1; echo '##EXIT:'$?"], "")
-        match proc.spawn("bash", ["-c", cmd]) {
+        match proc.run("bash", ["-c", cmd]) {
           Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
           Ok(r) => {
             let combined := str.concat(r.stdout, r.stderr)
@@ -107,7 +107,7 @@ fn make_lex_run_tool() -> t.Tool {
     }
     let path := str.join([dir, "/", filename], "")
     let cmd := str.join(["${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net ", path, " ", fn_name, " ", extra, " 2>&1; echo '##EXIT:'$?"], "")
-    match proc.spawn("bash", ["-c", cmd]) {
+    match proc.run("bash", ["-c", cmd]) {
       Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
       Ok(r) => {
         let combined := str.concat(r.stdout, r.stderr)

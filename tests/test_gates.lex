@@ -82,8 +82,33 @@ fn test_unknown_gate_falls_back_to_non_empty() -> Result[Unit, Str] {
   allow("unknown gate with content", "spec whatever-unknown", "some output")
 }
 
+# ── Grounded-gate classifier (#32) ────────────────────────────────────────────
+fn is_grounded_eq(label :: Str, gate :: Str, expected :: Bool) -> Result[Unit, Str] {
+  if gates.is_grounded(gate) == expected {
+    Ok(())
+  } else {
+    Err(str.concat(label, ": is_grounded mismatch"))
+  }
+}
+
+fn test_compiles_is_grounded() -> Result[Unit, Str] {
+  is_grounded_eq("spec compiles", "spec compiles", true)
+}
+
+fn test_compiles_is_grounded_trimmed() -> Result[Unit, Str] {
+  is_grounded_eq("  spec compiles  ", "  spec compiles  ", true)
+}
+
+fn test_formal_gates_not_grounded() -> Result[Unit, Str] {
+  is_grounded_eq("spec len-gt 50", "spec len-gt 50", false)
+}
+
+fn test_json_gate_not_grounded() -> Result[Unit, Str] {
+  is_grounded_eq("spec json", "spec json", false)
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded()]
 }
 
 fn run_all() -> Unit {

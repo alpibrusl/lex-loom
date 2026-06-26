@@ -50,6 +50,8 @@ import "./pool_seed" as pool_seed
 
 import "./cloud" as cloud
 
+import "lex-trail/src/log" as tlog
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type NrRow = { node_id :: Str, phase :: Str, accepted :: Int, artifact :: Str, reason :: Str }
@@ -127,7 +129,13 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
       } else {
         io.print(str.join(["[loom] ", int.to_str(list.len(prior_specs)), " tightened spec(s) from prior sprint loaded"], ""))
       }
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: None }
+      let review := if get_env("REVIEW_TRANSITIONS", "") == "1" {
+        true
+      } else {
+        get_env("REVIEW_TRANSITIONS", "") == "true"
+      }
+      let trail_log_none :: Option[tlog.Log] := None
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0 }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"
@@ -300,6 +308,87 @@ fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
   }
 }
 
+# ── sprint_report ─────────────────────────────────────────────────────────────
+# Trail-derived human-facing summary (#34). Every claim is backed by a real
+# trail query — no hardcoded "attempt #1" or "Sprint N passed" strings.
+#
+# Usage:
+#   SPRINT_ID=sprint-1 lex run --allow-effects ... src/main.lex sprint_report
+fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  match open_db(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => {
+      let esc := str.replace(sprint_id, "'", "''")
+      let __h := io.print(str.join(["Sprint report: ", sprint_id], ""))
+      let __sep := io.print("──────────────────────────────────────")
+      let qa := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_accepted'"], "")
+      let qa_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qa, [])
+      let accepted_count := match qa_rows {
+        Err(_) => 0,
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
+      }
+      let qd := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_denied'"], "")
+      let qd_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qd, [])
+      let denied_count := match qd_rows {
+        Err(_) => 0,
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
+      }
+      let qb := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='phase_bounced'"], "")
+      let qb_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qb, [])
+      let bounce_count := match qb_rows {
+        Err(_) => 0,
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
+      }
+      let qr := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", esc, "' AND event_kind='node_retrying'"], "")
+      let qr_rows :: Result[List[TrailCountRow], SqlError] := sql.query(db.handle, qr, [])
+      let retry_count := match qr_rows {
+        Err(_) => 0,
+        Ok(rs) => match list.head(rs) {
+          None => 0,
+          Some(r) => r.n,
+        },
+      }
+      let qp := str.join(["SELECT data_json FROM traces WHERE agent_id='", esc, "' AND (event_kind='sprint_complete' OR event_kind='sprint_failed') ORDER BY id DESC LIMIT 1"], "")
+      let qp_rows :: Result[List[CompleteRow], SqlError] := sql.query(db.handle, qp, [])
+      let outcome := match qp_rows {
+        Err(_) => "unknown",
+        Ok(rs) => match list.head(rs) {
+          None => "in-progress",
+          Some(r) => if str.contains(r.data_json, "\"success\":true") {
+            "PASSED"
+          } else {
+            if str.contains(r.data_json, "\"success\":false") {
+              "FAILED"
+            } else {
+              "FAILED"
+            }
+          },
+        },
+      }
+      let qa_attempt := bounce_count + 1
+      let __r1 := io.print(str.join(["Outcome:         ", outcome], ""))
+      let __r2 := io.print(str.join(["Nodes accepted:  ", int.to_str(accepted_count)], ""))
+      let __r3 := io.print(str.join(["Nodes denied:    ", int.to_str(denied_count), " (gate bounces)"], ""))
+      let __r4 := io.print(str.join(["Node retries:    ", int.to_str(retry_count)], ""))
+      let __r5 := io.print(str.join(["QA pass attempt: #", int.to_str(qa_attempt), " (", int.to_str(bounce_count), " rework round(s))"], ""))
+      let __sep2 := io.print("──────────────────────────────────────")
+      let __note := io.print("(all figures derived from trail — no hardcoded claims)")
+      ()
+    },
+  }
+}
+
 # ── sprint_digest ─────────────────────────────────────────────────────────────
 fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
@@ -323,7 +412,7 @@ fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
           None => io.print("\nNo seed graph produced."),
           Some(g) => {
             let __sg := io.print(str.join(["\nSeed graph for next sprint (", int.to_str(list.len(g.nodes)), " nodes):"], ""))
-            let __sn := list.map(g.nodes, fn (n :: { id :: Str, role :: Str, gate :: Str }) -> [io] Unit {
+            let __sn := list.map(g.nodes, fn (n :: { id :: Str, role :: Str, gate :: Str, expand :: Option[Str] }) -> [io] Unit {
               io.print(str.join(["  [", n.role, "] ", n.id, "  gate: ", n.gate], ""))
             })
             ()

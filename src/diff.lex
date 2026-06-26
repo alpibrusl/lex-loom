@@ -122,7 +122,7 @@ fn diff_edges(old_edges :: List[graph.Edge], new_edges :: List[graph.Edge]) -> L
 
 fn diff(old :: graph.SprintGraph, new :: graph.SprintGraph) -> GraphDiff
   examples {
-    diff({ id: "g", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }], edges: [] }, { id: "g", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec true" }], edges: [] }) => { node_diffs: [], edge_diffs: [] }
+    diff({ id: "g", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec true", expand: None }], edges: [] }, { id: "g", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec true", expand: None }], edges: [] }) => { node_diffs: [], edge_diffs: [] }
   }
 {
   { node_diffs: diff_nodes(old.nodes, new.nodes), edge_diffs: diff_edges(old.edges, new.edges) }

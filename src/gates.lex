@@ -35,10 +35,73 @@ import "lex-schema/json_value" as jv
 # Judgeable  — only a named oracle (human) can attest; cannot auto-seal.
 #
 # Gate syntax for each lane:
-#   Formal   : "spec <expr>"          (all existing spec gates)
+#   Formal   : "spec <expr>"          (all existing spec predicates)
+#   Grounded : "spec compiles"        (runs a real tool; verdict from tool result)
 #   Judgeable: "human <oracle-name>"  (product, tech-lead, security, …)
 #   Testable : anything else          (future: "test <suite>")
+#
+# Grounded gates (#32) are the predictability primitive: instead of asserting a
+# property of the output STRING (length, substring), they execute a tool against
+# the produced artifacts and take the verdict from ground truth. They require
+# effects, so they are evaluated on a separate effectful path (evaluate_grounded
+# below + the orchestrator), never in the pure `evaluate`.
 type Lane = Formal | Testable | Judgeable(Str)
+
+fn is_grounded(gate :: Str) -> Bool {
+  str.trim(gate) == "spec compiles"
+}
+
+# True iff `gate` is a recognized gate expression — i.e. `evaluate` has a real
+# rule for it and will NOT silently fall back to the non-empty default. The
+# metaspec uses this (#33) to reject graphs whose gates would otherwise pass on
+# a silent-allow. Keep in sync with the branches in `evaluate` below.
+fn is_well_formed(gate :: Str) -> Bool {
+  let g := str.trim(gate)
+  if g == "spec non-empty" {
+    true
+  } else {
+    if g == "spec compiles" {
+      true
+    } else {
+      if g == "spec json" {
+        true
+      } else {
+        if g == "spec json-verdict-pass" {
+          true
+        } else {
+          let has_arg := fn (prefix :: Str) -> Bool {
+            if str.starts_with(g, prefix) {
+              str.len(str.trim(str.slice(g, str.len(prefix), str.len(g)))) > 0
+            } else {
+              false
+            }
+          }
+          if has_arg("spec contains ") {
+            true
+          } else {
+            if has_arg("spec not-contains ") {
+              true
+            } else {
+              if has_arg("spec starts-with ") {
+                true
+              } else {
+                if has_arg("spec json-field ") {
+                  true
+                } else {
+                  if has_arg("spec len-gt ") {
+                    true
+                  } else {
+                    has_arg("human ")
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 fn classify(gate :: Str) -> Lane {
   let trimmed := str.trim(gate)
@@ -92,6 +155,26 @@ fn spec_len_gt(n :: Int) -> sp.Spec {
   spec_non_empty()
 }
 
+# Linear extraction of the `verdict` string from a QA agent's JSON-ish output.
+# We deliberately AVOID jv.parse here: lex-schema's parser is O(n²) and QA output
+# embeds large lex_check/lex_run tool results, which blows the VM's 10M-step
+# limit (par_map worker panic). str.split is linear. Returns the value of the
+# first "verdict" field, or None.
+#
+# TODO(v0.9.13): lex-schema #19 makes jv.parse O(n) (via str.char_at, lex
+# v0.9.13). Once loom's toolchain is on v0.9.13 + that lex-schema, this and the
+# orchestrator's delimiter bounce envelope can revert to plain jv.parse.
+fn extract_verdict(output :: Str) -> Option[Str] {
+  let after_key := str.split(output, "\"verdict\"")
+  match list.head(list.tail(after_key)) {
+    None => None,
+    Some(after) => {
+      let segs := str.split(after, "\"")
+      list.head(list.tail(segs))
+    },
+  }
+}
+
 # ── Gate DSL parser + evaluator ───────────────────────────────────────────────
 fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
   if str.is_empty(gate) {
@@ -142,7 +225,11 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                 }
               } else {
                 if str.starts_with(trimmed, "spec len-gt ") {
-                  let n_str := str.trim(str.slice(trimmed, 12, str.len(trimmed)))
+                  let rest := str.trim(str.slice(trimmed, 12, str.len(trimmed)))
+                  let n_str := match list.head(str.split(rest, " ")) {
+                    Some(tok) => tok,
+                    None => rest,
+                  }
                   match str.to_int(n_str) {
                     None => GateDeny(str.concat("invalid len-gt value: ", n_str)),
                     Some(n) => if str.len(output) > n {
@@ -153,16 +240,12 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                   }
                 } else {
                   if trimmed == "spec json-verdict-pass" {
-                    match jv.parse(output) {
-                      Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
-                      Ok(j) => match jv.get_field(j, "verdict") {
-                        None => GateDeny("JSON output missing 'verdict' field"),
-                        Some(JStr(v)) => if v == "PASS" {
-                          GateAllow
-                        } else {
-                          GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
-                        },
-                        Some(_) => GateDeny("'verdict' field is not a string"),
+                    match extract_verdict(output) {
+                      None => GateDeny("output missing 'verdict' field"),
+                      Some(v) => if v == "PASS" {
+                        GateAllow
+                      } else {
+                        GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
                       },
                     }
                   } else {

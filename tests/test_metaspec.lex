@@ -10,7 +10,7 @@ import "../src/metaspec" as meta
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
-  { id: id, role: role, gate: "spec true" }
+  { id: id, role: role, gate: "spec non-empty", expand: None }
 }
 
 fn edge(from :: Str, to :: Str) -> graph.Edge {
@@ -68,11 +68,11 @@ fn test_empty_fails_non_empty() -> Result[Unit, Str] {
 }
 
 fn test_ungated_fails() -> Result[Unit, Str] {
-  assert_has_rule("ungated node", "all-nodes-gated", g("m5", [{ id: "n1", role: "build", gate: "" }], []))
+  assert_has_rule("ungated node", "all-nodes-gated", g("m5", [{ id: "n1", role: "build", gate: "", expand: None }], []))
 }
 
 fn test_no_role_fails() -> Result[Unit, Str] {
-  assert_has_rule("no role", "all-nodes-have-role", g("m6", [{ id: "n1", role: "", gate: "spec true" }], []))
+  assert_has_rule("no role", "all-nodes-have-role", g("m6", [{ id: "n1", role: "", gate: "spec true", expand: None }], []))
 }
 
 fn test_no_handoff_fails() -> Result[Unit, Str] {
@@ -88,7 +88,24 @@ fn test_demo_without_qa_fails() -> Result[Unit, Str] {
 }
 
 fn test_indirect_qa_valid() -> Result[Unit, Str] {
-  assert_valid("indirect qa→review→demo", g("m10", [node("b", "build"), node("q", "qa"), node("r", "review"), node("d", "demo")], [edge("b", "q"), edge("q", "r"), edge("r", "d")]))
+  assert_valid("indirect qa→security→demo", g("m10", [node("b", "build"), node("q", "qa"), node("r", "security"), node("d", "demo")], [edge("b", "q"), edge("q", "r"), edge("r", "d")]))
+}
+
+# ── #33: role-resolution + gate-well-formedness ───────────────────────────────
+fn test_unknown_role_fails() -> Result[Unit, Str] {
+  assert_has_rule("hallucinated role", "roles-resolve", g("m12", [node("n1", "builder")], []))
+}
+
+fn test_known_roles_pass_resolution() -> Result[Unit, Str] {
+  assert_valid("launch is a known role", g("m13", [node("b", "build"), node("q", "qa"), node("l", "launch"), node("d", "demo")], [edge("b", "q"), edge("q", "l"), edge("l", "d")]))
+}
+
+fn test_unrecognized_gate_fails() -> Result[Unit, Str] {
+  assert_has_rule("garbage gate", "gates-well-formed", g("m14", [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None }], []))
+}
+
+fn test_grounded_gate_is_well_formed() -> Result[Unit, Str] {
+  assert_valid("spec compiles is well-formed", g("m15", [{ id: "n1", role: "build", gate: "spec compiles", expand: None }], []))
 }
 
 fn test_multiple_violations_collected() -> Result[Unit, Str] {
@@ -102,9 +119,24 @@ fn test_multiple_violations_collected() -> Result[Unit, Str] {
   }
 }
 
+fn test_expand_weak_gate_fails() -> Result[Unit, Str] {
+  let expand_node := { id: "e1", role: "build", gate: "spec len-gt 10", expand: Some("sub-task") }
+  assert_has_rule("expand node with len-gt gate", "expand-gate", g("m12", [expand_node], []))
+}
+
+fn test_expand_strong_gate_valid() -> Result[Unit, Str] {
+  let expand_node := { id: "e1", role: "build", gate: "spec json", expand: Some("sub-task") }
+  assert_valid("expand node with json gate", g("m13", [expand_node], []))
+}
+
+fn test_expand_non_empty_gate_valid() -> Result[Unit, Str] {
+  let expand_node := { id: "e1", role: "build", gate: "spec non-empty", expand: Some("sub-task") }
+  assert_valid("expand node with non-empty gate", g("m14", [expand_node], []))
+}
+
 # ── Suite ─────────────────────────────────────────────────────────────────────
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid()]
 }
 
 fn run_all() -> Unit {

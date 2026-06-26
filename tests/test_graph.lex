@@ -8,7 +8,7 @@ import "../src/graph" as graph
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
-  { id: id, role: role, gate: "spec true" }
+  { id: id, role: role, gate: "spec true", expand: None }
 }
 
 fn edge(from :: Str, to :: Str) -> graph.Edge {
@@ -46,7 +46,7 @@ fn test_duplicate_ids() -> Result[Unit, Str] {
 }
 
 fn test_empty_role() -> Result[Unit, Str] {
-  match graph.validate(g("t4", [{ id: "n1", role: "", gate: "spec true" }], [])) {
+  match graph.validate(g("t4", [{ id: "n1", role: "", gate: "spec true", expand: None }], [])) {
     Ok(_) => Err("empty role should be rejected"),
     Err(e) => if str.contains(e, "empty role") {
       Ok(())
@@ -57,7 +57,7 @@ fn test_empty_role() -> Result[Unit, Str] {
 }
 
 fn test_ungated_node() -> Result[Unit, Str] {
-  match graph.validate(g("t5", [{ id: "n1", role: "build", gate: "" }], [])) {
+  match graph.validate(g("t5", [{ id: "n1", role: "build", gate: "", expand: None }], [])) {
     Ok(_) => Err("ungated node should be rejected"),
     Err(e) => if str.contains(e, "no gate") {
       Ok(())

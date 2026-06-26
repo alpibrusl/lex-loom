@@ -60,6 +60,8 @@ import "../pool_seed" as pool_seed
 
 import "../series" as ser
 
+import "lex-trail/src/log" as tlog
+
 # ── Env / parse helpers ───────────────────────────────────────────────────────
 fn get_env_l(key :: Str, fallback :: Str) -> [env] Str {
   match env.get(key) {
@@ -260,7 +262,8 @@ fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, ra
           model
         }
         let mac := parse_int_or_l(get_jv_str(j, "max_api_calls"), 200)
-        let cfg := { id: sid, request: req, model: mdl, db: db, api_calls_max: mac, roster: cast.empty_roster(), trail_log: None }
+        let trail_log_none :: Option[tlog.Log] := None
+        let cfg := { id: sid, request: req, model: mdl, db: db, api_calls_max: mac, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0 }
         let result := orch.run_sprint(cfg)
         resp.json(str.join(["{\"sprint_id\":", esc(sid), ",\"success\":", if result.success {
           "true"

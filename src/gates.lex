@@ -91,7 +91,11 @@ fn is_well_formed(gate :: Str) -> Bool {
                   if has_arg("spec len-gt ") {
                     true
                   } else {
-                    has_arg("human ")
+                    if has_arg("spec judge ") {
+                      true
+                    } else {
+                      has_arg("human ")
+                    }
                   }
                 }
               }
@@ -132,6 +136,26 @@ fn oracle_of(gate :: Str) -> Str {
   match classify(gate) {
     Judgeable(oracle) => oracle,
     _ => "",
+  }
+}
+
+# ── LLM-judge lane (attestation tier between formal checks and a human) ────────
+# `spec judge <criteria>` runs an evaluator LLM against the artifact + criteria
+# and takes the verdict from its structured PASS/FAIL — autonomous, scalable, and
+# cheaper than a human. Use it for subjective deliverables (copy, design specs,
+# legal prose) that have no executable oracle, instead of escalating straight to
+# a human `human <oracle>` gate. The orchestrator handles this on the effectful
+# path (it needs [llm]); `evaluate` never sees it.
+fn is_llm_judge(gate :: Str) -> Bool {
+  str.starts_with(str.trim(gate), "spec judge ")
+}
+
+fn judge_criteria(gate :: Str) -> Str {
+  let g := str.trim(gate)
+  if str.starts_with(g, "spec judge ") {
+    str.trim(str.slice(g, 11, str.len(g)))
+  } else {
+    ""
   }
 }
 

@@ -65,8 +65,17 @@ fn guide_agent() -> Str {
 
 # SQL / persistence pattern — drawn from lex-trail and std.sql.
 # Use topic='sql' when implementing SQLite-backed storage or audit logs.
-fn guide_sql() -> Str {
-  str.join(["SQL / PERSISTENCE PATTERN (std.sql + lex-trail)", "", "std.sql — SQLite (and Postgres) query builder:", "  import \"std.sql\" as sql", "", "  fn open_db(path :: Str) -> [sql] Result[sql.Db, Str] { sql.open(path) }", "", "  -- Execute DDL / DML (no rows returned):", "  sql.exec(db, \"CREATE TABLE IF NOT EXISTS items (id TEXT, data TEXT)\", [])", "  sql.exec(db, \"INSERT INTO items VALUES (?, ?)\", [sql.str(id), sql.str(data)])", "", "  -- Query returning rows:", "  match sql.query(db, \"SELECT id, data FROM items WHERE id = ?\", [sql.str(id)]) {", "    Ok(rows) => ...,  # rows :: List[List[sql.Value]]", "    Err(e)   => ...,", "  }", "", "  -- Extract values from a row:", "  -- sql.Value variants: VStr(Str) | VInt(Int) | VFloat(Float) | VNull | VBool(Bool)", "  let val := match list.head(row) {", "    Some(VStr(s)) => s,", "    _             => \"\",", "  }", "", "  -- Parameter helpers: sql.str(s), sql.int(n), sql.float(f), sql.null()", "", "lex-trail — append-only content-addressed audit log:", "  import \"lex-trail/src/log\" as trail_log", "  import \"lex-trail/src/emit\" as emit", "", "  -- Open (ephemeral in-memory or persistent SQLite):", "  let log := trail_log.open_memory()           # ephemeral", "  let log := trail_log.open(\"/tmp/my.db\")     # persistent", "", "  -- Append an event:", "  let event_id := trail_log.append(log, emit.llm_step(agent_id, step_data))", "", "  -- Query events:", "  let events := trail_log.range(log, 0, 100)", "", "EFFECT for SQL:", "  Any function calling sql.* needs the [sql] effect.", "  Any function calling io.write / io.read needs [io] or [fs_write]/[fs_read].", "", "IMPORTS for SQL:", "  import \"std.sql\" as sql", "  import \"std.list\" as list"], "\n")
+# SQL guidance is GROUNDED in a real, CI-checked file (src/guidelines/sql_crud.lex)
+# read at call time — so the API shown here can never drift from compiling code.
+# (The previous hand-written version invented sql.str()/VStr/sql.Value, which do
+#  not exist, and caused build agents to emit non-compiling SQLite code.)
+fn guide_sql() -> [io] Str {
+  let api := str.join(["SQL / PERSISTENCE PATTERN (std.sql)", "", "  import \"std.sql\" as sql", "", "FUNCTIONS (call as sql.NAME):", "  sql.open(path)            -> [sql, fs_write] Result[Db, SqlError]   # Db is OPAQUE", "  sql.exec(db, sqlstr, ps)  -> [sql] Result[Int, SqlError]            # rows affected", "  sql.query(db, sqlstr, ps) -> [sql] Result[List[Row], SqlError]      # SELECT", "", "PARAMS — the SqlParam ADT. GLOBAL constructors, NO `sql.` prefix:", "  PStr(s) | PInt(n) | PFloat(f) | PBool(b) | PNull", "  Bind `?` placeholders in order: [PStr(title), PInt(id)]", "", "ROWS — TYPED RECORDS you declare; field names match SELECTed columns.", "  Annotate the result and read fields directly (r.title):", "    type Note = { id :: Int, title :: Str, body :: Str }", "    let rows :: Result[List[Note], SqlError] := sql.query(db, \"SELECT id, title, body FROM notes\", [])", "", "  SqlError = { message :: Str, code :: Str, detail :: Str }", "", "DO NOT USE (these DO NOT EXIST): sql.str() / sql.int() / sql.Value / VStr / VInt /", "  List[List[sql.Value]] / sql.Db / sql.float() / sql.null(). Use the ADT + typed rows above.", "", "Any fn calling sql.* needs the [sql] effect; sql.open also needs [fs_write]."], "\n")
+  let example := match io.read("src/guidelines/sql_crud.lex") {
+    Ok(code) => str.join(["\n\nWORKED EXAMPLE — this exact file passes `lex check`; mirror it:\n```lex\n", code, "\n```"], ""),
+    Err(_) => "",
+  }
+  str.join([api, example], "")
 }
 
 # Streaming HTTP pattern — drawn from streaming_app.lex.
@@ -76,7 +85,7 @@ fn guide_streaming() -> Str {
 }
 
 # Select and combine guides by topic.
-fn guide_for_topic(topic :: Str) -> Str {
+fn guide_for_topic(topic :: Str) -> [io] Str {
   let core := lex_essentials()
   if topic == "http" {
     str.join([core, "\n\n---\n\n", guide_http()], "")

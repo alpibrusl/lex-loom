@@ -156,6 +156,32 @@ fn verify_build_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
 # so any code-producing node can declare `spec compiles` and have it enforced.
 # Compiles every source file in the node's work dir; py_compile for py_build,
 # `lex check` otherwise. Returns Ok(()) iff all compile and ≥1 source file exists.
+# Grounded TOOL gate (`spec sh "<cmd>"`): run an arbitrary verifier in the node's
+# work dir; pass iff it exits 0. The general grounding primitive — wraps ANY
+# tool (docker build, semgrep, gitleaks, dbt test, an ML metric script) the same
+# way `spec compiles` wraps the compiler. Runs on the files the node produced
+# (build/py_build/fe_build work dir). Trusted-sprint use: the gate is author-
+# defined and runs at the same trust level as the build agent's own code.
+fn verify_shell(cmd :: Str, kind :: Str) -> [proc] Result[Unit, Str] {
+  let dir := work_dir_for(kind)
+  let script := str.join(["cd ", dir, " 2>/dev/null || { echo NO_WORKDIR; exit 3; }; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(msg) => Err(str.concat("gate command could not run: ", msg)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "##GATE_EXIT:0") {
+        Ok(())
+      } else {
+        if str.contains(combined, "NO_WORKDIR") {
+          Err("gate: node produced no files (work dir missing)")
+        } else {
+          Err(str.concat("gate command failed:\n", str.slice(combined, 0, 1200)))
+        }
+      }
+    },
+  }
+}
+
 fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
   {
     let dir := work_dir_for(kind)

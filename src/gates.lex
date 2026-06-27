@@ -94,7 +94,11 @@ fn is_well_formed(gate :: Str) -> Bool {
                     if has_arg("spec judge ") {
                       true
                     } else {
-                      has_arg("human ")
+                      if has_arg("spec sh ") {
+                        true
+                      } else {
+                        has_arg("human ")
+                      }
                     }
                   }
                 }
@@ -154,6 +158,37 @@ fn judge_criteria(gate :: Str) -> Str {
   let g := str.trim(gate)
   if str.starts_with(g, "spec judge ") {
     str.trim(str.slice(g, 11, str.len(g)))
+  } else {
+    ""
+  }
+}
+
+# ── Grounded TOOL gate: `spec sh "<command>"` ─────────────────────────────────
+# The general grounding primitive — run any verifier against the node's produced
+# files; pass iff it exits 0. Grounds every technical domain with one mechanism:
+#   devops:    spec sh "docker build -t app ."
+#   security:  spec sh "semgrep --error --quiet ." / spec sh "gitleaks detect --no-git"
+#   ml:        spec sh "python eval.py --min-f1 0.85"
+#   analytics: spec sh "dbt test"
+# Evaluated on the effectful path (needs [proc]); `evaluate` never sees it.
+fn is_shell_gate(gate :: Str) -> Bool {
+  str.starts_with(str.trim(gate), "spec sh ")
+}
+
+# Extract the command, stripping one layer of surrounding double quotes.
+fn shell_command(gate :: Str) -> Str {
+  let g := str.trim(gate)
+  if str.starts_with(g, "spec sh ") {
+    let raw := str.trim(str.slice(g, 8, str.len(g)))
+    if str.starts_with(raw, "\"") {
+      if str.ends_with(raw, "\"") {
+        str.slice(raw, 1, str.len(raw) - 1)
+      } else {
+        raw
+      }
+    } else {
+      raw
+    }
   } else {
     ""
   }

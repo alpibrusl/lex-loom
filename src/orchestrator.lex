@@ -308,7 +308,11 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                   GateAllow => match if gates.is_grounded(n.gate) {
                     runner.verify_compiles(n.role)
                   } else {
-                    runner.verify_build_compiles(n.role)
+                    if gates.is_shell_gate(n.gate) {
+                      runner.verify_shell(gates.shell_command(n.gate), n.role)
+                    } else {
+                      runner.verify_build_compiles(n.role)
+                    }
                   } {
                     Err(compile_err) => {
                       let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
@@ -324,7 +328,11 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                       let __ge := if gates.is_grounded(n.gate) {
                         tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
                       } else {
-                        ()
+                        if gates.is_shell_gate(n.gate) {
+                          tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"sh\",\"result\":\"ok\"}"], ""))
+                        } else {
+                          ()
+                        }
                       }
                       match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
                         Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },

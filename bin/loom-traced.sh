@@ -18,13 +18,19 @@ cd "$(dirname "$0")/.."
 
 SPRINT_ID="${SPRINT_ID:-sprint-1}"
 EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs
+# A sprint is trusted first-party code, not the untrusted agent-tool sandbox the
+# VM's opcode step-limit guards against — and node layers fan out via list.par_map
+# whose workers inherit this limit (lex vm.rs). Run unbounded (--max-steps 0) so a
+# node parsing a large model output can't spuriously trip "step limit exceeded".
+# Override with MAX_STEPS env (e.g. a finite cap) if you want a ceiling.
+MAX_STEPS="${MAX_STEPS:-0}"
 
 # `trace saved: <run_id>` is printed to STDERR; tee it through so the user still
 # sees live sprint output on stdout while we capture stderr for the run_id.
 err_file="$(mktemp /tmp/loom-traced.XXXXXX)"
 trap 'rm -f "$err_file"' EXIT
 
-SPRINT_ID="$SPRINT_ID" lex run --trace --allow-effects "$EFFECTS" \
+SPRINT_ID="$SPRINT_ID" lex run --trace --max-steps "$MAX_STEPS" --allow-effects "$EFFECTS" \
   src/main.lex run_sprint_cmd 2> >(tee "$err_file" >&2)
 
 run_id="$(sed -n 's/^trace saved: //p' "$err_file" | tail -1)"

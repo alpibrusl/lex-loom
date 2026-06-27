@@ -18,11 +18,12 @@ cd "$(dirname "$0")/.."
 
 SPRINT_ID="${SPRINT_ID:-sprint-1}"
 EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs
-# par_map workers inherit the parent VM's step limit (vm.rs); the default 10M is
-# too low for a node that parses a large model output and trips
-# "par_map worker: step limit exceeded". Raise it for sprint runs. Override with
-# MAX_STEPS env.
-MAX_STEPS="${MAX_STEPS:-500000000}"
+# A sprint is trusted first-party code, not the untrusted agent-tool sandbox the
+# VM's opcode step-limit guards against — and node layers fan out via list.par_map
+# whose workers inherit this limit (lex vm.rs). Run unbounded (--max-steps 0) so a
+# node parsing a large model output can't spuriously trip "step limit exceeded".
+# Override with MAX_STEPS env (e.g. a finite cap) if you want a ceiling.
+MAX_STEPS="${MAX_STEPS:-0}"
 
 # `trace saved: <run_id>` is printed to STDERR; tee it through so the user still
 # sees live sprint output on stdout while we capture stderr for the run_id.

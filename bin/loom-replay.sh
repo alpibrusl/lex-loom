@@ -28,5 +28,5 @@ if [ -z "$run_id" ]; then
 fi
 
 echo "[loom-replay] replaying sprint '$SPRINT_ID' from native run $run_id" >&2
-exec lex replay "$run_id" --max-steps "${MAX_STEPS:-500000000}" --allow-effects "$EFFECTS" \
+exec lex replay "$run_id" --max-steps "${MAX_STEPS:-0}" --allow-effects "$EFFECTS" \
   src/main.lex run_sprint_cmd "$@"

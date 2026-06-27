@@ -18,13 +18,18 @@ cd "$(dirname "$0")/.."
 
 SPRINT_ID="${SPRINT_ID:-sprint-1}"
 EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs
+# par_map workers inherit the parent VM's step limit (vm.rs); the default 10M is
+# too low for a node that parses a large model output and trips
+# "par_map worker: step limit exceeded". Raise it for sprint runs. Override with
+# MAX_STEPS env.
+MAX_STEPS="${MAX_STEPS:-500000000}"
 
 # `trace saved: <run_id>` is printed to STDERR; tee it through so the user still
 # sees live sprint output on stdout while we capture stderr for the run_id.
 err_file="$(mktemp /tmp/loom-traced.XXXXXX)"
 trap 'rm -f "$err_file"' EXIT
 
-SPRINT_ID="$SPRINT_ID" lex run --trace --allow-effects "$EFFECTS" \
+SPRINT_ID="$SPRINT_ID" lex run --trace --max-steps "$MAX_STEPS" --allow-effects "$EFFECTS" \
   src/main.lex run_sprint_cmd 2> >(tee "$err_file" >&2)
 
 run_id="$(sed -n 's/^trace saved: //p' "$err_file" | tail -1)"

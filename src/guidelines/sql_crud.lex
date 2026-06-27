@@ -118,7 +118,9 @@ fn handle(req :: Request) -> [sql, fs_write, env] Response {
   }
 }
 
+# Prefer net.serve_fn (closure) over net.serve (by-name): handler effects stay
+# visible to the type-checker and policy gate (passes `lex check --strict`).
 fn main() -> [net, sql, fs_write, env] Unit {
-  net.serve(port(), "handle")
+  net.serve_fn(port(), handle)
 }
 

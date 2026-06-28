@@ -87,8 +87,46 @@ fn test_is_grounded_gate() -> Result[Unit, Str] {
   }
 }
 
+fn test_grant_within_policy() -> Result[Unit, Str] {
+  if verify.grant_ok("build", "lex_guidelines,lex_check") {
+    if verify.grant_ok("demo", "") {
+      Ok(())
+    } else {
+      Err("empty grant for prose role should be ok")
+    }
+  } else {
+    Err("build's canonical tools should be within policy")
+  }
+}
+
+fn test_grant_violation() -> Result[Unit, Str] {
+  if verify.grant_ok("demo", "lex_run") {
+    Err("demo granted lex_run must be a violation")
+  } else {
+    if verify.grant_ok("build", "lex_check,rm_rf") {
+      Err("unknown tool in a build grant must be a violation")
+    } else {
+      Ok(())
+    }
+  }
+}
+
+fn test_authreport_json() -> Result[Unit, Str] {
+  let v := verify.authreport_json({ sprint_id: "s1", nodes: 4, ok: 4, violations: 0, verified: true })
+  if str.contains(v, "\"verdict\":\"authority-ok\"") {
+    let b := verify.authreport_json({ sprint_id: "s1", nodes: 4, ok: 3, violations: 1, verified: false })
+    if str.contains(b, "\"verdict\":\"VIOLATION\"") {
+      Ok(())
+    } else {
+      Err(str.concat("expected VIOLATION verdict, got ", b))
+    }
+  } else {
+    Err(str.concat("expected authority-ok verdict, got ", v))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json()]
 }
 
 fn run_all() -> Unit {

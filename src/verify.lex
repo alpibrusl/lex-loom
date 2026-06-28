@@ -270,3 +270,100 @@ fn rereport_json(r :: ReReport) -> Str {
   }, "\"}"], "")
 }
 
+# ── P1: per-node authority — did each node stay within its tool grant? ─────────
+# The governed-agent kernel (#47) wants to prove not just *what* a run produced
+# but *under what authority*. loom scopes tools per role; when a node runs it now
+# emits an `op_grant` trail event recording {node, role, tools}. This layer
+# RE-DERIVES whether each grant was legitimate: the tools a node was handed must
+# fall within its role's canonical policy. A roster/custom agent smuggling in a
+# tool its role shouldn't wield (e.g. a `demo` node granted `lex_run`) is caught.
+type AuthReport = { sprint_id :: Str, nodes :: Int, ok :: Int, violations :: Int, verified :: Bool }
+
+# Canonical per-role tool authority. Keep in sync with roles.for_role — every
+# role NOT listed here is prose-only and is allowed NO tools (pm, architect,
+# demo, scribe, docs, devops, security, ux, brand, content_designer, judge…).
+fn allowed_tools(role :: Str) -> List[Str] {
+  if role == "build" {
+    ["lex_guidelines", "lex_check"]
+  } else {
+    if role == "py_build" {
+      ["py_check"]
+    } else {
+      if role == "qa" {
+        ["lex_check", "lex_run"]
+      } else {
+        if role == "py_qa" {
+          ["run_code"]
+        } else {
+          []
+        }
+      }
+    }
+  }
+}
+
+fn tool_in(allowed :: List[Str], name :: Str) -> Bool {
+  list.fold(allowed, false, fn (acc :: Bool, a :: Str) -> Bool {
+    if acc {
+      true
+    } else {
+      a == name
+    }
+  })
+}
+
+# Every granted tool must be within the role's policy. An empty grant is always
+# legitimate (prose roles wield nothing).
+fn grant_ok(role :: Str, tools_csv :: Str) -> Bool {
+  if str.is_empty(tools_csv) {
+    true
+  } else {
+    let allowed := allowed_tools(role)
+    list.fold(str.split(tools_csv, ","), true, fn (acc :: Bool, name :: Str) -> Bool {
+      if acc {
+        tool_in(allowed, name)
+      } else {
+        false
+      }
+    })
+  }
+}
+
+# Re-derive per-node authority from the op_grant trail. `verified` iff no node
+# was handed a tool outside its role's canonical policy.
+fn verify_authority(db :: conn.ConnDb, sprint_id :: Str) -> [sql] AuthReport {
+  let q := str.join(["SELECT data_json FROM traces WHERE agent_id='", sq(sprint_id), "' AND event_kind='op_grant'"], "")
+  let rows :: Result[List[AcceptedRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => { sprint_id: sprint_id, nodes: 0, ok: 0, violations: 0, verified: false },
+    Ok(rs) => {
+      let t := list.fold(rs, (0, 0), fn (acc :: (Int, Int), row :: AcceptedRow) -> (Int, Int) {
+        match acc {
+          (nok, nbad) => {
+            let parsed := match jv.parse(row.data_json) {
+              Err(_) => { role: "", tools: "" },
+              Ok(j) => { role: json_str_field(j, "role"), tools: json_str_field(j, "tools") },
+            }
+            if grant_ok(parsed.role, parsed.tools) {
+              (nok + 1, nbad)
+            } else {
+              (nok, nbad + 1)
+            }
+          },
+        }
+      })
+      match t {
+        (nok, nbad) => { sprint_id: sprint_id, nodes: nok + nbad, ok: nok, violations: nbad, verified: nbad == 0 },
+      }
+    },
+  }
+}
+
+fn authreport_json(r :: AuthReport) -> Str {
+  str.join(["{\"sprint_id\":\"", r.sprint_id, "\",\"nodes\":", int.to_str(r.nodes), ",\"within_grant\":", int.to_str(r.ok), ",\"violations\":", int.to_str(r.violations), ",\"verdict\":\"", if r.verified {
+    "authority-ok"
+  } else {
+    "VIOLATION"
+  }, "\"}"], "")
+}
+

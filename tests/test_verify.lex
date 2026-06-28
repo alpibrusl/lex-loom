@@ -53,8 +53,42 @@ fn test_report_failed() -> Result[Unit, Str] {
   }
 }
 
+fn test_node_gates_and_lookup() -> Result[Unit, Str] {
+  let g := "{\"id\":\"s\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"build\",\"role\":\"build\",\"gate\":\"spec compiles\"},{\"id\":\"demo\",\"role\":\"demo\",\"gate\":\"spec len-gt 50\"}],\"edges\":[]}"
+  let pairs := verify.node_gates(g)
+  if verify.lookup_gate(pairs, "build") == "spec compiles" {
+    if verify.lookup_gate(pairs, "demo") == "spec len-gt 50" {
+      if str.is_empty(verify.lookup_gate(pairs, "nope")) {
+        Ok(())
+      } else {
+        Err("unknown node should map to empty gate")
+      }
+    } else {
+      Err("demo gate wrong")
+    }
+  } else {
+    Err("build gate wrong")
+  }
+}
+
+fn test_is_grounded_gate() -> Result[Unit, Str] {
+  if verify.is_grounded_gate("spec compiles") {
+    if verify.is_grounded_gate("spec sh \"docker build .\"") {
+      if verify.is_grounded_gate("spec len-gt 50") {
+        Err("len-gt is not a grounded gate")
+      } else {
+        Ok(())
+      }
+    } else {
+      Err("spec sh should be grounded")
+    }
+  } else {
+    Err("spec compiles should be grounded")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate()]
 }
 
 fn run_all() -> Unit {

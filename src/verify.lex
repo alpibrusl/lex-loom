@@ -25,6 +25,12 @@ import "lex-orm/src/connection" as conn
 
 import "lex-schema/json_value" as jv
 
+import "std.io" as io
+
+import "std.process" as proc
+
+import "./gates" as gates
+
 type AcceptedRow = { data_json :: Str }
 
 type ContentRow = { content :: Str }
@@ -112,6 +118,153 @@ fn verify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, cry
 fn report_json(r :: Report) -> Str {
   str.join(["{\"sprint_id\":\"", r.sprint_id, "\",\"checked\":", int.to_str(r.checked), ",\"intact\":", int.to_str(r.intact), ",\"mismatched\":", int.to_str(r.mismatched), ",\"missing\":", int.to_str(r.missing), ",\"verdict\":\"", if r.verified {
     "verified"
+  } else {
+    "FAILED"
+  }, "\"}"], "")
+}
+
+# ── P0.5: re-execute grounded gates against the verified artifact ──────────────
+# Content integrity proves the bytes weren't altered. This goes further: for
+# every node whose gate was GROUNDED (`spec compiles` / `spec sh`), re-materialize
+# its produced files and RE-RUN the tool — confirming the gate STILL passes, not
+# just that the trail says it did. The strongest "provable, not asserted" tier.
+type GraphRow = { graph_json :: Str }
+
+type ReReport = { sprint_id :: Str, grounded :: Int, passed :: Int, failed :: Int, verified :: Bool }
+
+type ReTally = { grounded :: Int, passed :: Int, failed :: Int }
+
+fn json_str_field(j :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+}
+
+# (node_id, gate) pairs from the sprint graph JSON.
+fn node_gates(graph_json :: Str) -> List[(Str, Str)] {
+  match jv.parse(graph_json) {
+    Err(_) => [],
+    Ok(j) => match jv.get_field(j, "nodes") {
+      Some(JList(nodes)) => list.fold(nodes, [], fn (acc :: List[(Str, Str)], n :: jv.Json) -> List[(Str, Str)] {
+        let id := json_str_field(n, "id")
+        if str.is_empty(id) {
+          acc
+        } else {
+          list.concat(acc, [(id, json_str_field(n, "gate"))])
+        }
+      }),
+      _ => [],
+    },
+  }
+}
+
+fn lookup_gate(pairs :: List[(Str, Str)], node_id :: Str) -> Str {
+  list.fold(pairs, "", fn (acc :: Str, p :: (Str, Str)) -> Str {
+    if str.is_empty(acc) {
+      match p {
+        (id, gate) => if id == node_id {
+          gate
+        } else {
+          acc
+        },
+      }
+    } else {
+      acc
+    }
+  })
+}
+
+fn get_content(db :: conn.ConnDb, hash :: Str) -> [vcs, fs_read, sql] Option[Str] {
+  match vcs.get_blob(hash) {
+    Ok(c) => Some(c),
+    Err(_) => {
+      let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
+      let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q, [])
+      match rows {
+        Err(_) => None,
+        Ok(rs) => match list.head(rs) {
+          None => None,
+          Some(r) => Some(r.content),
+        },
+      }
+    },
+  }
+}
+
+# Whether a gate re-runs a tool (the two grounded tiers).
+fn is_grounded_gate(gate :: Str) -> Bool {
+  if gates.is_grounded(gate) {
+    true
+  } else {
+    gates.is_shell_gate(gate)
+  }
+}
+
+# Re-materialize the fenced artifact and re-run the gate's tool in a scratch dir.
+fn reverify_grounded(content :: Str, gate :: Str) -> [io, proc] Result[Unit, Str] {
+  let __w := io.write("/tmp/loom-reverify-art.txt", content)
+  let toolcmd := if gates.is_shell_gate(gate) {
+    gates.shell_command(gate)
+  } else {
+    "ok=1; n=0; for f in *.lex; do [ -f \"$f\" ] && { n=$((n+1)); ${LEX:-lex} check \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.py; do [ -f \"$f\" ] && { n=$((n+1)); python3 -m py_compile \"$f\" >/dev/null 2>&1 || ok=0; }; done; [ $n -gt 0 ] && [ $ok -eq 1 ]"
+  }
+  let script := str.join(["W=/tmp/loom-reverify-work; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py /tmp/loom-reverify-art.txt $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(m) => Err(str.concat("reverify could not run: ", m)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "GATE_OK") {
+        Ok(())
+      } else {
+        Err(str.slice(combined, 0, 600))
+      }
+    },
+  }
+}
+
+# Re-run every grounded gate in a sprint; report how many still pass.
+fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, io, proc] ReReport {
+  let gq := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
+  let grows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, gq, [])
+  let gmap := match grows {
+    Err(_) => [],
+    Ok(rs) => match list.head(rs) {
+      None => [],
+      Some(r) => node_gates(r.graph_json),
+    },
+  }
+  let q := str.join(["SELECT data_json FROM traces WHERE agent_id='", sq(sprint_id), "' AND event_kind='node_accepted'"], "")
+  let rows :: Result[List[AcceptedRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => { sprint_id: sprint_id, grounded: 0, passed: 0, failed: 0, verified: false },
+    Ok(rs) => {
+      let t := list.fold(rs, { grounded: 0, passed: 0, failed: 0 }, fn (acc :: ReTally, row :: AcceptedRow) -> [vcs, fs_read, sql, io, proc] ReTally {
+        let parsed := match jv.parse(row.data_json) {
+          Err(_) => { node: "", hash: "" },
+          Ok(j) => { node: json_str_field(j, "node"), hash: json_str_field(j, "artifact") },
+        }
+        let gate := lookup_gate(gmap, parsed.node)
+        if is_grounded_gate(gate) {
+          match get_content(db, parsed.hash) {
+            None => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
+            Some(content) => match reverify_grounded(content, gate) {
+              Ok(_) => { grounded: acc.grounded + 1, passed: acc.passed + 1, failed: acc.failed },
+              Err(_) => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
+            },
+          }
+        } else {
+          acc
+        }
+      })
+      { sprint_id: sprint_id, grounded: t.grounded, passed: t.passed, failed: t.failed, verified: t.failed == 0 }
+    },
+  }
+}
+
+fn rereport_json(r :: ReReport) -> Str {
+  str.join(["{\"sprint_id\":\"", r.sprint_id, "\",\"grounded_gates\":", int.to_str(r.grounded), ",\"re_passed\":", int.to_str(r.passed), ",\"re_failed\":", int.to_str(r.failed), ",\"verdict\":\"", if r.verified {
+    "grounded-reproduced"
   } else {
     "FAILED"
   }, "\"}"], "")

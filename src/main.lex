@@ -353,7 +353,7 @@ fn sprint_run() -> [env, io, sql, fs_read, fs_write] Unit {
 # artifact from the content-addressed store and confirm it matches the id the
 # trail referenced. Prints a JSON verdict and records a `sprint_verified` event
 # so the verification is itself auditable.
-fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, random] Unit {
+fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, random, proc] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
   match conn.open(db_path) {
@@ -361,8 +361,12 @@ fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, r
     Ok(db) => {
       let r := verify.verify_sprint(db, sprint_id)
       let json := verify.report_json(r)
-      let __p := io.print(str.join(["[verify] ", json], ""))
+      let __p := io.print(str.join(["[verify] integrity ", json], ""))
       let __t := tr.trail(db, sprint_id, "sprint_verified", json)
+      let rr := verify.reverify_sprint(db, sprint_id)
+      let rjson := verify.rereport_json(rr)
+      let __p2 := io.print(str.join(["[verify] grounded ", rjson], ""))
+      let __t2 := tr.trail(db, sprint_id, "sprint_reverified", rjson)
       ()
     },
   }

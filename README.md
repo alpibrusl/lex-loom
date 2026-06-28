@@ -150,6 +150,42 @@ curl http://localhost:8880/api/sprints/$SPRINT/digest | jq .
 
 ---
 
+## Running a company
+
+A **company** is the layer above a single sprint (#53): a *persistent goal* that
+produces a *series of iterating looms*. Each iteration is a full sprint
+(`<company>/iter-N`); tightened specs and agent memory carry forward between
+iterations, and the loop stops when a grounded condition holds or
+`MAX_ITERATIONS` is reached.
+
+```bash
+COMPANY_ID=acme \
+MODEL=deepseek-v4-pro \
+MAX_ITERATIONS=3 \
+STOP_WHEN='verdict-passed' \
+GOAL='Write a pure Lex function add(a :: Int, b :: Int) -> Int with an examples block.' \
+bin/run-company.sh
+```
+
+`STOP_WHEN` uses the company condition DSL (also usable as a node `activate_when`
+to gate a sub-loom to specific iterations):
+
+| Condition | True when |
+|---|---|
+| `iter ge N` / `iter lt N` / `iter eq N` | iteration index bound |
+| `verdict-passed` / `verdict-failed` | last iteration's verifier verdict |
+| `digest contains "<s>"` | substring in the digest summary |
+| `accepted ge N` / `bounced ge N` | node accept/bounce thresholds |
+| `always` / `never` | constant |
+
+Each iteration is recorded in `company_iterations` (with parent lineage) and
+stays provable via the four-layer verifier (`verify_sprint_cmd`).
+
+> Against OpenCode Go, leave `OPENCODE_BASE_URL` unset (hit the API directly) —
+> the local reasoning-proxy breaks loom's streaming agent loop.
+
+---
+
 ## Demo results
 
 ### Simple function

@@ -22,6 +22,8 @@ import "lex-schema/json_value" as jv
 
 import "./agent/runner" as runner
 
+import "lex-llm/src/tool" as ltool
+
 import "./graph" as graph
 
 import "./gates" as gates
@@ -233,6 +235,10 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         }
         let __ts := tr.trail(cfg.db, cfg.id, "node_started", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
         let started_id := emit_node_started(cfg, parent, n.id, n.role, attempt)
+        let tool_names := str.join(list.map(agent_cfg.tools, fn (tl :: ltool.Tool) -> Str {
+          tl.name
+        }), ",")
+        let __og := tr.trail(cfg.db, cfg.id, "op_grant", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"agent\":\"", agent_cfg.id, "\",\"tools\":\"", tool_names, "\"}"], ""))
         let output := runner.step(cfg.db, agent_cfg, prompt)
         if str.is_empty(output) {
           if attempt > max_node_retries() {

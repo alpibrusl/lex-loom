@@ -36,6 +36,8 @@ import "./agent/runner" as runner
 
 import "./lex_skill" as lexskill
 
+import "./role_tools" as rt
+
 # ── run_code tool (inline — avoids cross-file lex-llm import resolution) ──────
 #
 # Gives QA the ability to *execute* the implementation it received.
@@ -286,6 +288,47 @@ fn make_provider_no_mistral() -> [env] prov.Provider {
   }
 }
 
+# Construct a tool from its canonical name. The inverse of `tool.name`; the only
+# place a role-policy name (role_tools.tools_for) is bound to its implementation.
+fn tool_by_name(name :: Str) -> Option[t.Tool] {
+  if name == "lex_guidelines" {
+    Some(lexskill.make_lex_guidelines_tool())
+  } else {
+    if name == "lex_check" {
+      Some(lexskill.make_lex_check_tool())
+    } else {
+      if name == "lex_run" {
+        Some(lexskill.make_lex_run_tool())
+      } else {
+        if name == "py_check" {
+          Some(lexskill.make_py_check_tool())
+        } else {
+          if name == "run_code" {
+            Some(make_run_code_tool())
+          } else {
+            if name == "run_server" {
+              Some(make_run_server_tool())
+            } else {
+              None
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# An agent's tool set, derived from its role's canonical policy — so the tools a
+# node is granted at runtime are exactly the tools the verifier checks against.
+fn tools_of_role(role :: Str) -> List[t.Tool] {
+  list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> List[t.Tool] {
+    match tool_by_name(name) {
+      Some(tool) => list.concat(acc, [tool]),
+      None => acc,
+    }
+  })
+}
+
 # Temp file path where the emit_graph tool writes the graph JSON.
 fn graph_tmp_path(sprint_id :: Str) -> Str {
   str.join(["/tmp/loom-graph-", sprint_id, ".json"], "")
@@ -459,22 +502,22 @@ fn judge_agent(model :: Str, criteria :: Str) -> [env] runner.AgentDef {
 
 fn build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_guidelines_tool(), lexskill.make_lex_check_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build"), proc_cmd: "", a2a_url: "" }
 }
 
 fn py_build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_py_check_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build"), proc_cmd: "", a2a_url: "" }
 }
 
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_check_tool(), lexskill.make_lex_run_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa"), proc_cmd: "", a2a_url: "" }
 }
 
 fn py_qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa"), proc_cmd: "", a2a_url: "" }
 }
 
 fn devops(model :: Str) -> [env] runner.AgentDef {
@@ -498,7 +541,7 @@ fn launch_system_prompt() -> Str {
 
 fn launch(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: [make_run_server_tool()], proc_cmd: "", a2a_url: "" }
+  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch"), proc_cmd: "", a2a_url: "" }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -576,16 +619,16 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
       Some(mk("loom-architect", "architect", architect_system_prompt()))
     } else {
       if role == "build" {
-        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_guidelines_tool(), lexskill.make_lex_check_tool()], proc_cmd: "", a2a_url: "" })
+        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build"), proc_cmd: "", a2a_url: "" })
       } else {
         if role == "py_build" {
-          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_py_check_tool()], proc_cmd: "", a2a_url: "" })
+          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build"), proc_cmd: "", a2a_url: "" })
         } else {
           if role == "qa" {
-            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_check_tool(), lexskill.make_lex_run_tool()], proc_cmd: "", a2a_url: "" })
+            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa"), proc_cmd: "", a2a_url: "" })
           } else {
             if role == "py_qa" {
-              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: [make_run_code_tool()], proc_cmd: "", a2a_url: "" })
+              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa"), proc_cmd: "", a2a_url: "" })
             } else {
               if role == "devops" {
                 Some(mk("loom-devops", "devops", devops_system_prompt()))
@@ -609,7 +652,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
                             Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
                           } else {
                             if role == "launch" {
-                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: [make_run_server_tool()], proc_cmd: "", a2a_url: "" })
+                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch"), proc_cmd: "", a2a_url: "" })
                             } else {
                               if role == "demo" {
                                 Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))

@@ -31,6 +31,8 @@ import "std.process" as proc
 
 import "./gates" as gates
 
+import "./role_tools" as rt
+
 type AcceptedRow = { data_json :: Str }
 
 type ContentRow = { content :: Str }
@@ -279,27 +281,12 @@ fn rereport_json(r :: ReReport) -> Str {
 # tool its role shouldn't wield (e.g. a `demo` node granted `lex_run`) is caught.
 type AuthReport = { sprint_id :: Str, nodes :: Int, ok :: Int, violations :: Int, verified :: Bool }
 
-# Canonical per-role tool authority. Keep in sync with roles.for_role — every
-# role NOT listed here is prose-only and is allowed NO tools (pm, architect,
-# demo, scribe, docs, devops, security, ux, brand, content_designer, judge…).
+# Canonical per-role tool authority — the SAME policy the runtime grants from
+# (role_tools.tools_for, also consumed by roles.tools_of_role). Re-deriving
+# authority against the granting source is the point: the check can't drift from
+# what was actually handed out. A role NOT in the policy wields no tools.
 fn allowed_tools(role :: Str) -> List[Str] {
-  if role == "build" {
-    ["lex_guidelines", "lex_check"]
-  } else {
-    if role == "py_build" {
-      ["py_check"]
-    } else {
-      if role == "qa" {
-        ["lex_check", "lex_run"]
-      } else {
-        if role == "py_qa" {
-          ["run_code"]
-        } else {
-          []
-        }
-      }
-    }
-  }
+  rt.tools_for(role)
 }
 
 fn tool_in(allowed :: List[Str], name :: Str) -> Bool {

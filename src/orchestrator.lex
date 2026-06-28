@@ -242,67 +242,110 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
             invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial, parent)
           }
         } else {
-          if gates.is_judgeable(n.gate) {
-            let oracle := gates.oracle_of(n.gate)
-            match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-              Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-              Ok(hash) => {
-                let __tq := tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash)
-                let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
-                let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
-              },
+          if gates.is_llm_judge(n.gate) {
+            let criteria := gates.judge_criteria(n.gate)
+            let judge_cfg := roles.judge_agent(cfg.model, criteria)
+            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""))
+            let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
+              true
+            } else {
+              str.contains(verdict_raw, "\"verdict\": \"PASS\"")
+            }
+            let __tj := tr.trail(cfg.db, cfg.id, "gate_judged", str.join(["{\"node\":\"", n.id, "\",\"verdict\":\"", if passed {
+              "PASS"
+            } else {
+              "FAIL"
+            }, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+            if passed {
+              match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                Ok(hash) => {
+                  let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                  let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                  { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                },
+              }
+            } else {
+              let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"judge fail\",\"attempt\":", int.to_str(attempt), "}"], ""))
+              let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("judge FAIL: ", verdict_raw), attempt)
+              if attempt > max_node_retries() {
+                { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("judge rejected: ", verdict_raw) }
+              } else {
+                let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"judge-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                invoke_node_attempt(n, input, cfg, attempt + 1, str.concat("An LLM judge evaluated your output against the gate criteria and FAILED it. Fix it. Judge verdict: ", verdict_raw), parent)
+              }
             }
           } else {
-            match evaluate_gate(n.gate, output) {
-              GateDeny(reason) => {
-                let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
-                let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
-                if attempt > max_node_retries() {
-                  { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
-                } else {
-                  let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                  invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
-                }
-              },
-              GateAllow => match evaluate_gate(n.gate, output) {
+            if gates.is_judgeable(n.gate) {
+              let oracle := gates.oracle_of(n.gate)
+              match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                Ok(hash) => {
+                  let __tq := tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash)
+                  let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+                  let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                  { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+                },
+              }
+            } else {
+              match evaluate_gate(n.gate, output) {
                 GateDeny(reason) => {
-                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
-                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
-                  { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
+                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
+                  if attempt > max_node_retries() {
+                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
+                  } else {
+                    let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                    invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
+                  }
                 },
-                GateAllow => match if gates.is_grounded(n.gate) {
-                  runner.verify_compiles(n.role)
-                } else {
-                  runner.verify_build_compiles(n.role)
-                } {
-                  Err(compile_err) => {
-                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
-                    let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
-                    if attempt > max_node_retries() {
-                      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
-                    } else {
-                      let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                      invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
-                    }
+                GateAllow => match evaluate_gate(n.gate, output) {
+                  GateDeny(reason) => {
+                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+                    let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
+                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                   },
-                  Ok(_) => {
-                    let __ge := if gates.is_grounded(n.gate) {
-                      tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                  GateAllow => match if gates.is_grounded(n.gate) {
+                    runner.verify_compiles(n.role)
+                  } else {
+                    if gates.is_shell_gate(n.gate) {
+                      runner.verify_shell(gates.shell_command(n.gate), n.role)
                     } else {
-                      ()
+                      runner.verify_build_compiles(n.role)
                     }
-                    match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                      Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                      Ok(hash) => {
-                        let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                        let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                        { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-                      },
-                    }
+                  } {
+                    Err(compile_err) => {
+                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
+                      if attempt > max_node_retries() {
+                        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
+                      } else {
+                        let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                        invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                      }
+                    },
+                    Ok(_) => {
+                      let __ge := if gates.is_grounded(n.gate) {
+                        tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                      } else {
+                        if gates.is_shell_gate(n.gate) {
+                          tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"sh\",\"result\":\"ok\"}"], ""))
+                        } else {
+                          ()
+                        }
+                      }
+                      match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                        Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                        Ok(hash) => {
+                          let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                          let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                          { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                        },
+                      }
+                    },
                   },
                 },
-              },
+              }
             }
           }
         }

@@ -107,8 +107,61 @@ fn test_json_gate_not_grounded() -> Result[Unit, Str] {
   is_grounded_eq("spec json", "spec json", false)
 }
 
+# ── Attestation-tier classifiers: LLM-judge + grounded shell gate (#21) ────────
+fn test_judge_gate_recognized() -> Result[Unit, Str] {
+  if gates.is_llm_judge("spec judge \"names the product, has a CTA\"") {
+    if gates.judge_criteria("spec judge \"names the product, has a CTA\"") == "\"names the product, has a CTA\"" {
+      Ok(())
+    } else {
+      Err("judge_criteria extraction wrong")
+    }
+  } else {
+    Err("spec judge not recognized as llm-judge")
+  }
+}
+
+fn test_judge_well_formed() -> Result[Unit, Str] {
+  if gates.is_well_formed("spec judge \"clear and concise\"") {
+    Ok(())
+  } else {
+    Err("spec judge should be well-formed")
+  }
+}
+
+fn test_sh_gate_recognized() -> Result[Unit, Str] {
+  if gates.is_shell_gate("spec sh \"docker build -t app .\"") {
+    if gates.shell_command("spec sh \"docker build -t app .\"") == "docker build -t app ." {
+      Ok(())
+    } else {
+      Err(str.concat("shell_command extraction wrong: ", gates.shell_command("spec sh \"docker build -t app .\"")))
+    }
+  } else {
+    Err("spec sh not recognized as shell gate")
+  }
+}
+
+fn test_sh_well_formed() -> Result[Unit, Str] {
+  if gates.is_well_formed("spec sh \"semgrep --error .\"") {
+    Ok(())
+  } else {
+    Err("spec sh should be well-formed")
+  }
+}
+
+fn test_judge_and_sh_not_plain_grounded() -> Result[Unit, Str] {
+  if gates.is_grounded("spec judge \"x\"") {
+    Err("judge is not the compiles-grounded lane")
+  } else {
+    if gates.is_grounded("spec sh \"x\"") {
+      Err("sh is not the compiles-grounded lane")
+    } else {
+      Ok(())
+    }
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
 }
 
 fn run_all() -> Unit {

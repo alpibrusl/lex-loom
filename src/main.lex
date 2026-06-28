@@ -58,6 +58,10 @@ import "./verify" as verify
 
 import "./transport" as tr
 
+import "./company" as company
+
+import "./company_runner" as company_runner
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type RunRow = { run_id :: Str }
@@ -474,6 +478,27 @@ fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
       let __r5 := io.print(str.join(["QA pass attempt: #", int.to_str(qa_attempt), " (", int.to_str(bounce_count), " rework round(s))"], ""))
       let __sep2 := io.print("──────────────────────────────────────")
       let __note := io.print("(all figures derived from trail — no hardcoded claims)")
+      ()
+    },
+  }
+}
+
+# ── run_company ───────────────────────────────────────────────────────────────
+# A persistent goal that produces a series of iterating looms (#53).
+fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+  let db_path := resolve_db_url()
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
+  let company_id := get_env("COMPANY_ID", "acme")
+  let goal := get_env("GOAL", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
+  let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "3"), 3)
+  let stop_when := get_env("STOP_WHEN", "")
+  let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[company] FATAL: ", e)),
+    Ok(db) => {
+      let __seed := pool_seed.seed(db)
+      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when }
+      let __res := company_runner.run_company(db, ccfg, api_max)
       ()
     },
   }

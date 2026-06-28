@@ -54,6 +54,10 @@ import "lex-trail/src/log" as tlog
 
 import "std.time" as time
 
+import "./verify" as verify
+
+import "./transport" as tr
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type RunRow = { run_id :: Str }
@@ -340,6 +344,26 @@ fn sprint_run() -> [env, io, sql, fs_read, fs_write] Unit {
           Some(row) => io.print(row.run_id),
         },
       }
+    },
+  }
+}
+
+# ── verify_sprint_cmd ─────────────────────────────────────────────────────────
+# Independently re-derive a sprint's integrity (#47): re-hash every accepted
+# artifact from the content-addressed store and confirm it matches the id the
+# trail referenced. Prints a JSON verdict and records a `sprint_verified` event
+# so the verification is itself auditable.
+fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, random] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => {
+      let r := verify.verify_sprint(db, sprint_id)
+      let json := verify.report_json(r)
+      let __p := io.print(str.join(["[verify] ", json], ""))
+      let __t := tr.trail(db, sprint_id, "sprint_verified", json)
+      ()
     },
   }
 }

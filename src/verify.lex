@@ -367,3 +367,99 @@ fn authreport_json(r :: AuthReport) -> Str {
   }, "\"}"], "")
 }
 
+# ── P1b: per-operation capability — did each node only INVOKE tools it may? ────
+# op_grant proves what authority a node was *handed*; this proves what it
+# *exercised*. The runner replays the agent loop's tool calls as `op_call`
+# events; here we re-derive whether every invoked tool fell within the invoking
+# node's role policy. A model that *attempts* an operation beyond its grant
+# (a tool its role can't wield) is counted as `exceeded` even though loom's
+# runtime already refuses it — the trail now proves the attempt was contained.
+type OpReport = { sprint_id :: Str, ops :: Int, in_grant :: Int, exceeded :: Int, verified :: Bool }
+
+type OpTally = { ops :: Int, in_grant :: Int, exceeded :: Int }
+
+fn agent_seen(acc :: List[(Str, Str)], agent :: Str) -> Bool {
+  list.fold(acc, false, fn (found :: Bool, p :: (Str, Str)) -> Bool {
+    if found {
+      true
+    } else {
+      match p {
+        (a, _) => a == agent,
+      }
+    }
+  })
+}
+
+# Distinct (agent_id, role) pairs the sprint granted, from its op_grant events.
+fn grant_agents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[(Str, Str)] {
+  let q := str.join(["SELECT data_json FROM traces WHERE agent_id='", sq(sprint_id), "' AND event_kind='op_grant'"], "")
+  let rows :: Result[List[AcceptedRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.fold(rs, [], fn (acc :: List[(Str, Str)], row :: AcceptedRow) -> List[(Str, Str)] {
+      match jv.parse(row.data_json) {
+        Err(_) => acc,
+        Ok(j) => {
+          let agent := json_str_field(j, "agent")
+          if str.is_empty(agent) {
+            acc
+          } else {
+            if agent_seen(acc, agent) {
+              acc
+            } else {
+              list.concat(acc, [(agent, json_str_field(j, "role"))])
+            }
+          }
+        },
+      }
+    }),
+  }
+}
+
+# Tally the op_call events for one agent against its role's tool policy.
+fn ops_for_agent(db :: conn.ConnDb, agent :: Str, role :: Str, acc :: OpTally) -> [sql] OpTally {
+  let q := str.join(["SELECT data_json FROM traces WHERE agent_id='", sq(agent), "' AND event_kind='op_call'"], "")
+  let rows :: Result[List[AcceptedRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => acc,
+    Ok(rs) => {
+      let allowed := allowed_tools(role)
+      list.fold(rs, acc, fn (a :: OpTally, row :: AcceptedRow) -> OpTally {
+        let tool := match jv.parse(row.data_json) {
+          Err(_) => "",
+          Ok(j) => json_str_field(j, "tool"),
+        }
+        if str.is_empty(tool) {
+          a
+        } else {
+          if tool_in(allowed, tool) {
+            { ops: a.ops + 1, in_grant: a.in_grant + 1, exceeded: a.exceeded }
+          } else {
+            { ops: a.ops + 1, in_grant: a.in_grant, exceeded: a.exceeded + 1 }
+          }
+        }
+      })
+    },
+  }
+}
+
+# Re-derive per-operation authority across a sprint. `verified` iff no node
+# invoked a tool outside its role's policy.
+fn verify_operations(db :: conn.ConnDb, sprint_id :: Str) -> [sql] OpReport {
+  let agents := grant_agents(db, sprint_id)
+  let t := list.fold(agents, { ops: 0, in_grant: 0, exceeded: 0 }, fn (acc :: OpTally, ar :: (Str, Str)) -> [sql] OpTally {
+    match ar {
+      (agent, role) => ops_for_agent(db, agent, role, acc),
+    }
+  })
+  { sprint_id: sprint_id, ops: t.ops, in_grant: t.in_grant, exceeded: t.exceeded, verified: t.exceeded == 0 }
+}
+
+fn opreport_json(r :: OpReport) -> Str {
+  str.join(["{\"sprint_id\":\"", r.sprint_id, "\",\"ops\":", int.to_str(r.ops), ",\"in_grant\":", int.to_str(r.in_grant), ",\"exceeded\":", int.to_str(r.exceeded), ",\"verdict\":\"", if r.verified {
+    "ops-within-grant"
+  } else {
+    "EXCEEDED"
+  }, "\"}"], "")
+}
+

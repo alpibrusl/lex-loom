@@ -125,8 +125,22 @@ fn test_authreport_json() -> Result[Unit, Str] {
   }
 }
 
+fn test_opreport_json() -> Result[Unit, Str] {
+  let ok := verify.opreport_json({ sprint_id: "s1", ops: 5, in_grant: 5, exceeded: 0, verified: true })
+  if str.contains(ok, "\"verdict\":\"ops-within-grant\"") {
+    let bad := verify.opreport_json({ sprint_id: "s1", ops: 5, in_grant: 4, exceeded: 1, verified: false })
+    if str.contains(bad, "\"verdict\":\"EXCEEDED\"") {
+      Ok(())
+    } else {
+      Err(str.concat("expected EXCEEDED verdict, got ", bad))
+    }
+  } else {
+    Err(str.concat("expected ops-within-grant verdict, got ", ok))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json()]
 }
 
 fn run_all() -> Unit {

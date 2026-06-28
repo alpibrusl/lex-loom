@@ -63,6 +63,50 @@ type AgentDef = { id :: Str, kind :: Str, system_prompt :: Str, model_name :: St
 
 type PeerInfo = { id :: Str, kind :: Str, name :: Str, inbox_url :: Str, role :: Str }
 
+# P1b — per-operation capability telemetry. The lex-llm agent loop already
+# surfaces every tool call as StepToolExec(name,id) + StepToolResult(id,ok). We
+# replay those into loom's trail as `op_call {agent,tool,ok}` events so the
+# verifier can re-derive not just *what authority* a node was granted (op_grant)
+# but *which operations it actually invoked* — and whether any exceeded grant.
+fn op_lookup_name(pairs :: List[(Str, Str)], id :: Str) -> Str {
+  list.fold(pairs, "", fn (acc :: Str, p :: (Str, Str)) -> Str {
+    if str.is_empty(acc) {
+      match p {
+        (pid, name) => if pid == id {
+          name
+        } else {
+          acc
+        },
+      }
+    } else {
+      acc
+    }
+  })
+}
+
+fn emit_op_calls(db :: conn.ConnDb, run_id :: Str, agent_id :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
+  let __r := list.fold(steps, [], fn (names :: List[(Str, Str)], s :: d.Step) -> [sql, fs_write, time] List[(Str, Str)] {
+    match s {
+      StepToolExec(ex) => match ex {
+        (name, id) => list.concat(names, [(id, name)]),
+      },
+      StepToolResult(res) => match res {
+        (id, ok) => {
+          let nm := op_lookup_name(names, id)
+          let __e := trace.record(db, run_id, agent_id, "op_call", str.join(["{\"agent\":\"", agent_id, "\",\"tool\":\"", nm, "\",\"ok\":", if ok {
+            "true"
+          } else {
+            "false"
+          }, "}"], ""))
+          names
+        },
+      },
+      _ => names,
+    }
+  })
+  ()
+}
+
 fn extract_answer(steps :: List[d.Step]) -> Str {
   list.fold(steps, "", fn (acc :: Str, st :: d.Step) -> Str {
     match st {
@@ -391,6 +435,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
+      let __ops := emit_op_calls(db, run_id, def.id, steps)
       let out0 := extract_answer(steps)
       let out := if is_build_kind(def.kind) {
         if has_fence(out0) {

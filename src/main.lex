@@ -371,6 +371,10 @@ fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, r
       let ajson := verify.authreport_json(ar)
       let __p3 := io.print(str.join(["[verify] authority ", ajson], ""))
       let __t3 := tr.trail(db, sprint_id, "sprint_authority_verified", ajson)
+      let op := verify.verify_operations(db, sprint_id)
+      let ojson := verify.opreport_json(op)
+      let __p4 := io.print(str.join(["[verify] operations ", ojson], ""))
+      let __t4 := tr.trail(db, sprint_id, "sprint_operations_verified", ojson)
       ()
     },
   }

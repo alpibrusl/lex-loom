@@ -238,7 +238,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         let tool_names := str.join(list.map(agent_cfg.tools, fn (tl :: ltool.Tool) -> Str {
           tl.name
         }), ",")
-        let __og := tr.trail(cfg.db, cfg.id, "op_grant", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"tools\":\"", tool_names, "\"}"], ""))
+        let __og := tr.trail(cfg.db, cfg.id, "op_grant", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"agent\":\"", agent_cfg.id, "\",\"tools\":\"", tool_names, "\"}"], ""))
         let output := runner.step(cfg.db, agent_cfg, prompt)
         if str.is_empty(output) {
           if attempt > max_node_retries() {

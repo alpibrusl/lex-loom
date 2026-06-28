@@ -116,6 +116,69 @@ fn new_company_id(prefix :: Str) -> [random] Str {
   str.join([prefix, "-", crypto.random_str_hex(6)], "")
 }
 
+# ── C3 support: derive an IterCtx + bridge learning between iterations ─────────
+type CountRow = { c :: Int }
+
+type SummaryRow = { summary_text :: Str }
+
+type SpecCarryRow = { node_role :: Str, spec_src :: Str, reason :: Str }
+
+# How many trail events of a kind a sprint emitted (e.g. node_accepted).
+fn count_events(db :: conn.ConnDb, sprint_id :: Str, kind :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT COUNT(*) AS c FROM traces WHERE agent_id=? AND event_kind=?", params: [PStr(sprint_id), PStr(kind)] }, db.dialect)
+  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.c,
+    },
+  }
+}
+
+# Latest digest summary for a sprint ("" if none).
+fn digest_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
+  let q := ormq.for_dialect({ sql: "SELECT summary_text FROM digests WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[SummaryRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => "",
+    Ok(rs) => match list.head(rs) {
+      None => "",
+      Some(r) => r.summary_text,
+    },
+  }
+}
+
+# Build the condition context from a finished iteration.
+fn derive_ctx(db :: conn.ConnDb, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
+  let verdict := if success {
+    "passed"
+  } else {
+    "failed"
+  }
+  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced") }
+}
+
+# Copy a prior iteration's tightened specs onto the next iteration's sprint id,
+# so its Architect loads them (the digest saves under "<id>-next"; the next
+# sprint loads by its own id — this bridges the two). Returns rows carried.
+fn carry_specs_forward(db :: conn.ConnDb, from_sprint :: Str, to_sprint :: Str) -> [sql, fs_write, time, random] Int {
+  let q := ormq.for_dialect({ sql: "SELECT node_role, spec_src, reason FROM tightened_specs WHERE sprint_id=? ORDER BY created_at", params: [PStr(from_sprint)] }, db.dialect)
+  let rows :: Result[List[SpecCarryRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => list.fold(rs, 0, fn (n :: Int, r :: SpecCarryRow) -> [sql, fs_write, time, random] Int {
+      let id := crypto.random_str_hex(16)
+      let now := time.now_str()
+      let ins := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO tightened_specs (id, sprint_id, node_role, spec_src, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(to_sprint), PStr(r.node_role), PStr(r.spec_src), PStr(r.reason), PStr(now)] }, db.dialect)
+      match sql.exec(db.handle, ins.sql, ins.params) {
+        Err(_) => n,
+        Ok(_) => n + 1,
+      }
+    }),
+  }
+}
+
 # ── C2: condition DSL ─────────────────────────────────────────────────────────
 # Grammar (deterministic predicate over IterCtx):
 #   always | never

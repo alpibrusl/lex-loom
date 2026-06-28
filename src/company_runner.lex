@@ -39,6 +39,12 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count }
   let scfg := { id: sprint_id, request: ccfg.goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx) }
   let result := orch.run_sprint(scfg)
+  let mem_n := company.persist_iteration_memory(db, sprint_id)
+  let __pm := if mem_n > 0 {
+    io.print(str.join(["[company] persisted lessons to ", int.to_str(mem_n), " agent(s) for next iteration"], ""))
+  } else {
+    ()
+  }
   let ctx := company.derive_ctx(db, sprint_id, k, result.success)
   let __fin := company.finish_iteration(db, ccfg.id, k, if result.success {
     "success"

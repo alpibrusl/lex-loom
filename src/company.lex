@@ -27,6 +27,10 @@ import "lex-orm/src/connection" as conn
 
 import "lex-orm/src/query" as ormq
 
+import "lex-schema/json_value" as jv
+
+import "lex-agent/src/memory" as mem
+
 # ── C1: types ─────────────────────────────────────────────────────────────────
 # The persistent mission. `stop_when` is a C2 condition (e.g. "iter ge 3");
 # `max_iterations` is the hard ceiling regardless of the condition.
@@ -157,6 +161,82 @@ fn derive_ctx(db :: conn.ConnDb, sprint_id :: Str, idx :: Int, success :: Bool) 
     "failed"
   }
   { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced") }
+}
+
+# ── C5: cross-sprint agent memory ─────────────────────────────────────────────
+# The company's staff should *remember* across iterations. After an iteration we
+# persist its distilled digest lessons into agent_memory for every agent that
+# ran (identified via the op_grant trail, P1). The runner already recalls an
+# agent's memory into its system prompt (mem.recall_all), so the next iteration's
+# agents start informed. Keyed (overwrite) so memory stays bounded to one fresh
+# lesson per agent rather than growing every iteration.
+type GrantAgentRow = { data_json :: Str }
+
+type LessonRow = { lessons :: Str }
+
+fn str_in(xs :: List[Str], s :: Str) -> Bool {
+  list.fold(xs, false, fn (found :: Bool, x :: Str) -> Bool {
+    if found {
+      true
+    } else {
+      x == s
+    }
+  })
+}
+
+# Distinct agent ids that ran in a sprint, from its op_grant events.
+fn agent_ids_for_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT data_json FROM traces WHERE agent_id=? AND event_kind='op_grant'", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[GrantAgentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.fold(rs, [], fn (acc :: List[Str], row :: GrantAgentRow) -> List[Str] {
+      match jv.parse(row.data_json) {
+        Err(_) => acc,
+        Ok(j) => {
+          let a := match jv.get_field(j, "agent") {
+            Some(JStr(s)) => s,
+            _ => "",
+          }
+          if str.is_empty(a) {
+            acc
+          } else {
+            if str_in(acc, a) {
+              acc
+            } else {
+              list.concat(acc, [a])
+            }
+          }
+        },
+      }
+    }),
+  }
+}
+
+fn digest_lessons(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
+  let q := ormq.for_dialect({ sql: "SELECT lessons FROM digests WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[LessonRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => "",
+    Ok(rs) => match list.head(rs) {
+      None => "",
+      Some(r) => r.lessons,
+    },
+  }
+}
+
+# Persist the iteration's lessons to every participating agent's memory.
+# Returns how many agents were updated.
+fn persist_iteration_memory(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read, fs_write, time, crypto, random] Int {
+  let lessons := digest_lessons(db, sprint_id)
+  if str.is_empty(str.trim(lessons)) {
+    0
+  } else {
+    list.fold(agent_ids_for_sprint(db, sprint_id), 0, fn (n :: Int, a :: Str) -> [sql, fs_read, fs_write, time, crypto, random] Int {
+      let __s := mem.store(db, a, "lesson", "company-lesson", lessons)
+      n + 1
+    })
+  }
 }
 
 # Copy a prior iteration's tightened specs onto the next iteration's sprint id,

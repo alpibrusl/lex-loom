@@ -6,7 +6,11 @@ import "std.str" as str
 
 import "std.int" as int
 
+import "std.sql" as sql
+
 import "lex-orm/src/connection" as conn
+
+import "lex-agent/src/memory" as mem
 
 import "../src/migrate" as migrate
 
@@ -150,6 +154,39 @@ fn run_iter_roundtrip(db :: conn.ConnDb) -> [sql, fs_write, time] Result[Unit, S
   }
 }
 
+fn exec(db :: conn.ConnDb, s :: Str) -> [sql, fs_write] Unit {
+  let __r := sql.exec(db.handle, s, [])
+  ()
+}
+
+fn test_persist_memory() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let __d := exec(db, "INSERT INTO digests (id, sprint_id, summary_text, lessons, seed_graph_json, created_at) VALUES ('d1', 'acme/iter-1', 'sum', 'Use str.split in hot paths.', '{}', '2026-01-01')")
+        let __g1 := exec(db, "INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('r', 'acme/iter-1', 'op_grant', '{\"node\":\"build\",\"role\":\"build\",\"agent\":\"build-agent\",\"tools\":\"\"}', 't1')")
+        let __g2 := exec(db, "INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('r', 'acme/iter-1', 'op_grant', '{\"node\":\"qa\",\"role\":\"qa\",\"agent\":\"qa-agent\",\"tools\":\"\"}', 't2')")
+        let n := company.persist_iteration_memory(db, "acme/iter-1")
+        if n == 2 {
+          let entries := mem.recall_all(db, "build-agent")
+          match list.head(entries) {
+            None => Err("no memory recalled for build-agent"),
+            Some(e) => if str.contains(e.content, "str.split") {
+              Ok(())
+            } else {
+              Err(str.concat("recalled wrong content: ", e.content))
+            },
+          }
+        } else {
+          Err(str.concat("expected 2 agents updated, got ", int.to_str(n)))
+        }
+      },
+    },
+  }
+}
+
 fn test_iteration_sprint_id() -> Result[Unit, Str] {
   if company.iteration_sprint_id("acme", 2) == "acme/iter-2" {
     Ok(())
@@ -158,11 +195,11 @@ fn test_iteration_sprint_id() -> Result[Unit, Str] {
   }
 }
 
-fn suite() -> [sql, fs_write, time] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip()]
+fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory()]
 }
 
-fn run_all() -> [sql, fs_write, time] Unit {
+fn run_all() -> [sql, fs_read, fs_write, time, crypto, random] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
     match r {
       Ok(_) => n,

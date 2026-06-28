@@ -147,7 +147,7 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
         get_env("REVIEW_TRANSITIONS", "") == "true"
       }
       let trail_log_none :: Option[tlog.Log] := None
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0 }
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"
@@ -527,7 +527,7 @@ fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
           None => io.print("\nNo seed graph produced."),
           Some(g) => {
             let __sg := io.print(str.join(["\nSeed graph for next sprint (", int.to_str(list.len(g.nodes)), " nodes):"], ""))
-            let __sn := list.map(g.nodes, fn (n :: { id :: Str, role :: Str, gate :: Str, expand :: Option[Str] }) -> [io] Unit {
+            let __sn := list.map(g.nodes, fn (n :: { id :: Str, role :: Str, gate :: Str, expand :: Option[Str], activate_when :: Str }) -> [io] Unit {
               io.print(str.join(["  [", n.role, "] ", n.id, "  gate: ", n.gate], ""))
             })
             ()

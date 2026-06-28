@@ -8,7 +8,7 @@ import "../src/graph" as graph
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
-  { id: id, role: role, gate: "spec true", expand: None }
+  { id: id, role: role, gate: "spec true", expand: None, activate_when: "" }
 }
 
 fn edge(from :: Str, to :: Str) -> graph.Edge {
@@ -46,7 +46,7 @@ fn test_duplicate_ids() -> Result[Unit, Str] {
 }
 
 fn test_empty_role() -> Result[Unit, Str] {
-  match graph.validate(g("t4", [{ id: "n1", role: "", gate: "spec true", expand: None }], [])) {
+  match graph.validate(g("t4", [{ id: "n1", role: "", gate: "spec true", expand: None, activate_when: "" }], [])) {
     Ok(_) => Err("empty role should be rejected"),
     Err(e) => if str.contains(e, "empty role") {
       Ok(())
@@ -57,7 +57,7 @@ fn test_empty_role() -> Result[Unit, Str] {
 }
 
 fn test_ungated_node() -> Result[Unit, Str] {
-  match graph.validate(g("t5", [{ id: "n1", role: "build", gate: "", expand: None }], [])) {
+  match graph.validate(g("t5", [{ id: "n1", role: "build", gate: "", expand: None, activate_when: "" }], [])) {
     Ok(_) => Err("ungated node should be rejected"),
     Err(e) => if str.contains(e, "no gate") {
       Ok(())
@@ -138,6 +138,22 @@ fn test_from_json_roundtrip() -> Result[Unit, Str] {
   }
 }
 
+fn test_activate_when_roundtrip() -> Result[Unit, Str] {
+  let gated := { id: "g", role: "build", gate: "spec true", expand: None, activate_when: "iter ge 2" }
+  let g0 := g("rt2", [gated], [])
+  match graph.from_json_str(graph.to_json_str(g0)) {
+    Err(e) => Err(str.concat("round-trip parse failed: ", e)),
+    Ok(g2) => match list.head(g2.nodes) {
+      None => Err("no nodes after round-trip"),
+      Some(n) => if n.activate_when == "iter ge 2" {
+        Ok(())
+      } else {
+        Err(str.concat("activate_when lost in round-trip: ", n.activate_when))
+      },
+    },
+  }
+}
+
 fn test_phase_from_str() -> Result[Unit, Str] {
   match graph.phase_from_str("QA") {
     Err(e) => Err(str.concat("phase_from_str failed: ", e)),
@@ -148,7 +164,7 @@ fn test_phase_from_str() -> Result[Unit, Str] {
 
 # ── Suite ─────────────────────────────────────────────────────────────────────
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_graph(), test_single_node(), test_duplicate_ids(), test_empty_role(), test_ungated_node(), test_unknown_edge_target(), test_unknown_edge_source(), test_linear_dag(), test_cycle_rejected(), test_diamond_dag(), test_topo_sort_layers(), test_from_json_roundtrip(), test_phase_from_str()]
+  [test_empty_graph(), test_single_node(), test_duplicate_ids(), test_empty_role(), test_ungated_node(), test_unknown_edge_target(), test_unknown_edge_source(), test_linear_dag(), test_cycle_rejected(), test_diamond_dag(), test_topo_sort_layers(), test_from_json_roundtrip(), test_activate_when_roundtrip(), test_phase_from_str()]
 }
 
 fn run_all() -> Unit {

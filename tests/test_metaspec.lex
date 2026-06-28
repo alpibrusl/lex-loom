@@ -10,7 +10,7 @@ import "../src/metaspec" as meta
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
-  { id: id, role: role, gate: "spec non-empty", expand: None }
+  { id: id, role: role, gate: "spec non-empty", expand: None, activate_when: "" }
 }
 
 fn edge(from :: Str, to :: Str) -> graph.Edge {
@@ -68,11 +68,11 @@ fn test_empty_fails_non_empty() -> Result[Unit, Str] {
 }
 
 fn test_ungated_fails() -> Result[Unit, Str] {
-  assert_has_rule("ungated node", "all-nodes-gated", g("m5", [{ id: "n1", role: "build", gate: "", expand: None }], []))
+  assert_has_rule("ungated node", "all-nodes-gated", g("m5", [{ id: "n1", role: "build", gate: "", expand: None, activate_when: "" }], []))
 }
 
 fn test_no_role_fails() -> Result[Unit, Str] {
-  assert_has_rule("no role", "all-nodes-have-role", g("m6", [{ id: "n1", role: "", gate: "spec true", expand: None }], []))
+  assert_has_rule("no role", "all-nodes-have-role", g("m6", [{ id: "n1", role: "", gate: "spec true", expand: None, activate_when: "" }], []))
 }
 
 fn test_no_handoff_fails() -> Result[Unit, Str] {
@@ -101,11 +101,11 @@ fn test_known_roles_pass_resolution() -> Result[Unit, Str] {
 }
 
 fn test_unrecognized_gate_fails() -> Result[Unit, Str] {
-  assert_has_rule("garbage gate", "gates-well-formed", g("m14", [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None }], []))
+  assert_has_rule("garbage gate", "gates-well-formed", g("m14", [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], []))
 }
 
 fn test_grounded_gate_is_well_formed() -> Result[Unit, Str] {
-  assert_valid("spec compiles is well-formed", g("m15", [{ id: "n1", role: "build", gate: "spec compiles", expand: None }], []))
+  assert_valid("spec compiles is well-formed", g("m15", [{ id: "n1", role: "build", gate: "spec compiles", expand: None, activate_when: "" }], []))
 }
 
 fn test_multiple_violations_collected() -> Result[Unit, Str] {
@@ -120,17 +120,17 @@ fn test_multiple_violations_collected() -> Result[Unit, Str] {
 }
 
 fn test_expand_weak_gate_fails() -> Result[Unit, Str] {
-  let expand_node := { id: "e1", role: "build", gate: "spec len-gt 10", expand: Some("sub-task") }
+  let expand_node := { id: "e1", role: "build", gate: "spec len-gt 10", expand: Some("sub-task"), activate_when: "" }
   assert_has_rule("expand node with len-gt gate", "expand-gate", g("m12", [expand_node], []))
 }
 
 fn test_expand_strong_gate_valid() -> Result[Unit, Str] {
-  let expand_node := { id: "e1", role: "build", gate: "spec json", expand: Some("sub-task") }
+  let expand_node := { id: "e1", role: "build", gate: "spec json", expand: Some("sub-task"), activate_when: "" }
   assert_valid("expand node with json gate", g("m13", [expand_node], []))
 }
 
 fn test_expand_non_empty_gate_valid() -> Result[Unit, Str] {
-  let expand_node := { id: "e1", role: "build", gate: "spec non-empty", expand: Some("sub-task") }
+  let expand_node := { id: "e1", role: "build", gate: "spec non-empty", expand: Some("sub-task"), activate_when: "" }
   assert_valid("expand node with non-empty gate", g("m14", [expand_node], []))
 }
 

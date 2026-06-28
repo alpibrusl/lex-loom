@@ -207,7 +207,7 @@ fn parse_tightened_specs(j :: jv.Json) -> List[TightenedSpec] {
 }
 
 fn default_seed_graph(next_sprint_id :: Str) -> graph.SprintGraph {
-  { id: str.concat(next_sprint_id, "-seed"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty", expand: None }, { id: "build", role: "build", gate: "spec non-empty", expand: None }, { id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None }], edges: [{ from: "intake", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
+  { id: str.concat(next_sprint_id, "-seed"), phase: graph.Intake, nodes: [{ id: "intake", role: "architect", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "intake", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
 }
 
 fn parse_digest_json(j :: jv.Json, sprint_id :: Str, next_sprint_id :: Str) -> DigestArtifacts {

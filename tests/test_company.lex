@@ -1,0 +1,179 @@
+# test_company.lex — C1 persistence round-trip + C2 condition DSL (#53).
+
+import "std.list" as list
+
+import "std.str" as str
+
+import "std.int" as int
+
+import "lex-orm/src/connection" as conn
+
+import "../src/migrate" as migrate
+
+import "../src/company" as company
+
+# ── C2: condition DSL (pure) ──────────────────────────────────────────────────
+fn ctx(idx :: Int, verdict :: Str, summary :: Str, acc :: Int, bnc :: Int) -> company.IterCtx {
+  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc }
+}
+
+fn expect(label :: Str, got :: Bool, want :: Bool) -> Result[Unit, Str] {
+  if got == want {
+    Ok(())
+  } else {
+    Err(str.concat("condition mismatch: ", label))
+  }
+}
+
+fn test_always_empty_never() -> Result[Unit, Str] {
+  let c := ctx(1, "passed", "", 0, 0)
+  match expect("always", company.eval_condition("always", c), true) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("empty=always", company.eval_condition("", c), true) {
+      Err(e) => Err(e),
+      Ok(_) => expect("never", company.eval_condition("never", c), false),
+    },
+  }
+}
+
+fn test_iter_bounds() -> Result[Unit, Str] {
+  let c := ctx(2, "passed", "", 0, 0)
+  match expect("iter ge 2", company.eval_condition("iter ge 2", c), true) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("iter ge 3", company.eval_condition("iter ge 3", c), false) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("iter lt 3", company.eval_condition("iter lt 3", c), true) {
+        Err(e) => Err(e),
+        Ok(_) => expect("iter eq 2", company.eval_condition("iter eq 2", c), true),
+      },
+    },
+  }
+}
+
+fn test_verdict_and_counts() -> Result[Unit, Str] {
+  let c := ctx(1, "failed", "shipped MVP", 4, 1)
+  match expect("verdict-failed", company.eval_condition("verdict-failed", c), true) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("verdict-passed", company.eval_condition("verdict-passed", c), false) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("digest contains", company.eval_condition("digest contains \"MVP\"", c), true) {
+        Err(e) => Err(e),
+        Ok(_) => match expect("digest contains miss", company.eval_condition("digest contains \"refund\"", c), false) {
+          Err(e) => Err(e),
+          Ok(_) => match expect("accepted ge 4", company.eval_condition("accepted ge 4", c), true) {
+            Err(e) => Err(e),
+            Ok(_) => expect("bounced lt 1", company.eval_condition("bounced lt 1", c), false),
+          },
+        },
+      },
+    },
+  }
+}
+
+fn test_well_formed() -> Result[Unit, Str] {
+  match expect("iter ge 2 wf", company.is_well_formed_condition("iter ge 2"), true) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("bogus", company.is_well_formed_condition("frobnicate now"), false) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("iter bad op", company.is_well_formed_condition("iter zz 2"), false) {
+        Err(e) => Err(e),
+        Ok(_) => expect("digest wf", company.is_well_formed_condition("digest contains \"x\""), true),
+      },
+    },
+  }
+}
+
+# ── C1: persistence round-trip (db-backed) ────────────────────────────────────
+fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
+  if a.id == b.id {
+    if a.goal == b.goal {
+      if a.model == b.model {
+        if a.max_iterations == b.max_iterations {
+          a.stop_when == b.stop_when
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+    } else {
+      false
+    }
+  } else {
+    false
+  }
+}
+
+fn test_company_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cfg := { id: "acme", goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(str.concat("save_company: ", e)),
+          Ok(_) => match company.load_company(db, "acme") {
+            None => Err("load_company returned None"),
+            Some(c2) => if company_eq(c2, cfg) {
+              run_iter_roundtrip(db)
+            } else {
+              Err("company round-trip mismatch")
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# split out to keep nesting shallow
+fn run_iter_roundtrip(db :: conn.ConnDb) -> [sql, fs_write, time] Result[Unit, Str] {
+  match company.record_iteration(db, { company_id: "acme", idx: 1, sprint_id: "acme/iter-1", parent_sprint_id: "", status: "running" }) {
+    Err(e) => Err(str.concat("record_iteration: ", e)),
+    Ok(_) => match company.record_iteration(db, { company_id: "acme", idx: 2, sprint_id: "acme/iter-2", parent_sprint_id: "acme/iter-1", status: "running" }) {
+      Err(e) => Err(str.concat("record_iteration 2: ", e)),
+      Ok(_) => {
+        let latest := company.latest_iteration_idx(db, "acme")
+        if latest == 2 {
+          let its := company.load_iterations(db, "acme")
+          if list.len(its) == 2 {
+            Ok(())
+          } else {
+            Err(str.concat("expected 2 iterations, got ", int.to_str(list.len(its))))
+          }
+        } else {
+          Err(str.concat("expected latest idx 2, got ", int.to_str(latest)))
+        }
+      },
+    },
+  }
+}
+
+fn test_iteration_sprint_id() -> Result[Unit, Str] {
+  if company.iteration_sprint_id("acme", 2) == "acme/iter-2" {
+    Ok(())
+  } else {
+    Err("iteration_sprint_id wrong")
+  }
+}
+
+fn suite() -> [sql, fs_write, time] List[Result[Unit, Str]] {
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip()]
+}
+
+fn run_all() -> [sql, fs_write, time] Unit {
+  let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
+    match r {
+      Ok(_) => n,
+      Err(_) => n + 1,
+    }
+  })
+  if failures == 0 {
+    ()
+  } else {
+    let __force_fail := 1 / 0
+    ()
+  }
+}
+

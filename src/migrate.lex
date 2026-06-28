@@ -118,6 +118,19 @@ fn ddl_traces_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_traces_agent_ts ON traces(agent_id, ts)"
 }
 
+# Company layer (#53): a persistent goal producing a series of iterating looms.
+fn ddl_companies() -> Str {
+  "CREATE TABLE IF NOT EXISTS companies (id TEXT PRIMARY KEY, goal TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', max_iterations INTEGER NOT NULL DEFAULT 1, stop_when TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL)"
+}
+
+fn ddl_company_iterations() -> Str {
+  "CREATE TABLE IF NOT EXISTS company_iterations (company_id TEXT NOT NULL, idx INTEGER NOT NULL, sprint_id TEXT NOT NULL, parent_sprint_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (company_id, idx))"
+}
+
+fn ddl_company_iterations_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_citer_company ON company_iterations(company_id, idx)"
+}
+
 fn try_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Unit {
   let __r := sql.exec(db, stmt, [])
   ()
@@ -140,7 +153,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __up := run_upgrades(db)

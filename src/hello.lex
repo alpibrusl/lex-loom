@@ -48,7 +48,7 @@ fn hello() -> [io] Unit {
   let __h := io.print("lex-loom hello world")
   let __s := sep()
   let __p1 := io.print("1. Graph validation")
-  let sprint_graph := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None }, { id: "build", role: "build", gate: "spec non-empty", expand: None }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
+  let sprint_graph := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
   let __v1 := check("valid graph passes graph.validate", graph.validate(sprint_graph))
   let __v2 := check("valid graph passes metaspec.check", match meta.check(sprint_graph) {
     Valid => Ok(()),
@@ -56,7 +56,7 @@ fn hello() -> [io] Unit {
       str.concat(a, str.concat(v.rule, "; "))
     })),
   })
-  let bad_graph := { id: "bad", phase: graph.Intake, nodes: [{ id: "demo", role: "demo", gate: "spec non-empty", expand: None }], edges: [] }
+  let bad_graph := { id: "bad", phase: graph.Intake, nodes: [{ id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }
   let __v3 := check("demo without qa rejected by metaspec", match meta.check(bad_graph) {
     Invalid(_) => Ok(()),
     Valid => Err("should have been rejected"),
@@ -79,7 +79,7 @@ fn hello() -> [io] Unit {
   let __v5 := check("full phase walk completes without error", walk_result)
   let __s4 := sep()
   let __p4 := io.print("4. Semantic diff")
-  let graph_v2 := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None }, { id: "build", role: "build", gate: "spec output != ''", expand: None }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None }, { id: "review", role: "review", gate: "spec non-empty", expand: None }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "review", handoff: "schema {}" }, { from: "review", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
+  let graph_v2 := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "build", gate: "spec output != ''", expand: None, activate_when: "" }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "review", role: "review", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "review", handoff: "schema {}" }, { from: "review", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
   let d := diff.diff(sprint_graph, graph_v2)
   let rerun := diff.nodes_to_rerun(d, graph_v2)
   let __v6 := check("diff detects 1 changed + 1 added node", if diff.is_empty(d) {

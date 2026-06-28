@@ -17,7 +17,7 @@ import "../src/graph" as graph
 import "../src/orchestrator" as orch
 
 fn node(id :: Str) -> graph.Node {
-  { id: id, role: "build", gate: "spec non-empty", expand: None }
+  { id: id, role: "build", gate: "spec non-empty", expand: None, activate_when: "" }
 }
 
 fn g(nodes :: List[graph.Node]) -> graph.SprintGraph {

@@ -202,14 +202,19 @@ fn is_grounded_gate(gate :: Str) -> Bool {
 }
 
 # Re-materialize the fenced artifact and re-run the gate's tool in a scratch dir.
-fn reverify_grounded(content :: Str, gate :: Str) -> [io, proc] Result[Unit, Str] {
-  let __w := io.write("/tmp/loom-reverify-art.txt", content)
+# `scratch` is a per-(sprint, node) token so concurrent verifications don't race
+# on a shared `/tmp` path: each call gets its own art file and work dir, and the
+# work dir is wiped (`rm -rf`) on entry so a stale run can't leak into a re-run.
+fn reverify_grounded(content :: Str, gate :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-reverify-", scratch, "-art.txt"], "")
+  let work := str.join(["/tmp/loom-reverify-", scratch, "-work"], "")
+  let __w := io.write(art, content)
   let toolcmd := if gates.is_shell_gate(gate) {
     gates.shell_command(gate)
   } else {
     "ok=1; n=0; for f in *.lex; do [ -f \"$f\" ] && { n=$((n+1)); ${LEX:-lex} check \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.py; do [ -f \"$f\" ] && { n=$((n+1)); python3 -m py_compile \"$f\" >/dev/null 2>&1 || ok=0; }; done; [ $n -gt 0 ] && [ $ok -eq 1 ]"
   }
-  let script := str.join(["W=/tmp/loom-reverify-work; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py /tmp/loom-reverify-art.txt $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
+  let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
   match proc.run("bash", ["-c", script]) {
     Err(m) => Err(str.concat("reverify could not run: ", m)),
     Ok(r) => {
@@ -224,7 +229,7 @@ fn reverify_grounded(content :: Str, gate :: Str) -> [io, proc] Result[Unit, Str
 }
 
 # Re-run every grounded gate in a sprint; report how many still pass.
-fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, io, proc] ReReport {
+fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, crypto, io, proc] ReReport {
   let gq := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
   let grows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, gq, [])
   let gmap := match grows {
@@ -239,16 +244,17 @@ fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, i
   match rows {
     Err(_) => { sprint_id: sprint_id, grounded: 0, passed: 0, failed: 0, verified: false },
     Ok(rs) => {
-      let t := list.fold(rs, { grounded: 0, passed: 0, failed: 0 }, fn (acc :: ReTally, row :: AcceptedRow) -> [vcs, fs_read, sql, io, proc] ReTally {
+      let t := list.fold(rs, { grounded: 0, passed: 0, failed: 0 }, fn (acc :: ReTally, row :: AcceptedRow) -> [vcs, fs_read, sql, crypto, io, proc] ReTally {
         let parsed := match jv.parse(row.data_json) {
           Err(_) => { node: "", hash: "" },
           Ok(j) => { node: json_str_field(j, "node"), hash: json_str_field(j, "artifact") },
         }
         let gate := lookup_gate(gmap, parsed.node)
         if is_grounded_gate(gate) {
+          let scratch := str.slice(crypto.sha256_str(str.join([sprint_id, "/", parsed.node], "")), 0, 16)
           match get_content(db, parsed.hash) {
             None => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
-            Some(content) => match reverify_grounded(content, gate) {
+            Some(content) => match reverify_grounded(content, gate, scratch) {
               Ok(_) => { grounded: acc.grounded + 1, passed: acc.passed + 1, failed: acc.failed },
               Err(_) => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
             },
@@ -368,12 +374,20 @@ fn authreport_json(r :: AuthReport) -> Str {
 }
 
 # ── P1b: per-operation capability — did each node only INVOKE tools it may? ────
-# op_grant proves what authority a node was *handed*; this proves what it
-# *exercised*. The runner replays the agent loop's tool calls as `op_call`
-# events; here we re-derive whether every invoked tool fell within the invoking
-# node's role policy. A model that *attempts* an operation beyond its grant
-# (a tool its role can't wield) is counted as `exceeded` even though loom's
-# runtime already refuses it — the trail now proves the attempt was contained.
+# op_grant proves what authority a node was *handed*; this re-derives what it
+# *exercised*: for every `op_call` event in the trail, whether the invoked tool
+# fell within the invoking node's role policy. A tool a role can't wield is
+# counted as `exceeded`.
+#
+# NOTE (#65): direct `op_call` emission was removed from the runner because the
+# StepToolExec/StepToolResult payloads are bare Strs, not tuples, and
+# destructuring them crashed tool-using sprints (see runner.lex). Until the
+# events are re-derived from lex-llm's native run_loop_traced cap_* trail, no
+# `op_call` rows exist, so this layer reports 0 ops (`ops-within-grant`) rather
+# than a false signal — the logic stays in place and re-activates the moment the
+# events return. It does NOT yet capture *refused* attempts (loom's runtime
+# refuses an out-of-grant tool before it executes); doing so needs an explicit
+# `op_denied` event, which is not emitted today.
 type OpReport = { sprint_id :: Str, ops :: Int, in_grant :: Int, exceeded :: Int, verified :: Bool }
 
 type OpTally = { ops :: Int, in_grant :: Int, exceeded :: Int }

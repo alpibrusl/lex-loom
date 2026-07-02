@@ -485,6 +485,8 @@ Between Design and Implementation, a **Cast phase** runs — think HR for agents
 
 **Attestation feedback:** at sprint end, accepted nodes earn `attestation_count + 1`. Denied/bounced nodes lose `attestation_count − 1` and `bounce_count + 1`. Agents that reach `attestation_count ≤ −3` are soft-retired (`retired_at` set) and excluded from future casts. Specialists earn reputation over time; chronically failing agents sink out of contention automatically.
 
+**did:lex portable reputation (#52):** every pool agent carries a `did:lex:agent:<hash-of-pubkey>` identity with a loom-custodied Ed25519 key. When `verify_sprint_cmd` re-derives a sprint's four verdicts (integrity → grounded → authority → operations), each granted agent receives a **signed attestation bundle** binding those verdicts to its did — checkable outside the issuing loom via `identity.verify_attestation(pubkey, bundle, sig)`. Reputation is never stored: it is the count of *verified* attestations per did (`lex run … src/main.lex reputation_cmd` prints the registry), so it accrues only from independently verified runs, and the Cast weighs it above raw local attestations (`+3` per verified run) but below a domain-tag match.
+
 **Improver:** after the Scribe's Digest, an LLM rewrites the system prompt of the best current agent for each role that had a tightened spec. The improved agent is saved to the pool as `<role>-improved-<sprint-id>` with `attestation_count = parent + 2` — it starts two points ahead of its parent, giving it a genuine edge in the next cast while still needing to earn further trust.
 
 This is loom-specific logic — the platform registry (`src/agent/registry.lex`) handles A2A routing for live processes; the pool is about which *prompt* runs for each graph node.

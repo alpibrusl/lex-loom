@@ -369,11 +369,12 @@ fn authreport_json(r :: AuthReport) -> Str {
 
 # ── P1b: per-operation capability — did each node only INVOKE tools it may? ────
 # op_grant proves what authority a node was *handed*; this proves what it
-# *exercised*. The runner replays the agent loop's tool calls as `op_call`
-# events; here we re-derive whether every invoked tool fell within the invoking
-# node's role policy. A model that *attempts* an operation beyond its grant
-# (a tool its role can't wield) is counted as `exceeded` even though loom's
-# runtime already refuses it — the trail now proves the attempt was contained.
+# *exercised*. The runner wraps every tool handler it hands an agent and records
+# each executed invocation as an `op_call` event (#65); here we re-derive
+# whether every invoked tool fell within the invoking node's role policy. A node
+# that exercises a tool beyond its role's canonical grant (e.g. a roster agent
+# smuggling `lex_run` into a demo node) is counted as `exceeded` — the trail
+# proves the excess operation, not just the excess grant.
 type OpReport = { sprint_id :: Str, ops :: Int, in_grant :: Int, exceeded :: Int, verified :: Bool }
 
 type OpTally = { ops :: Int, in_grant :: Int, exceeded :: Int }

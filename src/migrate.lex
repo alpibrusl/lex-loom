@@ -131,6 +131,16 @@ fn ddl_company_iterations_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_citer_company ON company_iterations(company_id, idx)"
 }
 
+# did:lex portable reputation (#52): signed attestation bundles. Reputation is
+# DERIVED (count of verified rows per did), never stored — nothing to forge.
+fn ddl_attestations() -> Str {
+  "CREATE TABLE IF NOT EXISTS attestations (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, agent_id TEXT NOT NULL, agent_did TEXT NOT NULL, role TEXT NOT NULL, bundle_json TEXT NOT NULL, sig_b64 TEXT NOT NULL, pubkey_b64 TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
+}
+
+fn ddl_attestations_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_att_did ON attestations(agent_did, verified)"
+}
+
 fn try_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Unit {
   let __r := sql.exec(db, stmt, [])
   ()
@@ -139,6 +149,9 @@ fn try_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Unit {
 fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __1 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN bounce_count INTEGER NOT NULL DEFAULT 0")
   let __2 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN retired_at TEXT NOT NULL DEFAULT ''")
+  let __3 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN did TEXT NOT NULL DEFAULT ''")
+  let __4 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN pubkey_b64 TEXT NOT NULL DEFAULT ''")
+  let __5 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN secret_b64 TEXT NOT NULL DEFAULT ''")
   ()
 }
 
@@ -153,7 +166,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __up := run_upgrades(db)

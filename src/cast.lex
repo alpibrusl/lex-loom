@@ -31,21 +31,25 @@ import "./graph" as graph
 import "lex-orm/src/query" as ormq
 
 # ── Types ─────────────────────────────────────────────────────────────────────
-type PoolAgent = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int }
+# `reputation` is the did:lex layer (#52): the count of this agent's VERIFIED
+# sprint attestations — earned only from runs that passed the four-layer
+# verifier, portable across looms. Distinct from attestation_count, the local
+# accept/bounce fitness signal that accrues without independent verification.
+type PoolAgent = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int, reputation :: Int }
 
 type RosterEntry = { node_id :: Str, pool_agent_id :: Str, agent_config :: runner.AgentDef }
 
 type Roster = List[RosterEntry]
 
 # ── Pool query ────────────────────────────────────────────────────────────────
-type PoolAgentRow = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int }
+type PoolAgentRow = { id :: Str, role :: Str, system_prompt :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int, reputation :: Int }
 
 fn row_to_agent(r :: PoolAgentRow) -> PoolAgent {
-  { id: r.id, role: r.role, system_prompt: r.system_prompt, model_name: r.model_name, domain_tags_json: r.domain_tags_json, attestation_count: r.attestation_count }
+  { id: r.id, role: r.role, system_prompt: r.system_prompt, model_name: r.model_name, domain_tags_json: r.domain_tags_json, attestation_count: r.attestation_count, reputation: r.reputation }
 }
 
 fn load_pool_for_role(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] List[PoolAgent] {
-  let qd := ormq.for_dialect({ sql: "SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count FROM agent_pool WHERE role=? AND retired_at='' ORDER BY attestation_count DESC", params: [PStr(role)] }, db.dialect)
+  let qd := ormq.for_dialect({ sql: "SELECT id, role, system_prompt, model_name, domain_tags_json, attestation_count, (SELECT COUNT(*) FROM attestations a WHERE a.agent_id = agent_pool.id AND a.verified = 1) AS reputation FROM agent_pool WHERE role=? AND retired_at='' ORDER BY attestation_count DESC", params: [PStr(role)] }, db.dialect)
   let rows :: Result[List[PoolAgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => [],
@@ -71,8 +75,11 @@ fn domain_bonus(tags_json :: Str, request :: Str) -> Int {
   }
 }
 
+# A verified-run reputation point (independently re-derivable, #52) outweighs
+# a raw local attestation, but not a domain-tag match (+10) — a proven
+# generalist should not displace a matching specialist.
 fn score_agent(agent :: PoolAgent, request :: Str) -> Int {
-  agent.attestation_count + domain_bonus(agent.domain_tags_json, request)
+  agent.attestation_count + 3 * agent.reputation + domain_bonus(agent.domain_tags_json, request)
 }
 
 fn best_agent(agents :: List[PoolAgent], request :: Str) -> Option[PoolAgent] {

@@ -62,6 +62,8 @@ import "./company" as company
 
 import "./company_runner" as company_runner
 
+import "./identity" as identity
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type RunRow = { run_id :: Str }
@@ -379,8 +381,59 @@ fn verify_sprint_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, time, r
       let ojson := verify.opreport_json(op)
       let __p4 := io.print(str.join(["[verify] operations ", ojson], ""))
       let __t4 := tr.trail(db, sprint_id, "sprint_operations_verified", ojson)
+      let all_verified := if r.verified {
+        if rr.verified {
+          if ar.verified {
+            op.verified
+          } else {
+            false
+          }
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+      let verdicts_json := str.join(["{\"integrity\":", json, ",\"grounded\":", rjson, ",\"authority\":", ajson, ",\"operations\":", ojson, "}"], "")
+      let __att := attest_sprint(db, sprint_id, verdicts_json, all_verified)
       ()
     },
+  }
+}
+
+# ── did:lex attestations (#52) ────────────────────────────────────────────────
+# Every agent the sprint granted authority to (its op_grant set) receives a
+# SIGNED attestation bundle binding the four-layer verdicts to its did. A
+# verified bundle is the only thing that accrues reputation; an unverified run
+# is recorded but earns nothing.
+fn attest_sprint(db :: conn.ConnDb, sprint_id :: Str, verdicts_json :: Str, all_verified :: Bool) -> [io, sql, fs_write, crypto, random, time] Unit {
+  let agents := verify.grant_agents(db, sprint_id)
+  let __each := list.map(agents, fn (ar :: (Str, Str)) -> [io, sql, fs_write, crypto, random, time] Unit {
+    match ar {
+      (agent_id, role) => {
+        let ident := identity.issue_attestation(db, sprint_id, agent_id, role, verdicts_json, all_verified)
+        let line := str.join(["{\"agent\":\"", agent_id, "\",\"did\":\"", ident.did, "\",\"verified\":", if all_verified {
+          "true"
+        } else {
+          "false"
+        }, "}"], "")
+        let __p := io.print(str.join(["[verify] attested ", line], ""))
+        let __t := tr.trail(db, sprint_id, "sprint_attested", line)
+        ()
+      },
+    }
+  })
+  ()
+}
+
+# ── reputation_cmd ────────────────────────────────────────────────────────────
+# Print the did:lex reputation registry: reputation = count of VERIFIED
+# attestations per did (derived, never stored), sessions = all attestations.
+fn reputation_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => io.print(identity.registry_json(db)),
   }
 }
 

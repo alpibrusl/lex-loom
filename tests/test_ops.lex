@@ -49,6 +49,8 @@ fn call_arg() -> jv.Json {
   JObj([("x", JStr("1"))])
 }
 
+# "sqlite::memory:" is one shared store per process, not one per open — so
+# every test uses its own agent id to keep its trace rows disjoint.
 fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
@@ -112,10 +114,10 @@ fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time] Result[Unit, St
       let err_tool := runner.wrap_tool(path, make_err_tool("lex_run"))
       let __c1 := invoke_n(ok_tool, 2)
       let __c2 := invoke_n(err_tool, 1)
-      let __f := runner.flush_op_calls(db, run_id, "qa-agent")
-      let n := count_op_calls(db, "qa-agent")
+      let __f := runner.flush_op_calls(db, run_id, "flush-qa")
+      let n := count_op_calls(db, "flush-qa")
       if n == 3 {
-        let ps := payloads(db, "qa-agent")
+        let ps := payloads(db, "flush-qa")
         if str.contains(ps, "\"tool\":\"lex_check\",\"ok\":true") {
           if str.contains(ps, "\"tool\":\"lex_run\",\"ok\":false") {
             Ok(())
@@ -153,8 +155,8 @@ fn test_verify_operations_within_grant() -> [net, io, proc, sql, fs_write, time]
       let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
       let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_check")), 1)
       let __c2 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_run")), 1)
-      let __f := runner.flush_op_calls(db, run_id, "qa-agent")
-      let __g := insert_grant(db, "s1", "qa-agent", "qa", "lex_check,lex_run")
+      let __f := runner.flush_op_calls(db, run_id, "clean-qa")
+      let __g := insert_grant(db, "s1", "clean-qa", "qa", "lex_check,lex_run")
       let r := verify.verify_operations(db, "s1")
       if r.ops == 2 {
         if r.exceeded == 0 {
@@ -208,9 +210,9 @@ fn test_flush_is_drained() -> [net, io, proc, sql, fs_write, time] Result[Unit, 
       let path := runner.ops_file(run_id)
       let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
       let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_check")), 1)
-      let __f1 := runner.flush_op_calls(db, run_id, "qa-agent")
-      let __f2 := runner.flush_op_calls(db, run_id, "qa-agent")
-      let n := count_op_calls(db, "qa-agent")
+      let __f1 := runner.flush_op_calls(db, run_id, "drain-qa")
+      let __f2 := runner.flush_op_calls(db, run_id, "drain-qa")
+      let n := count_op_calls(db, "drain-qa")
       if n == 1 {
         Ok(())
       } else {

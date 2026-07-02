@@ -63,12 +63,85 @@ type AgentDef = { id :: Str, kind :: Str, system_prompt :: Str, model_name :: St
 
 type PeerInfo = { id :: Str, kind :: Str, name :: Str, inbox_url :: Str, role :: Str }
 
-# NOTE (#65): per-operation `op_call` telemetry (P1b) was emitted here by
-# destructuring StepToolExec/StepToolResult, but lex-llm constructs those
-# 1-tuple-param variants with two positional args (agent.lex:376), so at runtime
-# the payload is a bare Str, not a tuple — destructuring it crashes a par_map
-# worker ("GetElem on non-tuple"). Removed to unbreak tool-using sprints; op_call
-# will be re-derived from lex-llm's native run_loop_traced cap_* events instead.
+# ── P1b: op_call telemetry via wrapped tool handlers (#65) ────────────────────
+# The first implementation destructured lex-llm's StepToolExec/StepToolResult
+# variants, whose runtime payload is a bare Str (constructed with two positional
+# args against a 1-tuple-param declaration) — the tuple destructure crashed
+# every tool-using sprint. Instead of reading the Step stream, loom now observes
+# its own tool handlers: every tool handed to an agent is wrapped so an executed
+# invocation appends "<tool> ok|err" to a per-run ops file. The handler effect
+# row is [net, io, proc] — no sql — so the wrapper cannot write the traces table
+# itself; after the agent loop returns, flush_op_calls replays the file into
+# `traces` as op_call events, the exact rows verify_operations (P1b) re-derives
+# per-operation authority from. Coverage is the same class the Step-based
+# emission had: tools that actually dispatched. A hallucinated tool name that
+# lex-llm never dispatches executes nothing and leaves no op to prove.
+fn ops_file(run_id :: Str) -> Str {
+  str.join(["/tmp/loom-ops-", run_id, ".log"], "")
+}
+
+# Append one executed-tool record. Read-then-write is race-free here: calls
+# within one agent loop are sequential, and the path is unique per run_id.
+fn note_op_call(path :: Str, tool_name :: Str, ok :: Bool) -> [io] Unit {
+  let prior := match io.read(path) {
+    Ok(s) => s,
+    Err(_) => "",
+  }
+  let __w := io.write(path, str.join([prior, tool_name, if ok {
+    " ok"
+  } else {
+    " err"
+  }, "\n"], ""))
+  ()
+}
+
+# Same tool, same schema — but the handler records its own invocation before
+# returning. The wrapper stays inside the handler's [net, io, proc] row.
+fn wrap_tool(path :: Str, tl :: t.Tool) -> t.Tool {
+  let inner := tl.handler
+  t.define(tl.name, tl.description, tl.params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let out := inner(args)
+    let ok := match out {
+      Ok(_) => true,
+      Err(_) => false,
+    }
+    let __n := note_op_call(path, tl.name, ok)
+    out
+  })
+}
+
+fn op_call_json(agent_id :: Str, tool_name :: Str, ok :: Bool) -> Str {
+  str.join(["{\"agent\":\"", agent_id, "\",\"tool\":\"", tool_name, "\",\"ok\":", if ok {
+    "true"
+  } else {
+    "false"
+  }, "}"], "")
+}
+
+# Replay the ops file into the traces table as op_call events and remove it.
+fn flush_op_calls(db :: conn.ConnDb, run_id :: Str, agent_id :: Str) -> [io, sql, fs_write, time, proc] Unit {
+  let path := ops_file(run_id)
+  let content := match io.read(path) {
+    Ok(s) => s,
+    Err(_) => "",
+  }
+  let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
+  let __each := list.fold(str.split(content, "\n"), (), fn (acc :: Unit, line :: Str) -> [sql, fs_write, time] Unit {
+    let l := str.trim(line)
+    if str.is_empty(l) {
+      ()
+    } else {
+      let nm := match list.head(str.split(l, " ")) {
+        None => "",
+        Some(h) => h,
+      }
+      let ok := str.ends_with(l, " ok")
+      trace.record(db, run_id, agent_id, "op_call", op_call_json(agent_id, nm, ok))
+    }
+  })
+  ()
+}
+
 fn extract_answer(steps :: List[d.Step]) -> Str {
   list.fold(steps, "", fn (acc :: Str, st :: d.Step) -> Str {
     match st {
@@ -386,7 +459,10 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       let state := mem.load_state(db, def.id)
       let entries := mem.recall_all(db, def.id)
       let sys := build_system_prompt(def, state, entries)
-      let all_tools := def.tools
+      let ops_path := ops_file(run_id)
+      let all_tools := list.map(def.tools, fn (tl :: t.Tool) -> t.Tool {
+        wrap_tool(ops_path, tl)
+      })
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
       let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
       let conv := conv_from_msg(def.kind, msg_json)
@@ -397,6 +473,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
+      let __ops := flush_op_calls(db, run_id, def.id)
       let out0 := extract_answer(steps)
       let out := if is_build_kind(def.kind) {
         if has_fence(out0) {

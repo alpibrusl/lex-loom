@@ -95,11 +95,12 @@ fn note_op_call(path :: Str, tool_name :: Str, ok :: Bool) -> [io] Unit {
   ()
 }
 
-# Same tool, same schema — but the handler records its own invocation before
-# returning. The wrapper stays inside the handler's [net, io, proc] row.
+# Same tool, same schema, same precondition — but the executor records its own
+# invocation before returning. The wrapper stays inside the tool's
+# [io, net, proc] row, so the record is a file append, not a traces write.
 fn wrap_tool(path :: Str, tl :: t.Tool) -> t.Tool {
-  let inner := tl.handler
-  t.define(tl.name, tl.description, tl.params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  let inner := tl.execute
+  { name: tl.name, description: tl.description, params: tl.params, precondition: tl.precondition, execute: fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let out := inner(args)
     let ok := match out {
       Ok(_) => true,
@@ -107,7 +108,7 @@ fn wrap_tool(path :: Str, tl :: t.Tool) -> t.Tool {
     }
     let __n := note_op_call(path, tl.name, ok)
     out
-  })
+  } }
 }
 
 fn op_call_json(agent_id :: Str, tool_name :: Str, ok :: Bool) -> Str {

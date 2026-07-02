@@ -93,7 +93,7 @@ fn invoke_n(tl :: t.Tool, times :: Int) -> [net, io, proc] Unit {
   if times <= 0 {
     ()
   } else {
-    let h := tl.handler
+    let h := tl.execute
     let __r := h(call_arg())
     invoke_n(tl, times - 1)
   }

@@ -90,8 +90,9 @@ litellm --config litellm/config.yaml --port 4000 &
 
 # Run lex-loom against it
 LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b \
-  lex run --allow-effects env,io,net,llm,proc,sql,fs_write,time,concurrent \
-  src/main.lex main
+  lex run --max-steps 200000000 \
+  --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
+  src/web/server.lex serve_loom
 ```
 
 ### With Ollama (native API, fallback)
@@ -398,7 +399,7 @@ Exercises graph validation, metaspec rules, phase state machine, and semantic di
 
 ```bash
 lex pkg install
-lex run --allow-effects io src/hello.lex hello
+lex run --allow-effects fs_write,io,sql,time src/hello.lex hello
 ```
 
 Expected output:
@@ -551,7 +552,7 @@ Expose sprint controls to Claude Code or Cursor:
 
 ```bash
 DB_PATH=loom.db \
-  lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc \
+  lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
   src/server/mcp.lex run_mcp_server
 ```
 
@@ -579,7 +580,7 @@ export OLLAMA_MODEL=glm-4.7-flash                                # local Ollama
 # budget, so pass --max-steps (>= 200M). Without it the runner panics
 # mid-sprint with "step limit exceeded". (#12)
 lex run --max-steps 200000000 \
-  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc \
+  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
   src/main.lex cloud_poll
 ```
 

@@ -10,8 +10,8 @@
 #                      on success, attests the child result. Requires a model.
 #
 # Run:
-#   DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc examples/demo_expand.lex demo_depth_cap
-#   MODEL=qwen3-coder:30b DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc examples/demo_expand.lex demo_live_child
+#   DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs examples/demo_expand.lex demo_depth_cap
+#   MODEL=qwen3-coder:30b DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs examples/demo_expand.lex demo_live_child
 
 import "std.env" as env
 

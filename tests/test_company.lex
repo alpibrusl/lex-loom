@@ -93,7 +93,15 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
     if a.goal == b.goal {
       if a.model == b.model {
         if a.max_iterations == b.max_iterations {
-          a.stop_when == b.stop_when
+          if a.stop_when == b.stop_when {
+            if a.pmf_when == b.pmf_when {
+              a.maintenance_when == b.maintenance_when
+            } else {
+              false
+            }
+          } else {
+            false
+          }
         } else {
           false
         }
@@ -114,7 +122,7 @@ fn test_company_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
-        let cfg := { id: "acme", goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3" }
+        let cfg := { id: "acme", goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5" }
         match company.save_company(db, cfg) {
           Err(e) => Err(str.concat("save_company: ", e)),
           Ok(_) => match company.load_company(db, "acme") {
@@ -240,8 +248,100 @@ fn test_iteration_sprint_id() -> Result[Unit, Str] {
   }
 }
 
+fn stage_cfg(pmf :: Str, maint :: Str) -> company.CompanyCfg {
+  { id: "acme", goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint }
+}
+
+fn test_stage_advances_on_pmf() -> Result[Unit, Str] {
+  let cfg := stage_cfg("verdict-passed", "")
+  let passed := ctx(1, "passed", "", 1, 0)
+  let failed := ctx(1, "failed", "", 0, 1)
+  if company.next_stage(Validation, failed, cfg, false) == Validation {
+    if company.next_stage(Validation, passed, cfg, false) == Growth {
+      Ok(())
+    } else {
+      Err("PMF met should advance Validation -> Growth")
+    }
+  } else {
+    Err("PMF unmet should stay in Validation")
+  }
+}
+
+fn test_stage_empty_condition_never_advances() -> Result[Unit, Str] {
+  let cfg := stage_cfg("", "")
+  let passed := ctx(1, "passed", "", 1, 0)
+  if company.next_stage(Validation, passed, cfg, false) == Validation {
+    Ok(())
+  } else {
+    Err("empty pmf_when should never auto-advance")
+  }
+}
+
+fn test_stage_growth_to_maintenance() -> Result[Unit, Str] {
+  let cfg := stage_cfg("", "iter ge 5")
+  let early := ctx(3, "passed", "", 1, 0)
+  let mature := ctx(5, "passed", "", 1, 0)
+  if company.next_stage(Growth, early, cfg, false) == Growth {
+    if company.next_stage(Growth, mature, cfg, false) == Maintenance {
+      Ok(())
+    } else {
+      Err("maintenance_when met should advance Growth -> Maintenance")
+    }
+  } else {
+    Err("maintenance_when unmet should stay in Growth")
+  }
+}
+
+fn test_stage_sunset_from_any_stage() -> Result[Unit, Str] {
+  let cfg := stage_cfg("", "")
+  let c := ctx(2, "passed", "", 1, 0)
+  if company.next_stage(Validation, c, cfg, true) == Sunset {
+    if company.next_stage(Growth, c, cfg, true) == Sunset {
+      if company.next_stage(Sunset, c, cfg, false) == Sunset {
+        Ok(())
+      } else {
+        Err("sunset must be terminal")
+      }
+    } else {
+      Err("sunset_now should sunset from Growth")
+    }
+  } else {
+    Err("sunset_now should sunset from Validation")
+  }
+}
+
+fn test_stage_persistence_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => match company.save_company(db, stage_cfg("verdict-passed", "")) {
+        Err(e) => Err(str.concat("save_company: ", e)),
+        Ok(_) => {
+          let s0 := company.load_stage(db, "acme")
+          if s0 == Ideation {
+            match company.save_stage(db, "acme", Growth) {
+              Err(e) => Err(str.concat("save_stage: ", e)),
+              Ok(_) => {
+                let s1 := company.load_stage(db, "acme")
+                if s1 == Growth {
+                  Ok(())
+                } else {
+                  Err("stage did not persist as Growth")
+                }
+              },
+            }
+          } else {
+            Err("new company should start in Ideation")
+          }
+        },
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random] Unit {

@@ -34,7 +34,9 @@ import "lex-agent/src/memory" as mem
 # ── C1: types ─────────────────────────────────────────────────────────────────
 # The persistent mission. `stop_when` is a C2 condition (e.g. "iter ge 3");
 # `max_iterations` is the hard ceiling regardless of the condition.
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str }
+# `pmf_when`/`maintenance_when` (C9, #62) are grounded conditions that advance
+# the lifecycle stage — PMF is an oracle passing, not a calendar date.
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
@@ -43,14 +45,14 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO companies (id, goal, model, max_iterations, stop_when, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr("active"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
@@ -58,13 +60,13 @@ fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Res
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when }),
     },
   }
 }
@@ -470,6 +472,104 @@ fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
       } else {
         { decision: decision, goal: "", reason: reason }
       }
+    },
+  }
+}
+
+# ── C9: lifecycle FSM + value gates ────────────────────────────────────────────
+# Explicit product-lifecycle stages, each transition guarded by a GROUNDED
+# condition (the C2 DSL) — not a calendar date. "PMF" is `pmf_when` evaluating
+# true against a real iteration's result, not a milestone someone declared.
+#   Ideation   -> Validation : always (iteration 1 begins validating the mission)
+#   Validation -> Growth     : pmf_when holds (empty pmf_when never auto-advances)
+#   Growth     -> Maintenance: maintenance_when holds (empty never auto-advances)
+#   any        -> Sunset     : the strategist (C8) decides "stop", or stop_when
+# Maintenance and Sunset are terminal from this FSM's perspective (no more
+# auto-advance) — Maintenance is where a dormant/event-triggered loom (C10)
+# would live.
+type LifecycleStage = Ideation | Validation | Growth | Maintenance | Sunset
+
+fn stage_to_str(s :: LifecycleStage) -> Str {
+  match s {
+    Ideation => "ideation",
+    Validation => "validation",
+    Growth => "growth",
+    Maintenance => "maintenance",
+    Sunset => "sunset",
+  }
+}
+
+fn stage_from_str(s :: Str) -> LifecycleStage {
+  if s == "validation" {
+    Validation
+  } else {
+    if s == "growth" {
+      Growth
+    } else {
+      if s == "maintenance" {
+        Maintenance
+      } else {
+        if s == "sunset" {
+          Sunset
+        } else {
+          Ideation
+        }
+      }
+    }
+  }
+}
+
+# Pure stage transition: given the current stage and the finished iteration's
+# context, what stage comes next. `sunset_now` is true when an out-of-band
+# reason to sunset fired (the strategist said "stop", or stop_when held) —
+# checked BEFORE the ordinary ladder so it can fire from any stage.
+fn next_stage(current :: LifecycleStage, ctx :: IterCtx, cfg :: CompanyCfg, sunset_now :: Bool) -> LifecycleStage {
+  if sunset_now {
+    Sunset
+  } else {
+    match current {
+      Sunset => Sunset,
+      Maintenance => Maintenance,
+      Growth => if str.is_empty(str.trim(cfg.maintenance_when)) {
+        Growth
+      } else {
+        if eval_condition(cfg.maintenance_when, ctx) {
+          Maintenance
+        } else {
+          Growth
+        }
+      },
+      _ => if str.is_empty(str.trim(cfg.pmf_when)) {
+        Validation
+      } else {
+        if eval_condition(cfg.pmf_when, ctx) {
+          Growth
+        } else {
+          Validation
+        }
+      },
+    }
+  }
+}
+
+type StageRow = { stage :: Str }
+
+fn save_stage(db :: conn.ConnDb, company_id :: Str, stage :: LifecycleStage) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE companies SET stage=? WHERE id=?", params: [PStr(stage_to_str(stage)), PStr(company_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_stage(db :: conn.ConnDb, company_id :: Str) -> [sql] LifecycleStage {
+  let q := ormq.for_dialect({ sql: "SELECT stage FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[StageRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => Ideation,
+    Ok(rs) => match list.head(rs) {
+      None => Ideation,
+      Some(r) => stage_from_str(r.stage),
     },
   }
 }

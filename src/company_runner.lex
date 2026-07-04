@@ -90,6 +90,15 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     company.eval_condition(ccfg.stop_when, ctx)
   }
+  let cur_stage := company.load_stage(db, ccfg.id)
+  let new_stage := company.next_stage(cur_stage, ctx, ccfg, decision.decision == "stop")
+  let __ss := if new_stage == cur_stage {
+    ()
+  } else {
+    let __sv := company.save_stage(db, ccfg.id, new_stage)
+    let __st := tr.trail(db, ccfg.id, "stage_transition", str.join(["{\"iter\":", int.to_str(k), ",\"from\":\"", company.stage_to_str(cur_stage), "\",\"to\":\"", company.stage_to_str(new_stage), "\"}"], ""))
+    io.print(str.join(["[company] stage: ", company.stage_to_str(cur_stage), " -> ", company.stage_to_str(new_stage)], ""))
+  }
   if decision.decision == "stop" {
     { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" }
   } else {

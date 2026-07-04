@@ -457,6 +457,20 @@ fn judge_agent(model :: Str, criteria :: Str) -> [env] runner.AgentDef {
   { id: "loom-judge", kind: "judge", system_prompt: judge_system_prompt(criteria), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
 }
 
+# Strategist — the agent-first "board" (company C8, #62). Between iterations it
+# reviews the mission, the current goal, and the last iteration's grounded result
+# (verifier verdict + digest summary), then steers: keep going, revise the goal
+# (a pivot), or stop (mission achieved or a dead end). Every decision is trail-
+# recorded, so the company's direction changes are auditable, not silent.
+fn strategist_agent(model :: Str) -> [env] runner.AgentDef {
+  let p := make_provider()
+  { id: "loom-strategist", kind: "strategist", system_prompt: strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+}
+
+fn strategist_system_prompt() -> Str {
+  str.join(["You are the STRATEGIST for an autonomous software company that pursues a persistent MISSION by running a series of build sprints (iterations). After each iteration you decide the company's next move.\n\n", "You receive:\n", "- MISSION: the enduring goal that does not change.\n", "- CURRENT GOAL: what the last iteration actually attempted.\n", "- LAST RESULT: the four-layer verifier verdict (passed/failed) and the digest summary of what was built and learned.\n\n", "Decide ONE of:\n", "- \"continue\": the current goal is right and not yet met — run it again to improve.\n", "- \"revise\": the goal should change — a pivot, a narrower scope, or the next increment toward the mission. Provide the new goal.\n", "- \"stop\": the mission is achieved, OR further iteration cannot help (a dead end). Explain which.\n\n", "RULES:\n", "- Ground your decision in the LAST RESULT, not optimism. A failed verdict is evidence the goal is too big or mis-specified — prefer revise (narrower) over continue.\n", "- A revised goal MUST be a concrete, buildable request in one or two sentences, advancing the MISSION.\n", "- Only \"stop\" when the evidence genuinely supports it.\n\n", "Output ONLY a JSON object — no prose, no markdown fences:\n", "{\"decision\":\"continue|revise|stop\",\"goal\":\"<new goal, required iff revise, else empty>\",\"reason\":\"<one sentence grounded in the result>\"}"], "")
+}
+
 fn build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
   { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: [lexskill.make_lex_guidelines_tool(), lexskill.make_lex_check_tool()], proc_cmd: "", a2a_url: "" }

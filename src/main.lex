@@ -546,12 +546,17 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "3"), 3)
   let stop_when := get_env("STOP_WHEN", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
+  let evolve := if get_env("EVOLVE", "") == "1" {
+    true
+  } else {
+    get_env("EVOLVE", "") == "true"
+  }
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
       let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when }
-      let __res := company_runner.run_company(db, ccfg, api_max)
+      let __res := company_runner.run_company(db, ccfg, api_max, evolve)
       ()
     },
   }

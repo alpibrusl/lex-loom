@@ -419,3 +419,58 @@ fn valid_cmp(op :: Str, n :: Str) -> Bool {
   }
 }
 
+# ── C8: goal-evolution meta-loop (strategist) ─────────────────────────────────
+# The strategist agent (the agent-first "board", roles.strategist_agent) returns
+# a decision after each iteration. This is the pure parse + normalization of its
+# JSON reply — the LLM call itself lives in the company runner.
+type StrategistDecision = { decision :: Str, goal :: Str, reason :: Str }
+
+fn json_str_field(j :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+}
+
+# Make a free-text field safe to embed in a hand-built JSON string literal.
+fn json_escape(s :: Str) -> Str {
+  str.replace(str.replace(str.replace(s, "\\", "/"), "\"", "'"), "\n", " ")
+}
+
+# Normalize an arbitrary decision string to one of continue|revise|stop.
+# Anything unrecognized (incl. a parse failure) is the safe default "continue".
+fn norm_decision(s :: Str) -> Str {
+  let d := str.to_lower(str.trim(s))
+  if d == "revise" {
+    "revise"
+  } else {
+    if d == "stop" {
+      "stop"
+    } else {
+      "continue"
+    }
+  }
+}
+
+# Parse the strategist's JSON reply. A revise with an empty goal degrades to
+# continue (there is nothing to pivot to). Unparseable input -> continue.
+fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
+  match jv.parse(reply) {
+    Err(_) => { decision: "continue", goal: "", reason: "unparseable strategist reply" },
+    Ok(j) => {
+      let decision := norm_decision(json_str_field(j, "decision"))
+      let goal := str.trim(json_str_field(j, "goal"))
+      let reason := json_str_field(j, "reason")
+      if decision == "revise" {
+        if str.is_empty(goal) {
+          { decision: "continue", goal: "", reason: str.concat("revise with no goal; kept goal. ", reason) }
+        } else {
+          { decision: "revise", goal: goal, reason: reason }
+        }
+      } else {
+        { decision: decision, goal: "", reason: reason }
+      }
+    },
+  }
+}
+

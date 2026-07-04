@@ -187,6 +187,51 @@ fn test_persist_memory() -> [sql, fs_read, fs_write, time, crypto, random] Resul
   }
 }
 
+fn test_strategist_continue() -> Result[Unit, Str] {
+  let d := company.parse_strategist_decision("{\"decision\":\"continue\",\"goal\":\"\",\"reason\":\"not met yet\"}")
+  if d.decision == "continue" {
+    Ok(())
+  } else {
+    Err(str.concat("expected continue, got ", d.decision))
+  }
+}
+
+fn test_strategist_revise() -> Result[Unit, Str] {
+  let d := company.parse_strategist_decision("{\"decision\":\"revise\",\"goal\":\"Narrow to just the parser\",\"reason\":\"too big\"}")
+  if d.decision == "revise" {
+    if d.goal == "Narrow to just the parser" {
+      Ok(())
+    } else {
+      Err(str.concat("revise goal lost: ", d.goal))
+    }
+  } else {
+    Err(str.concat("expected revise, got ", d.decision))
+  }
+}
+
+fn test_strategist_revise_no_goal_degrades() -> Result[Unit, Str] {
+  let d := company.parse_strategist_decision("{\"decision\":\"revise\",\"goal\":\"\",\"reason\":\"x\"}")
+  if d.decision == "continue" {
+    Ok(())
+  } else {
+    Err(str.concat("empty-goal revise should degrade to continue, got ", d.decision))
+  }
+}
+
+fn test_strategist_stop_and_garbage() -> Result[Unit, Str] {
+  let s := company.parse_strategist_decision("{\"decision\":\"stop\",\"goal\":\"\",\"reason\":\"mission achieved\"}")
+  if s.decision == "stop" {
+    let g := company.parse_strategist_decision("not json at all")
+    if g.decision == "continue" {
+      Ok(())
+    } else {
+      Err(str.concat("garbage should default to continue, got ", g.decision))
+    }
+  } else {
+    Err(str.concat("expected stop, got ", s.decision))
+  }
+}
+
 fn test_iteration_sprint_id() -> Result[Unit, Str] {
   if company.iteration_sprint_id("acme", 2) == "acme/iter-2" {
     Ok(())
@@ -196,7 +241,7 @@ fn test_iteration_sprint_id() -> Result[Unit, Str] {
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random] Unit {

@@ -36,11 +36,28 @@ type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: 
 # is trail-recorded under the company id so direction changes are auditable.
 fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
-  let prompt := str.join(["MISSION:\n", ccfg.goal, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+  let shipped := company.shipped_summary(db, ccfg.id)
+  let prompt := str.join(["MISSION:\n", ccfg.goal, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
   let reply := runner.step(db, agent, prompt)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
   decision
+}
+
+# #80: pop the next pending backlog item (if any) and mark it active, emitting
+# the same trail event either call site would. Shared by the mid-loop "stop"
+# branch and the resume-from-Sunset entry point so both grow the feature set
+# instead of leaving a queued item orphaned.
+fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sql, fs_write, time, random, crypto, io] Option[company.BacklogItem] {
+  match company.next_backlog_item(db, company_id) {
+    None => None,
+    Some(item) => {
+      let __mb := company.mark_backlog_status(db, company_id, item.idx, "active")
+      let __bt := tr.trail(db, company_id, "backlog_advanced", str.join(["{\"iter\":", int.to_str(at_iter), ",\"goal\":\"", company.json_escape(item.goal), "\"}"], ""))
+      let __bp := io.print(str.join(["[company] backlog: graduating to \"", item.goal, "\""], ""))
+      Some(item)
+    },
+  }
 }
 
 fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
@@ -51,7 +68,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
-  let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running" })
+  let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count }
@@ -108,18 +125,13 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   }
   let dormant := company.is_dormant(new_stage, ccfg.wake_when, ctx)
   if decision.decision == "stop" {
-    match company.next_backlog_item(db, ccfg.id) {
-      None => { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" },
-      Some(item) => {
-        let __mb := company.mark_backlog_status(db, ccfg.id, item.idx, "active")
-        let __bt := tr.trail(db, ccfg.id, "backlog_advanced", str.join(["{\"iter\":", int.to_str(k), ",\"goal\":\"", company.json_escape(item.goal), "\"}"], ""))
-        let __bp := io.print(str.join(["[company] backlog: graduating to \"", item.goal, "\""], ""))
-        if k >= ccfg.max_iterations {
-          { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
-        } else {
-          run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, item.goal, evolve)
-        }
-      },
+    if k >= ccfg.max_iterations {
+      { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+    } else {
+      match graduate_backlog(db, ccfg.id, k) {
+        None => { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" },
+        Some(item) => run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, item.goal, evolve),
+      }
     }
   } else {
     if stop {
@@ -140,10 +152,26 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   }
 }
 
+# Launch (or refuse to launch) the next iteration given a resume point and the
+# goal it should run — shared by the fresh/dormant-woken path and the
+# resume-from-Sunset path so both respect max_iterations identically.
+fn proceed(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool, resume :: company.ResumePoint, goal :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
+  if resume.start_idx > ccfg.max_iterations {
+    let __mp := io.print("[company] max_iterations already reached — nothing to do")
+    { company_id: ccfg.id, iterations: resume.start_idx - 1, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "max_iterations" }
+  } else {
+    let res := run_iterations(db, ccfg, resume.start_idx, resume.parent_sprint, api_max, resume.prev_ctx, goal, evolve)
+    let __pe := io.print(str.join(["[company] done iterations=", int.to_str(res.iterations), " stopped_by=", res.stopped_by, " last_verdict=", res.last_verdict], ""))
+    res
+  }
+}
+
 # Persist the company (an upsert — preserves stage across invocations, C10),
-# then resume from wherever the last invocation left off. A Sunset company is
-# terminal and a dormant one (Maintenance, wake_when unmet) is a cheap no-op —
-# neither launches a sprint.
+# then resume from wherever the last invocation left off. A dormant company
+# (Maintenance, wake_when unmet) is a cheap no-op. A Sunset company is terminal
+# UNLESS a backlog item is queued (#80) — the strategist's earlier "stop" meant
+# "this goal is done", not "the company is done"; a pending feature reactivates
+# it (reverting the stage to Growth, since PMF was already established).
 fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
   let __save := company.save_company(db, ccfg)
   let stage0 := company.load_stage(db, ccfg.id)
@@ -155,22 +183,25 @@ fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, ev
   }], ""))
   let done := resume.start_idx - 1
   if stage0 == Sunset {
-    let __sp := io.print("[company] already sunset — nothing to do")
-    { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "sunset" }
+    match graduate_backlog(db, ccfg.id, done) {
+      None => {
+        let __sp := io.print("[company] already sunset — nothing to do")
+        { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "sunset" }
+      },
+      Some(item) => {
+        let __rs := company.save_stage(db, ccfg.id, Growth)
+        let __rt := tr.trail(db, ccfg.id, "stage_transition", str.join(["{\"iter\":", int.to_str(done), ",\"from\":\"sunset\",\"to\":\"growth\"}"], ""))
+        let __rp := io.print("[company] reactivating from sunset via queued backlog item")
+        proceed(db, ccfg, api_max, evolve, resume, item.goal)
+      },
+    }
   } else {
     if company.is_dormant(stage0, ccfg.wake_when, resume.prev_ctx) {
       let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(done), ",\"stage\":\"", company.stage_to_str(stage0), "\"}"], ""))
       let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(stage0), ", wake_when not met)"], ""))
       { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "dormant" }
     } else {
-      if resume.start_idx > ccfg.max_iterations {
-        let __mp := io.print("[company] max_iterations already reached — nothing to do")
-        { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "max_iterations" }
-      } else {
-        let res := run_iterations(db, ccfg, resume.start_idx, resume.parent_sprint, api_max, resume.prev_ctx, ccfg.goal, evolve)
-        let __pe := io.print(str.join(["[company] done iterations=", int.to_str(res.iterations), " stopped_by=", res.stopped_by, " last_verdict=", res.last_verdict], ""))
-        res
-      }
+      proceed(db, ccfg, api_max, evolve, resume, ccfg.goal)
     }
   }
 }

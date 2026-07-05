@@ -150,9 +150,9 @@ fn test_company_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit
 
 # split out to keep nesting shallow
 fn run_iter_roundtrip(db :: conn.ConnDb, id :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
-  match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "running" }) {
+  match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "running", goal: "g1" }) {
     Err(e) => Err(str.concat("record_iteration: ", e)),
-    Ok(_) => match company.record_iteration(db, { company_id: id, idx: 2, sprint_id: str.concat(id, "/iter-2"), parent_sprint_id: str.concat(id, "/iter-1"), status: "running" }) {
+    Ok(_) => match company.record_iteration(db, { company_id: id, idx: 2, sprint_id: str.concat(id, "/iter-2"), parent_sprint_id: str.concat(id, "/iter-1"), status: "running", goal: "g2" }) {
       Err(e) => Err(str.concat("record_iteration 2: ", e)),
       Ok(_) => {
         let latest := company.latest_iteration_idx(db, id)
@@ -409,7 +409,7 @@ fn test_resume_point_after_iterations() -> [sql, fs_write, time, crypto, random]
       Ok(_) => {
         let id := rand_id("resume-it")
         let sprint1 := str.concat(id, "/iter-1")
-        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: sprint1, parent_sprint_id: "", status: "success" }) {
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: sprint1, parent_sprint_id: "", status: "success", goal: "g1" }) {
           Err(e) => Err(e),
           Ok(_) => match company.finish_iteration(db, id, 1, "success") {
             Err(e) => Err(e),
@@ -599,8 +599,55 @@ fn test_add_track_idempotent() -> [sql, fs_write, time, crypto, random] Result[U
   }
 }
 
+fn test_shipped_summary_empty() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let s := company.shipped_summary(db, rand_id("nothing-shipped"))
+        if s == "(nothing shipped yet)" {
+          Ok(())
+        } else {
+          Err(str.concat("expected the empty placeholder, got: ", s))
+        }
+      },
+    },
+  }
+}
+
+fn test_shipped_summary_lists_successes_only() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("shipped")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "Add a Stack module" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.record_iteration(db, { company_id: id, idx: 2, sprint_id: str.concat(id, "/iter-2"), parent_sprint_id: str.concat(id, "/iter-1"), status: "failed", goal: "Add a broken module" }) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let s := company.shipped_summary(db, id)
+              if str.contains(s, "Stack module") {
+                if str.contains(s, "broken module") {
+                  Err("shipped_summary must not list a failed iteration")
+                } else {
+                  Ok(())
+                }
+              } else {
+                Err(str.concat("expected the shipped Stack module to be listed, got: ", s))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

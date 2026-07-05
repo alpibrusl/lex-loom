@@ -34,13 +34,29 @@ type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: 
 # C8 — the agent-first "board". Ask the strategist to review the finished
 # iteration and steer: continue | revise (pivot the goal) | stop. Every decision
 # is trail-recorded under the company id so direction changes are auditable.
+fn board_notes_section(notes :: List[Str]) -> Str {
+  if list.is_empty(notes) {
+    "(none)"
+  } else {
+    str.join(list.map(notes, fn (n :: Str) -> Str {
+      str.concat("- ", n)
+    }), "\n")
+  }
+}
+
 fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
   let shipped := company.shipped_summary(db, ccfg.id)
-  let prompt := str.join(["MISSION:\n", ccfg.goal, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+  let notes := company.pending_board_notes(db, ccfg.id)
+  let prompt := str.join(["MISSION:\n", ccfg.goal, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
   let reply := runner.step(db, agent, prompt)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
+  let __mc := if list.is_empty(notes) {
+    Ok(())
+  } else {
+    company.mark_board_notes_consumed(db, ccfg.id)
+  }
   decision
 }
 
@@ -201,7 +217,12 @@ fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, ev
       let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(stage0), ", wake_when not met)"], ""))
       { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "dormant" }
     } else {
-      proceed(db, ccfg, api_max, evolve, resume, ccfg.goal)
+      let resume_goal := if str.is_empty(resume.last_goal) {
+        ccfg.goal
+      } else {
+        resume.last_goal
+      }
+      proceed(db, ccfg, api_max, evolve, resume, resume_goal)
     }
   }
 }

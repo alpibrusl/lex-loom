@@ -462,6 +462,17 @@ fn json_str_field(j :: jv.Json, key :: Str) -> Str {
   }
 }
 
+# Board-report trail events store "iter" as a JSON NUMBER (int.to_str feeds a
+# bare int into the hand-built JSON, not a quoted string) — json_str_field only
+# matches JStr and silently returns "" for it. This reads either shape.
+fn json_int_field_str(j :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JInt(n)) => int.to_str(n),
+    Some(JStr(s)) => s,
+    _ => "?",
+  }
+}
+
 # Make a free-text field safe to embed in a hand-built JSON string literal.
 fn json_escape(s :: Str) -> Str {
   str.replace(str.replace(str.replace(s, "\\", "/"), "\"", "'"), "\n", " ")
@@ -638,7 +649,13 @@ fn is_dormant(stage :: LifecycleStage, wake_when :: Str, ctx :: IterCtx) -> Bool
 # iteration (1 if none yet), the sprint id to chain lineage from, and the
 # context of that last iteration (a default "nothing happened yet" ctx if this
 # is the company's first invocation).
-type ResumePoint = { start_idx :: Int, parent_sprint :: Str, prev_ctx :: IterCtx }
+# `last_goal` (found bug, discovered live) is what the most recent iteration
+# actually attempted — regardless of whether it succeeded. Without it, resuming
+# a company always fell back to the top-level MISSION text, silently discarding
+# whatever the strategist had revised the goal to (or a failed attempt that
+# should be retried) and re-running an already-shipped feature from scratch.
+# Empty only for a company with no iterations yet (a genuinely fresh start).
+type ResumePoint = { start_idx :: Int, parent_sprint :: Str, prev_ctx :: IterCtx, last_goal :: Str }
 
 fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
   list.fold(its, None, fn (acc :: Option[CompanyIteration], it :: CompanyIteration) -> Option[CompanyIteration] {
@@ -648,8 +665,8 @@ fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
 
 fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
   match last_iteration(load_iterations(db, company_id)) {
-    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 } },
-    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success") },
+    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 }, last_goal: "" },
+    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal },
   }
 }
 
@@ -765,6 +782,121 @@ fn mark_track_status(db :: conn.ConnDb, portfolio_id :: Str, track_id :: Str, st
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
+  }
+}
+
+# ── Board layer (#82): advisory reporting + notes for the human board member ──
+# The company runs unattended; a human board member gets a read-only report
+# (synthesized from data already in the trail — no new execution logic) and can
+# leave advisory notes the strategist reads on its NEXT decision. Notes are
+# one-shot (consumed after being shown once) and never block a run — if none
+# exist, the company behaves exactly as it does today.
+type BoardNote = { company_id :: Str, idx :: Int, note :: Str, status :: Str }
+
+type BoardNoteRow = { idx :: Int, note :: Str, status :: Str }
+
+fn add_board_note(db :: conn.ConnDb, company_id :: Str, note :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let next_idx := list.fold(load_board_notes(db, company_id), 0, fn (acc :: Int, n :: BoardNote) -> Int {
+    if n.idx > acc {
+      n.idx
+    } else {
+      acc
+    }
+  }) + 1
+  let q := ormq.for_dialect({ sql: "INSERT INTO company_board_notes (company_id, idx, note, status, created_at) VALUES (?, ?, ?, 'pending', ?)", params: [PStr(company_id), PInt(next_idx), PStr(note), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_board_notes(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BoardNote] {
+  let q := ormq.for_dialect({ sql: "SELECT idx, note, status FROM company_board_notes WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[BoardNoteRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: BoardNoteRow) -> BoardNote {
+      { company_id: company_id, idx: r.idx, note: r.note, status: r.status }
+    }),
+  }
+}
+
+fn pending_board_notes(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
+  list.fold(load_board_notes(db, company_id), [], fn (acc :: List[Str], n :: BoardNote) -> List[Str] {
+    if n.status == "pending" {
+      list.concat(acc, [n.note])
+    } else {
+      acc
+    }
+  })
+}
+
+fn mark_board_notes_consumed(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE company_board_notes SET status='consumed' WHERE company_id=? AND status='pending'", params: [PStr(company_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# ── Board report ───────────────────────────────────────────────────────────
+type TraceDataRow = { data_json :: Str }
+
+# Most recent `limit` events of a kind for this company, chronological order.
+fn recent_events(db :: conn.ConnDb, company_id :: Str, kind :: Str, limit :: Int) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT data_json FROM traces WHERE agent_id=? AND event_kind=? ORDER BY id DESC LIMIT ?", params: [PStr(company_id), PStr(kind), PInt(limit)] }, db.dialect)
+  let rows :: Result[List[TraceDataRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.fold(rs, [], fn (acc :: List[Str], r :: TraceDataRow) -> List[Str] {
+      list.concat([r.data_json], acc)
+    }),
+  }
+}
+
+fn format_decision(data_json :: Str) -> Str {
+  match jv.parse(data_json) {
+    Err(_) => "",
+    Ok(j) => str.join(["- iter ", json_int_field_str(j, "iter"), ": ", json_str_field(j, "decision"), " — ", json_str_field(j, "reason")], ""),
+  }
+}
+
+fn format_stage_transition(data_json :: Str) -> Str {
+  match jv.parse(data_json) {
+    Err(_) => "",
+    Ok(j) => str.join(["- iter ", json_int_field_str(j, "iter"), ": ", json_str_field(j, "from"), " -> ", json_str_field(j, "to")], ""),
+  }
+}
+
+fn lines_or(lines :: List[Str], placeholder :: Str) -> Str {
+  if list.is_empty(lines) {
+    placeholder
+  } else {
+    str.join(lines, "\n")
+  }
+}
+
+fn backlog_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let items := load_backlog(db, company_id)
+  lines_or(list.map(items, fn (it :: BacklogItem) -> Str {
+    str.join(["- [", it.status, "] ", it.goal], "")
+  }), "(empty)")
+}
+
+# A human-readable, read-only board update: mission, stage, what's shipped,
+# what's queued, and the company's own recent reasoning — all derived from
+# the trail, not a separate claim the company makes about itself.
+fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  match load_company(db, company_id) {
+    None => str.concat("No company found with id: ", company_id),
+    Some(cfg) => {
+      let stage := load_stage(db, company_id)
+      let its := load_iterations(db, company_id)
+      let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
+      let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+    },
   }
 }
 

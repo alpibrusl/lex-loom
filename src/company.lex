@@ -42,7 +42,9 @@ import "lex-agent/src/memory" as mem
 type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
-type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
+# `goal` (#80) is the goal this iteration actually ran — kept so the strategist
+# can be shown a "shipped so far" manifest and stop proposing duplicate work.
+type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
 
 # The context a condition is evaluated against, derived from the iteration that
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
@@ -50,7 +52,7 @@ type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepte
 
 type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
-type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
+type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
 # Upsert: a company is re-saved on every invocation (its mutable knobs — goal,
@@ -81,7 +83,7 @@ fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg
 # Open an iteration row (status "running").
 fn record_iteration(db :: conn.ConnDb, it :: CompanyIteration) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO company_iterations (company_id, idx, sprint_id, parent_sprint_id, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, '')", params: [PStr(it.company_id), PInt(it.idx), PStr(it.sprint_id), PStr(it.parent_sprint_id), PStr(it.status), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO company_iterations (company_id, idx, sprint_id, parent_sprint_id, status, goal, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, '')", params: [PStr(it.company_id), PInt(it.idx), PStr(it.sprint_id), PStr(it.parent_sprint_id), PStr(it.status), PStr(it.goal), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
@@ -99,13 +101,32 @@ fn finish_iteration(db :: conn.ConnDb, company_id :: Str, idx :: Int, status :: 
 }
 
 fn load_iterations(db :: conn.ConnDb, company_id :: Str) -> [sql] List[CompanyIteration] {
-  let q := ormq.for_dialect({ sql: "SELECT idx, sprint_id, parent_sprint_id, status FROM company_iterations WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT idx, sprint_id, parent_sprint_id, status, goal FROM company_iterations WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[IterRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, fn (r :: IterRow) -> CompanyIteration {
-      { company_id: company_id, idx: r.idx, sprint_id: r.sprint_id, parent_sprint_id: r.parent_sprint_id, status: r.status }
+      { company_id: company_id, idx: r.idx, sprint_id: r.sprint_id, parent_sprint_id: r.parent_sprint_id, status: r.status, goal: r.goal }
     }),
+  }
+}
+
+# A human-readable "what's already shipped" manifest — every SUCCESSFUL
+# iteration's goal, oldest first. Fed into the strategist's prompt (#80) so it
+# stops proposing/re-proposing something the company already built; a company
+# with no successful iterations yet gets "(nothing shipped yet)".
+fn shipped_summary(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let lines := list.fold(load_iterations(db, company_id), [], fn (acc :: List[Str], it :: CompanyIteration) -> List[Str] {
+    if it.status == "success" {
+      list.concat(acc, [str.join(["- iter ", int.to_str(it.idx), ": ", it.goal], "")])
+    } else {
+      acc
+    }
+  })
+  if list.is_empty(lines) {
+    "(nothing shipped yet)"
+  } else {
+    str.join(lines, "\n")
   }
 }
 

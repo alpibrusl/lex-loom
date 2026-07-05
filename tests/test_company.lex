@@ -462,8 +462,69 @@ fn test_save_company_preserves_stage() -> [sql, fs_write, time, crypto, random] 
   }
 }
 
+fn test_strategist_add() -> Result[Unit, Str] {
+  let d := company.parse_strategist_decision("{\"decision\":\"add\",\"goal\":\"Add a subtract function\",\"reason\":\"grow the library\"}")
+  if d.decision == "add" {
+    if d.goal == "Add a subtract function" {
+      Ok(())
+    } else {
+      Err(str.concat("add goal lost: ", d.goal))
+    }
+  } else {
+    Err(str.concat("expected add, got ", d.decision))
+  }
+}
+
+fn test_strategist_add_no_goal_degrades() -> Result[Unit, Str] {
+  let d := company.parse_strategist_decision("{\"decision\":\"add\",\"goal\":\"\",\"reason\":\"x\"}")
+  if d.decision == "continue" {
+    Ok(())
+  } else {
+    Err(str.concat("empty-goal add should degrade to continue, got ", d.decision))
+  }
+}
+
+fn test_backlog_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("backlog")
+        match company.next_backlog_item(db, id) {
+          Some(_) => Err("fresh company should have no backlog item"),
+          None => match company.append_backlog(db, id, "Add subtract") {
+            Err(e) => Err(e),
+            Ok(_) => match company.append_backlog(db, id, "Add multiply") {
+              Err(e) => Err(e),
+              Ok(_) => match company.next_backlog_item(db, id) {
+                None => Err("expected a pending backlog item"),
+                Some(item) => if item.goal == "Add subtract" {
+                  match company.mark_backlog_status(db, id, item.idx, "active") {
+                    Err(e) => Err(e),
+                    Ok(_) => match company.next_backlog_item(db, id) {
+                      None => Err("expected multiply to become the next pending item"),
+                      Some(item2) => if item2.goal == "Add multiply" {
+                        Ok(())
+                      } else {
+                        Err(str.concat("expected multiply next, got ", item2.goal))
+                      },
+                    },
+                  }
+                } else {
+                  Err(str.concat("expected subtract first (FIFO), got ", item.goal))
+                },
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

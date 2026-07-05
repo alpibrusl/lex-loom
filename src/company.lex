@@ -446,7 +446,7 @@ fn json_escape(s :: Str) -> Str {
   str.replace(str.replace(str.replace(s, "\\", "/"), "\"", "'"), "\n", " ")
 }
 
-# Normalize an arbitrary decision string to one of continue|revise|stop.
+# Normalize an arbitrary decision string to one of continue|revise|add|stop.
 # Anything unrecognized (incl. a parse failure) is the safe default "continue".
 fn norm_decision(s :: Str) -> Str {
   let d := str.to_lower(str.trim(s))
@@ -456,13 +456,27 @@ fn norm_decision(s :: Str) -> Str {
     if d == "stop" {
       "stop"
     } else {
-      "continue"
+      if d == "add" {
+        "add"
+      } else {
+        "continue"
+      }
     }
   }
 }
 
-# Parse the strategist's JSON reply. A revise with an empty goal degrades to
-# continue (there is nothing to pivot to). Unparseable input -> continue.
+# Whether a decision carries a goal payload (revise pivots to it; add queues it
+# to the backlog, #75).
+fn decision_needs_goal(decision :: Str) -> Bool {
+  if decision == "revise" {
+    true
+  } else {
+    decision == "add"
+  }
+}
+
+# Parse the strategist's JSON reply. A revise/add with an empty goal degrades
+# to continue (nothing to pivot to / nothing to queue). Unparseable -> continue.
 fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
   match jv.parse(reply) {
     Err(_) => { decision: "continue", goal: "", reason: "unparseable strategist reply" },
@@ -470,11 +484,11 @@ fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
       let decision := norm_decision(json_str_field(j, "decision"))
       let goal := str.trim(json_str_field(j, "goal"))
       let reason := json_str_field(j, "reason")
-      if decision == "revise" {
+      if decision_needs_goal(decision) {
         if str.is_empty(goal) {
-          { decision: "continue", goal: "", reason: str.concat("revise with no goal; kept goal. ", reason) }
+          { decision: "continue", goal: "", reason: str.concat(decision, str.concat(" with no goal; kept current goal. ", reason)) }
         } else {
-          { decision: "revise", goal: goal, reason: reason }
+          { decision: decision, goal: goal, reason: reason }
         }
       } else {
         { decision: decision, goal: "", reason: reason }
@@ -615,6 +629,66 @@ fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
   match last_iteration(load_iterations(db, company_id)) {
     None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 } },
     Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success") },
+  }
+}
+
+# ── Backlog (#75): the company accretes features instead of only revising ────
+# its current goal. The strategist's "add" decision queues a new goal here
+# without interrupting the iteration in progress; its "stop" decision (C8)
+# first checks for a pending item and GRADUATES to it instead of halting the
+# company — this is what turns "iterate on one goal" into "grow a feature set."
+type BacklogItem = { company_id :: Str, idx :: Int, goal :: Str, status :: Str }
+
+type BacklogRow = { idx :: Int, goal :: Str, status :: Str }
+
+# Append a new backlog entry (status "pending"). idx is one past the highest
+# existing idx for this company (0 if none yet).
+fn append_backlog(db :: conn.ConnDb, company_id :: Str, goal :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let next_idx := list.fold(load_backlog(db, company_id), 0, fn (acc :: Int, it :: BacklogItem) -> Int {
+    if it.idx > acc {
+      it.idx
+    } else {
+      acc
+    }
+  }) + 1
+  let q := ormq.for_dialect({ sql: "INSERT INTO company_backlog (company_id, idx, goal, status, created_at) VALUES (?, ?, ?, 'pending', ?)", params: [PStr(company_id), PInt(next_idx), PStr(goal), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_backlog(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BacklogItem] {
+  let q := ormq.for_dialect({ sql: "SELECT idx, goal, status FROM company_backlog WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[BacklogRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: BacklogRow) -> BacklogItem {
+      { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status }
+    }),
+  }
+}
+
+# Earliest still-pending backlog item, if any.
+fn next_backlog_item(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[BacklogItem] {
+  list.fold(load_backlog(db, company_id), None, fn (acc :: Option[BacklogItem], it :: BacklogItem) -> Option[BacklogItem] {
+    match acc {
+      Some(_) => acc,
+      None => if it.status == "pending" {
+        Some(it)
+      } else {
+        None
+      },
+    }
+  })
+}
+
+fn mark_backlog_status(db :: conn.ConnDb, company_id :: Str, idx :: Int, status :: Str) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE company_backlog SET status=? WHERE company_id=? AND idx=?", params: [PStr(status), PStr(company_id), PInt(idx)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
   }
 }
 

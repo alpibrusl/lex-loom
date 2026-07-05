@@ -80,6 +80,13 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
+  let __ab := if decision.decision == "add" {
+    let __a := company.append_backlog(db, ccfg.id, decision.goal)
+    let __bt := tr.trail(db, ccfg.id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"goal\":\"", company.json_escape(decision.goal), "\"}"], ""))
+    io.print(str.join(["[company] backlog: queued \"", decision.goal, "\""], ""))
+  } else {
+    ()
+  }
   let next_goal := if decision.decision == "revise" {
     decision.goal
   } else {
@@ -101,7 +108,19 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   }
   let dormant := company.is_dormant(new_stage, ccfg.wake_when, ctx)
   if decision.decision == "stop" {
-    { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" }
+    match company.next_backlog_item(db, ccfg.id) {
+      None => { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" },
+      Some(item) => {
+        let __mb := company.mark_backlog_status(db, ccfg.id, item.idx, "active")
+        let __bt := tr.trail(db, ccfg.id, "backlog_advanced", str.join(["{\"iter\":", int.to_str(k), ",\"goal\":\"", company.json_escape(item.goal), "\"}"], ""))
+        let __bp := io.print(str.join(["[company] backlog: graduating to \"", item.goal, "\""], ""))
+        if k >= ccfg.max_iterations {
+          { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+        } else {
+          run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, item.goal, evolve)
+        }
+      },
+    }
   } else {
     if stop {
       { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "condition" }

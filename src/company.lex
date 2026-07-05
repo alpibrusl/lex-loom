@@ -692,3 +692,58 @@ fn mark_backlog_status(db :: conn.ConnDb, company_id :: Str, idx :: Int, status 
   }
 }
 
+# ── C7: portfolio — one company, N concurrent product tracks (#78) ───────────
+# A track IS a company: its id is the composite "<portfolio_id>/<track_id>", so
+# it gets the full FSM/backlog/dormancy/resume machinery for free — no new
+# execution logic here, just the portfolio's bookkeeping of which tracks exist.
+# Every track shares the SAME agent_pool/agent_memory (keyed by agent id, not
+# by company/track id), so staff reputation and lessons-learned already carry
+# across tracks for free — the point of a "shared pool" portfolio.
+type Track = { portfolio_id :: Str, track_id :: Str, goal :: Str, status :: Str }
+
+type TrackRow = { track_id :: Str, goal :: Str, status :: Str }
+
+fn track_company_id(portfolio_id :: Str, track_id :: Str) -> Str {
+  str.join([portfolio_id, "/", track_id], "")
+}
+
+# Idempotent: re-seeding an existing track id is a no-op (its goal/status are
+# left as they are — a re-invoked portfolio doesn't reset in-progress tracks).
+fn add_track(db :: conn.ConnDb, portfolio_id :: Str, track_id :: Str, goal :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let q := ormq.for_dialect({ sql: "INSERT OR IGNORE INTO portfolio_tracks (portfolio_id, track_id, goal, status, created_at) VALUES (?, ?, ?, 'active', ?)", params: [PStr(portfolio_id), PStr(track_id), PStr(goal), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_tracks(db :: conn.ConnDb, portfolio_id :: Str) -> [sql] List[Track] {
+  let q := ormq.for_dialect({ sql: "SELECT track_id, goal, status FROM portfolio_tracks WHERE portfolio_id=? ORDER BY track_id", params: [PStr(portfolio_id)] }, db.dialect)
+  let rows :: Result[List[TrackRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: TrackRow) -> Track {
+      { portfolio_id: portfolio_id, track_id: r.track_id, goal: r.goal, status: r.status }
+    }),
+  }
+}
+
+fn active_tracks(db :: conn.ConnDb, portfolio_id :: Str) -> [sql] List[Track] {
+  list.fold(load_tracks(db, portfolio_id), [], fn (acc :: List[Track], t :: Track) -> List[Track] {
+    if t.status == "active" {
+      list.concat(acc, [t])
+    } else {
+      acc
+    }
+  })
+}
+
+fn mark_track_status(db :: conn.ConnDb, portfolio_id :: Str, track_id :: Str, status :: Str) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE portfolio_tracks SET status=? WHERE portfolio_id=? AND track_id=?", params: [PStr(status), PStr(portfolio_id), PStr(track_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+

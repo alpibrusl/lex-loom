@@ -175,3 +175,51 @@ fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, ev
   }
 }
 
+# ── C7: portfolio — advance every active track's own company loop ────────────
+# A "concurrent" portfolio, in the sense this scope targets: multiple product
+# tracks coexist and each advances when the portfolio is invoked, sharing the
+# same staff pool/memory. Not true in-process parallelism — each track's own
+# company loop is already resumable and dormancy-aware (C10), so running them
+# one after another here is enough for a track to make steady, independent
+# progress across repeated portfolio invocations (e.g. cron).
+type TrackRunResult = { track_id :: Str, result :: CompanyRunResult }
+
+type PortfolioRunResult = { portfolio_id :: Str, tracks :: List[TrackRunResult] }
+
+fn run_one_track(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] TrackRunResult {
+  let cid := company.track_company_id(portfolio_id, t.track_id)
+  let ccfg := { id: cid, goal: t.goal, model: model, max_iterations: max_iterations, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+  let __p := io.print(str.join(["[portfolio] track ", t.track_id, " -> ", cid], ""))
+  let res := run_company(db, ccfg, api_max, evolve)
+  let __done := if company.load_stage(db, cid) == Sunset {
+    company.mark_track_status(db, portfolio_id, t.track_id, "done")
+  } else {
+    Ok(())
+  }
+  { track_id: t.track_id, result: res }
+}
+
+fn run_tracks(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, ts :: List[company.Track]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] List[TrackRunResult] {
+  list.map(ts, fn (t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] TrackRunResult {
+    run_one_track(db, portfolio_id, model, api_max, max_iterations, evolve, t)
+  })
+}
+
+# Seed any tracks not already present (idempotent — see company.add_track),
+# then advance every currently-active track by one company-loop invocation.
+fn run_portfolio(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, seed :: List[(Str, Str)]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] PortfolioRunResult {
+  let __seed := list.map(seed, fn (p :: (Str, Str)) -> [sql, fs_write, time] Unit {
+    match p {
+      (track_id, goal) => {
+        let __a := company.add_track(db, portfolio_id, track_id, goal)
+        ()
+      },
+    }
+  })
+  let ts := company.active_tracks(db, portfolio_id)
+  let __p0 := io.print(str.join(["[portfolio] id=", portfolio_id, " active_tracks=", int.to_str(list.len(ts))], ""))
+  let results := run_tracks(db, portfolio_id, model, api_max, max_iterations, evolve, ts)
+  let __pe := io.print(str.join(["[portfolio] done — ", int.to_str(list.len(results)), " track(s) advanced"], ""))
+  { portfolio_id: portfolio_id, tracks: results }
+}
+

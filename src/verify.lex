@@ -31,6 +31,8 @@ import "std.process" as proc
 
 import "./gates" as gates
 
+import "./role_tools" as rt
+
 type AcceptedRow = { data_json :: Str }
 
 type ContentRow = { content :: Str }
@@ -285,27 +287,12 @@ fn rereport_json(r :: ReReport) -> Str {
 # tool its role shouldn't wield (e.g. a `demo` node granted `lex_run`) is caught.
 type AuthReport = { sprint_id :: Str, nodes :: Int, ok :: Int, violations :: Int, verified :: Bool }
 
-# Canonical per-role tool authority. Keep in sync with roles.for_role — every
-# role NOT listed here is prose-only and is allowed NO tools (pm, architect,
-# demo, scribe, docs, devops, security, ux, brand, content_designer, judge…).
+# Canonical per-role tool authority — the SAME policy the runtime grants from
+# (role_tools.tools_for, also consumed by roles.tools_of_role). Re-deriving
+# authority against the granting source is the point: the check can't drift from
+# what was actually handed out. A role NOT in the policy wields no tools.
 fn allowed_tools(role :: Str) -> List[Str] {
-  if role == "build" {
-    ["lex_guidelines", "lex_check"]
-  } else {
-    if role == "py_build" {
-      ["py_check"]
-    } else {
-      if role == "qa" {
-        ["lex_check", "lex_run"]
-      } else {
-        if role == "py_qa" {
-          ["run_code"]
-        } else {
-          []
-        }
-      }
-    }
-  }
+  rt.tools_for(role)
 }
 
 fn tool_in(allowed :: List[Str], name :: Str) -> Bool {
@@ -374,20 +361,13 @@ fn authreport_json(r :: AuthReport) -> Str {
 }
 
 # ── P1b: per-operation capability — did each node only INVOKE tools it may? ────
-# op_grant proves what authority a node was *handed*; this re-derives what it
-# *exercised*: for every `op_call` event in the trail, whether the invoked tool
-# fell within the invoking node's role policy. A tool a role can't wield is
-# counted as `exceeded`.
-#
-# NOTE (#65): direct `op_call` emission was removed from the runner because the
-# StepToolExec/StepToolResult payloads are bare Strs, not tuples, and
-# destructuring them crashed tool-using sprints (see runner.lex). Until the
-# events are re-derived from lex-llm's native run_loop_traced cap_* trail, no
-# `op_call` rows exist, so this layer reports 0 ops (`ops-within-grant`) rather
-# than a false signal — the logic stays in place and re-activates the moment the
-# events return. It does NOT yet capture *refused* attempts (loom's runtime
-# refuses an out-of-grant tool before it executes); doing so needs an explicit
-# `op_denied` event, which is not emitted today.
+# op_grant proves what authority a node was *handed*; this proves what it
+# *exercised*. The runner wraps every tool handler it hands an agent and records
+# each executed invocation as an `op_call` event (#65); here we re-derive
+# whether every invoked tool fell within the invoking node's role policy. A node
+# that exercises a tool beyond its role's canonical grant (e.g. a roster agent
+# smuggling `lex_run` into a demo node) is counted as `exceeded` — the trail
+# proves the excess operation, not just the excess grant.
 type OpReport = { sprint_id :: Str, ops :: Int, in_grant :: Int, exceeded :: Int, verified :: Bool }
 
 type OpTally = { ops :: Int, in_grant :: Int, exceeded :: Int }

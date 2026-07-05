@@ -34,7 +34,12 @@ import "lex-agent/src/memory" as mem
 # ── C1: types ─────────────────────────────────────────────────────────────────
 # The persistent mission. `stop_when` is a C2 condition (e.g. "iter ge 3");
 # `max_iterations` is the hard ceiling regardless of the condition.
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str }
+# `pmf_when`/`maintenance_when` (C9, #62) are grounded conditions that advance
+# the lifecycle stage — PMF is an oracle passing, not a calendar date.
+# `wake_when` (C10, #62) is the dormancy trigger: while the company is in the
+# Maintenance stage, an iteration only runs if wake_when holds against the last
+# result (empty => never dormant, always iterate — back-compat).
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
@@ -43,14 +48,18 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
+# Upsert: a company is re-saved on every invocation (its mutable knobs — goal,
+# conditions — may have been re-supplied), but `stage`/`status`/`created_at`
+# must survive across invocations (C10, #62) so a dormant company resumes where
+# it left off instead of resetting to Ideation every time it's re-run.
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO companies (id, goal, model, max_iterations, stop_when, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr("active"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
@@ -58,13 +67,13 @@ fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Res
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when }),
     },
   }
 }
@@ -416,6 +425,325 @@ fn valid_cmp(op :: Str, n :: Str) -> Bool {
     }
   } else {
     false
+  }
+}
+
+# ── C8: goal-evolution meta-loop (strategist) ─────────────────────────────────
+# The strategist agent (the agent-first "board", roles.strategist_agent) returns
+# a decision after each iteration. This is the pure parse + normalization of its
+# JSON reply — the LLM call itself lives in the company runner.
+type StrategistDecision = { decision :: Str, goal :: Str, reason :: Str }
+
+fn json_str_field(j :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JStr(s)) => s,
+    _ => "",
+  }
+}
+
+# Make a free-text field safe to embed in a hand-built JSON string literal.
+fn json_escape(s :: Str) -> Str {
+  str.replace(str.replace(str.replace(s, "\\", "/"), "\"", "'"), "\n", " ")
+}
+
+# Normalize an arbitrary decision string to one of continue|revise|add|stop.
+# Anything unrecognized (incl. a parse failure) is the safe default "continue".
+fn norm_decision(s :: Str) -> Str {
+  let d := str.to_lower(str.trim(s))
+  if d == "revise" {
+    "revise"
+  } else {
+    if d == "stop" {
+      "stop"
+    } else {
+      if d == "add" {
+        "add"
+      } else {
+        "continue"
+      }
+    }
+  }
+}
+
+# Whether a decision carries a goal payload (revise pivots to it; add queues it
+# to the backlog, #75).
+fn decision_needs_goal(decision :: Str) -> Bool {
+  if decision == "revise" {
+    true
+  } else {
+    decision == "add"
+  }
+}
+
+# Parse the strategist's JSON reply. A revise/add with an empty goal degrades
+# to continue (nothing to pivot to / nothing to queue). Unparseable -> continue.
+fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
+  match jv.parse(reply) {
+    Err(_) => { decision: "continue", goal: "", reason: "unparseable strategist reply" },
+    Ok(j) => {
+      let decision := norm_decision(json_str_field(j, "decision"))
+      let goal := str.trim(json_str_field(j, "goal"))
+      let reason := json_str_field(j, "reason")
+      if decision_needs_goal(decision) {
+        if str.is_empty(goal) {
+          { decision: "continue", goal: "", reason: str.concat(decision, str.concat(" with no goal; kept current goal. ", reason)) }
+        } else {
+          { decision: decision, goal: goal, reason: reason }
+        }
+      } else {
+        { decision: decision, goal: "", reason: reason }
+      }
+    },
+  }
+}
+
+# ── C9: lifecycle FSM + value gates ────────────────────────────────────────────
+# Explicit product-lifecycle stages, each transition guarded by a GROUNDED
+# condition (the C2 DSL) — not a calendar date. "PMF" is `pmf_when` evaluating
+# true against a real iteration's result, not a milestone someone declared.
+#   Ideation   -> Validation : always (iteration 1 begins validating the mission)
+#   Validation -> Growth     : pmf_when holds (empty pmf_when never auto-advances)
+#   Growth     -> Maintenance: maintenance_when holds (empty never auto-advances)
+#   any        -> Sunset     : the strategist (C8) decides "stop", or stop_when
+# Maintenance and Sunset are terminal from this FSM's perspective (no more
+# auto-advance) — Maintenance is where a dormant/event-triggered loom (C10)
+# would live.
+type LifecycleStage = Ideation | Validation | Growth | Maintenance | Sunset
+
+fn stage_to_str(s :: LifecycleStage) -> Str {
+  match s {
+    Ideation => "ideation",
+    Validation => "validation",
+    Growth => "growth",
+    Maintenance => "maintenance",
+    Sunset => "sunset",
+  }
+}
+
+fn stage_from_str(s :: Str) -> LifecycleStage {
+  if s == "validation" {
+    Validation
+  } else {
+    if s == "growth" {
+      Growth
+    } else {
+      if s == "maintenance" {
+        Maintenance
+      } else {
+        if s == "sunset" {
+          Sunset
+        } else {
+          Ideation
+        }
+      }
+    }
+  }
+}
+
+# Pure stage transition: given the current stage and the finished iteration's
+# context, what stage comes next. `sunset_now` is true when an out-of-band
+# reason to sunset fired (the strategist said "stop", or stop_when held) —
+# checked BEFORE the ordinary ladder so it can fire from any stage.
+fn next_stage(current :: LifecycleStage, ctx :: IterCtx, cfg :: CompanyCfg, sunset_now :: Bool) -> LifecycleStage {
+  if sunset_now {
+    Sunset
+  } else {
+    match current {
+      Sunset => Sunset,
+      Maintenance => Maintenance,
+      Growth => if str.is_empty(str.trim(cfg.maintenance_when)) {
+        Growth
+      } else {
+        if eval_condition(cfg.maintenance_when, ctx) {
+          Maintenance
+        } else {
+          Growth
+        }
+      },
+      _ => if str.is_empty(str.trim(cfg.pmf_when)) {
+        Validation
+      } else {
+        if eval_condition(cfg.pmf_when, ctx) {
+          Growth
+        } else {
+          Validation
+        }
+      },
+    }
+  }
+}
+
+type StageRow = { stage :: Str }
+
+fn save_stage(db :: conn.ConnDb, company_id :: Str, stage :: LifecycleStage) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE companies SET stage=? WHERE id=?", params: [PStr(stage_to_str(stage)), PStr(company_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_stage(db :: conn.ConnDb, company_id :: Str) -> [sql] LifecycleStage {
+  let q := ormq.for_dialect({ sql: "SELECT stage FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[StageRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => Ideation,
+    Ok(rs) => match list.head(rs) {
+      None => Ideation,
+      Some(r) => stage_from_str(r.stage),
+    },
+  }
+}
+
+# ── C10: dormancy + event triggers ─────────────────────────────────────────────
+# A company in Maintenance should mostly do nothing: invoked repeatedly (e.g. by
+# cron), each call is a cheap check, not a sprint. Only when `wake_when` fires
+# against the last iteration's grounded result does it actually run. This is
+# the event-driven generalization of C4's per-node `activate_when` to the whole
+# company.
+fn is_dormant(stage :: LifecycleStage, wake_when :: Str, ctx :: IterCtx) -> Bool {
+  if stage == Maintenance {
+    if str.is_empty(str.trim(wake_when)) {
+      false
+    } else {
+      not eval_condition(wake_when, ctx)
+    }
+  } else {
+    false
+  }
+}
+
+# Where a resumed invocation should pick up: one past the last recorded
+# iteration (1 if none yet), the sprint id to chain lineage from, and the
+# context of that last iteration (a default "nothing happened yet" ctx if this
+# is the company's first invocation).
+type ResumePoint = { start_idx :: Int, parent_sprint :: Str, prev_ctx :: IterCtx }
+
+fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
+  list.fold(its, None, fn (acc :: Option[CompanyIteration], it :: CompanyIteration) -> Option[CompanyIteration] {
+    Some(it)
+  })
+}
+
+fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
+  match last_iteration(load_iterations(db, company_id)) {
+    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 } },
+    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success") },
+  }
+}
+
+# ── Backlog (#75): the company accretes features instead of only revising ────
+# its current goal. The strategist's "add" decision queues a new goal here
+# without interrupting the iteration in progress; its "stop" decision (C8)
+# first checks for a pending item and GRADUATES to it instead of halting the
+# company — this is what turns "iterate on one goal" into "grow a feature set."
+type BacklogItem = { company_id :: Str, idx :: Int, goal :: Str, status :: Str }
+
+type BacklogRow = { idx :: Int, goal :: Str, status :: Str }
+
+# Append a new backlog entry (status "pending"). idx is one past the highest
+# existing idx for this company (0 if none yet).
+fn append_backlog(db :: conn.ConnDb, company_id :: Str, goal :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let next_idx := list.fold(load_backlog(db, company_id), 0, fn (acc :: Int, it :: BacklogItem) -> Int {
+    if it.idx > acc {
+      it.idx
+    } else {
+      acc
+    }
+  }) + 1
+  let q := ormq.for_dialect({ sql: "INSERT INTO company_backlog (company_id, idx, goal, status, created_at) VALUES (?, ?, ?, 'pending', ?)", params: [PStr(company_id), PInt(next_idx), PStr(goal), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_backlog(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BacklogItem] {
+  let q := ormq.for_dialect({ sql: "SELECT idx, goal, status FROM company_backlog WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[BacklogRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: BacklogRow) -> BacklogItem {
+      { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status }
+    }),
+  }
+}
+
+# Earliest still-pending backlog item, if any.
+fn next_backlog_item(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[BacklogItem] {
+  list.fold(load_backlog(db, company_id), None, fn (acc :: Option[BacklogItem], it :: BacklogItem) -> Option[BacklogItem] {
+    match acc {
+      Some(_) => acc,
+      None => if it.status == "pending" {
+        Some(it)
+      } else {
+        None
+      },
+    }
+  })
+}
+
+fn mark_backlog_status(db :: conn.ConnDb, company_id :: Str, idx :: Int, status :: Str) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE company_backlog SET status=? WHERE company_id=? AND idx=?", params: [PStr(status), PStr(company_id), PInt(idx)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# ── C7: portfolio — one company, N concurrent product tracks (#78) ───────────
+# A track IS a company: its id is the composite "<portfolio_id>/<track_id>", so
+# it gets the full FSM/backlog/dormancy/resume machinery for free — no new
+# execution logic here, just the portfolio's bookkeeping of which tracks exist.
+# Every track shares the SAME agent_pool/agent_memory (keyed by agent id, not
+# by company/track id), so staff reputation and lessons-learned already carry
+# across tracks for free — the point of a "shared pool" portfolio.
+type Track = { portfolio_id :: Str, track_id :: Str, goal :: Str, status :: Str }
+
+type TrackRow = { track_id :: Str, goal :: Str, status :: Str }
+
+fn track_company_id(portfolio_id :: Str, track_id :: Str) -> Str {
+  str.join([portfolio_id, "/", track_id], "")
+}
+
+# Idempotent: re-seeding an existing track id is a no-op (its goal/status are
+# left as they are — a re-invoked portfolio doesn't reset in-progress tracks).
+fn add_track(db :: conn.ConnDb, portfolio_id :: Str, track_id :: Str, goal :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let q := ormq.for_dialect({ sql: "INSERT OR IGNORE INTO portfolio_tracks (portfolio_id, track_id, goal, status, created_at) VALUES (?, ?, ?, 'active', ?)", params: [PStr(portfolio_id), PStr(track_id), PStr(goal), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn load_tracks(db :: conn.ConnDb, portfolio_id :: Str) -> [sql] List[Track] {
+  let q := ormq.for_dialect({ sql: "SELECT track_id, goal, status FROM portfolio_tracks WHERE portfolio_id=? ORDER BY track_id", params: [PStr(portfolio_id)] }, db.dialect)
+  let rows :: Result[List[TrackRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: TrackRow) -> Track {
+      { portfolio_id: portfolio_id, track_id: r.track_id, goal: r.goal, status: r.status }
+    }),
+  }
+}
+
+fn active_tracks(db :: conn.ConnDb, portfolio_id :: Str) -> [sql] List[Track] {
+  list.fold(load_tracks(db, portfolio_id), [], fn (acc :: List[Track], t :: Track) -> List[Track] {
+    if t.status == "active" {
+      list.concat(acc, [t])
+    } else {
+      acc
+    }
+  })
+}
+
+fn mark_track_status(db :: conn.ConnDb, portfolio_id :: Str, track_id :: Str, status :: Str) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE portfolio_tracks SET status=? WHERE portfolio_id=? AND track_id=?", params: [PStr(status), PStr(portfolio_id), PStr(track_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
   }
 }
 

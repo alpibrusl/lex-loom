@@ -46,5 +46,5 @@ VOLUME ["/data"]
 # 10M and panics ("step limit exceeded"). Requires a lex with the par_map
 # step-limit-inheritance fix so workers honour this budget, not a hardcoded 10M.
 CMD ["lex", "run", "--max-steps", "200000000", \
-     "--allow-effects", "env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent", \
+     "--allow-effects", "env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs", \
      "src/web/server.lex", "serve_loom"]

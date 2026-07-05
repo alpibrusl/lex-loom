@@ -15,6 +15,10 @@
 #
 # Provider: set OPENCODE_API_KEY (+ optional OPENCODE_BASE_URL for a local proxy)
 # to use OpenCode Go, or the usual provider keys; falls back to Ollama.
+#
+# Uses --max-steps 0 (unbounded): a real multi-agent build phase can exceed the
+# lex VM's default 10M-step cap (par_map worker step limit), aborting a sprint
+# mid-build with no code defect involved.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,7 +33,7 @@ cd "$(dirname "$0")/.."
 export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL
 
 echo "[run-company] id=$COMPANY_ID model=$MODEL max_iterations=$MAX_ITERATIONS stop_when='${STOP_WHEN}' db=$DB_PATH"
-lex run \
+lex run --max-steps 0 \
   --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
   src/main.lex run_company_cmd
 

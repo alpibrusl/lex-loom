@@ -523,8 +523,84 @@ fn test_backlog_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit
   }
 }
 
+fn test_track_company_id() -> Result[Unit, Str] {
+  if company.track_company_id("acme", "web") == "acme/web" {
+    Ok(())
+  } else {
+    Err("track_company_id should compose portfolio_id/track_id")
+  }
+}
+
+fn test_portfolio_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let pid := rand_id("portfolio-rt")
+        match company.add_track(db, pid, "web", "Build the web app") {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_track(db, pid, "cli", "Build the CLI") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let active := company.active_tracks(db, pid)
+              if list.len(active) == 2 {
+                match company.mark_track_status(db, pid, "cli", "done") {
+                  Err(e) => Err(e),
+                  Ok(_) => {
+                    let still_active := company.active_tracks(db, pid)
+                    if list.len(still_active) == 1 {
+                      Ok(())
+                    } else {
+                      Err(str.concat("expected 1 active track after marking cli done, got ", int.to_str(list.len(still_active))))
+                    }
+                  },
+                }
+              } else {
+                Err(str.concat("expected 2 active tracks, got ", int.to_str(list.len(active))))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_add_track_idempotent() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let pid := rand_id("portfolio-idem")
+        match company.add_track(db, pid, "web", "Build the web app") {
+          Err(e) => Err(e),
+          Ok(_) => match company.mark_track_status(db, pid, "web", "done") {
+            Err(e) => Err(e),
+            Ok(_) => match company.add_track(db, pid, "web", "a different goal") {
+              Err(e) => Err(e),
+              Ok(_) => {
+                let ts := company.load_tracks(db, pid)
+                match list.head(ts) {
+                  None => Err("expected the track to still exist"),
+                  Some(t) => if t.status == "done" {
+                    Ok(())
+                  } else {
+                    Err("re-seeding an existing track must not reset its status")
+                  },
+                }
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

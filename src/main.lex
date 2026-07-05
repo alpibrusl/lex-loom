@@ -565,6 +565,48 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   }
 }
 
+# ── run_portfolio ─────────────────────────────────────────────────────────────
+# One company, N concurrent product tracks sharing the same staff pool (#78).
+# Seed tracks via TRACK_COUNT + TRACK_<n>_ID/TRACK_<n>_GOAL (n = 1..TRACK_COUNT);
+# seeding is idempotent, so a re-invoked portfolio only advances existing tracks.
+fn build_track_seed(n :: Int, count :: Int) -> [env] List[(Str, Str)] {
+  if n > count {
+    []
+  } else {
+    let tid := get_env(str.concat("TRACK_", str.concat(int.to_str(n), "_ID")), "")
+    let tgoal := get_env(str.concat("TRACK_", str.concat(int.to_str(n), "_GOAL")), "")
+    let rest := build_track_seed(n + 1, count)
+    if str.is_empty(tid) {
+      rest
+    } else {
+      list.concat([(tid, tgoal)], rest)
+    }
+  }
+}
+
+fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+  let db_path := resolve_db_url()
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
+  let portfolio_id := get_env("PORTFOLIO_ID", "acme")
+  let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "1"), 1)
+  let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
+  let track_count := parse_int_or(get_env("TRACK_COUNT", "0"), 0)
+  let evolve := if get_env("EVOLVE", "") == "1" {
+    true
+  } else {
+    get_env("EVOLVE", "") == "true"
+  }
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[portfolio] FATAL: ", e)),
+    Ok(db) => {
+      let __seed := pool_seed.seed(db)
+      let track_seed := build_track_seed(1, track_count)
+      let __res := company_runner.run_portfolio(db, portfolio_id, model, api_max, max_iterations, evolve, track_seed)
+      ()
+    },
+  }
+}
+
 # ── sprint_digest ─────────────────────────────────────────────────────────────
 fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

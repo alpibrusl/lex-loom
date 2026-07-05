@@ -36,7 +36,10 @@ import "lex-agent/src/memory" as mem
 # `max_iterations` is the hard ceiling regardless of the condition.
 # `pmf_when`/`maintenance_when` (C9, #62) are grounded conditions that advance
 # the lifecycle stage — PMF is an oracle passing, not a calendar date.
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str }
+# `wake_when` (C10, #62) is the dormancy trigger: while the company is in the
+# Maintenance stage, an iteration only runs if wake_when holds against the last
+# result (empty => never dormant, always iterate — back-compat).
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
@@ -45,14 +48,18 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
+# Upsert: a company is re-saved on every invocation (its mutable knobs — goal,
+# conditions — may have been re-supplied), but `stage`/`status`/`created_at`
+# must survive across invocations (C10, #62) so a dormant company resumes where
+# it left off instead of resetting to Ideation every time it's re-run.
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
@@ -60,13 +67,13 @@ fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Res
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when }),
     },
   }
 }
@@ -571,6 +578,43 @@ fn load_stage(db :: conn.ConnDb, company_id :: Str) -> [sql] LifecycleStage {
       None => Ideation,
       Some(r) => stage_from_str(r.stage),
     },
+  }
+}
+
+# ── C10: dormancy + event triggers ─────────────────────────────────────────────
+# A company in Maintenance should mostly do nothing: invoked repeatedly (e.g. by
+# cron), each call is a cheap check, not a sprint. Only when `wake_when` fires
+# against the last iteration's grounded result does it actually run. This is
+# the event-driven generalization of C4's per-node `activate_when` to the whole
+# company.
+fn is_dormant(stage :: LifecycleStage, wake_when :: Str, ctx :: IterCtx) -> Bool {
+  if stage == Maintenance {
+    if str.is_empty(str.trim(wake_when)) {
+      false
+    } else {
+      not eval_condition(wake_when, ctx)
+    }
+  } else {
+    false
+  }
+}
+
+# Where a resumed invocation should pick up: one past the last recorded
+# iteration (1 if none yet), the sprint id to chain lineage from, and the
+# context of that last iteration (a default "nothing happened yet" ctx if this
+# is the company's first invocation).
+type ResumePoint = { start_idx :: Int, parent_sprint :: Str, prev_ctx :: IterCtx }
+
+fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
+  list.fold(its, None, fn (acc :: Option[CompanyIteration], it :: CompanyIteration) -> Option[CompanyIteration] {
+    Some(it)
+  })
+}
+
+fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
+  match last_iteration(load_iterations(db, company_id)) {
+    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 } },
+    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success") },
   }
 }
 

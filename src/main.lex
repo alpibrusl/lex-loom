@@ -547,6 +547,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let stop_when := get_env("STOP_WHEN", "")
   let pmf_when := get_env("PMF_WHEN", "")
   let maintenance_when := get_env("MAINTENANCE_WHEN", "")
+  let wake_when := get_env("WAKE_WHEN", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
   let evolve := if get_env("EVOLVE", "") == "1" {
     true
@@ -557,7 +558,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
-      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when }
+      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when }
       let __res := company_runner.run_company(db, ccfg, api_max, evolve)
       ()
     },

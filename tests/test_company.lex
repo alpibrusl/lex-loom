@@ -389,7 +389,11 @@ fn test_resume_point_fresh() -> [sql, fs_write, time, crypto, random] Result[Uni
         let r := company.resume_point(db, rand_id("nope"))
         if r.start_idx == 1 {
           if str.is_empty(r.parent_sprint) {
-            Ok(())
+            if str.is_empty(r.last_goal) {
+              Ok(())
+            } else {
+              Err("fresh company should have no last_goal")
+            }
           } else {
             Err("fresh company should have no parent_sprint")
           }
@@ -417,7 +421,11 @@ fn test_resume_point_after_iterations() -> [sql, fs_write, time, crypto, random]
               let r := company.resume_point(db, id)
               if r.start_idx == 2 {
                 if r.parent_sprint == sprint1 {
-                  Ok(())
+                  if r.last_goal == "g1" {
+                    Ok(())
+                  } else {
+                    Err(str.concat("expected last_goal 'g1' (what was actually attempted), got: ", r.last_goal))
+                  }
                 } else {
                   Err(str.concat("wrong parent_sprint: ", r.parent_sprint))
                 }
@@ -646,8 +654,84 @@ fn test_shipped_summary_lists_successes_only() -> [sql, fs_write, time, crypto, 
   }
 }
 
+fn test_board_notes_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("board")
+        let pend0 := company.pending_board_notes(db, id)
+        if list.is_empty(pend0) {
+          match company.add_board_note(db, id, "focus on the Map module next") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let pend1 := company.pending_board_notes(db, id)
+              if list.len(pend1) == 1 {
+                match company.mark_board_notes_consumed(db, id) {
+                  Err(e) => Err(e),
+                  Ok(_) => {
+                    let pend2 := company.pending_board_notes(db, id)
+                    if list.is_empty(pend2) {
+                      Ok(())
+                    } else {
+                      Err("note should be consumed after mark_board_notes_consumed")
+                    }
+                  },
+                }
+              } else {
+                Err(str.concat("expected 1 pending note, got ", int.to_str(list.len(pend1))))
+              }
+            },
+          }
+        } else {
+          Err("fresh company should have no pending board notes")
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_contains_sections() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("board-rt")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "Add the first widget" }) {
+            Err(e) => Err(e),
+            Ok(_) => match company.append_backlog(db, id, "Add a second widget") {
+              Err(e) => Err(e),
+              Ok(_) => {
+                let report := company.board_report(db, id)
+                if str.contains(report, "Build a widget factory") {
+                  if str.contains(report, "Add the first widget") {
+                    if str.contains(report, "Add a second widget") {
+                      Ok(())
+                    } else {
+                      Err(str.concat("report missing backlog item: ", report))
+                    }
+                  } else {
+                    Err(str.concat("report missing shipped feature: ", report))
+                  }
+                } else {
+                  Err(str.concat("report missing mission: ", report))
+                }
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

@@ -154,6 +154,18 @@ fn ddl_portfolio_tracks_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_tracks(portfolio_id, status)"
 }
 
+# Board layer (#82): the human board member's advisory input. Notes are
+# one-shot — the strategist reads pending ones on its next decision, then
+# they're marked consumed, so a note doesn't repeat forever. Advisory only:
+# the company runs unattended whether or not any notes exist.
+fn ddl_company_board_notes() -> Str {
+  "CREATE TABLE IF NOT EXISTS company_board_notes (company_id TEXT NOT NULL, idx INTEGER NOT NULL, note TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, PRIMARY KEY (company_id, idx))"
+}
+
+fn ddl_company_board_notes_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_board_notes_status ON company_board_notes(company_id, status, idx)"
+}
+
 # did:lex portable reputation (#52): signed attestation bundles. Reputation is
 # DERIVED (count of verified rows per did), never stored — nothing to forge.
 fn ddl_attestations() -> Str {
@@ -194,7 +206,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __up := run_upgrades(db)

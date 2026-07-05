@@ -607,6 +607,35 @@ fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write
   }
 }
 
+# ── board_report / board_note (#82) ──────────────────────────────────────────
+# Read-only board report and an advisory note channel for the human board
+# member. Neither blocks or gates normal company operation.
+fn board_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+    Ok(db) => io.print(company.board_report(db, company_id)),
+  }
+}
+
+fn board_note_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  let note := get_env("NOTE", "")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+    Ok(db) => if str.is_empty(str.trim(note)) {
+      io.print("[board] NOTE is empty — nothing added")
+    } else {
+      match company.add_board_note(db, company_id, note) {
+        Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+        Ok(_) => io.print(str.join(["[board] note queued for ", company_id, ": ", note], "")),
+      }
+    },
+  }
+}
+
 # ── sprint_digest ─────────────────────────────────────────────────────────────
 fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

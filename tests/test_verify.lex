@@ -10,6 +10,12 @@ import "std.int" as int
 
 import "../src/verify" as verify
 
+import "../src/roles" as roles
+
+import "../src/role_tools" as rt
+
+import "lex-llm/src/tool" as tl
+
 fn test_extracts_artifact_hash() -> Result[Unit, Str] {
   let h := verify.artifact_hash("{\"node\":\"build\",\"artifact\":\"abc123\"}")
   if h == "abc123" {
@@ -139,8 +145,46 @@ fn test_opreport_json() -> Result[Unit, Str] {
   }
 }
 
+# Regression (#47 review): the `launch` role carries a `run_server` tool, which
+# the verifier's old hand-copied policy omitted — so every HTTP-server sprint got
+# a spurious VIOLATION. With one shared policy (role_tools), the grant verifies.
+fn test_launch_authority_regression() -> Result[Unit, Str] {
+  if verify.grant_ok("launch", "run_server") {
+    Ok(())
+  } else {
+    Err("launch/run_server flagged as a violation — verifier policy drifted from roles")
+  }
+}
+
+fn role_tools_csv(tools :: List[tl.Tool]) -> Str {
+  str.join(list.map(tools, fn (x :: tl.Tool) -> Str {
+    x.name
+  }), ",")
+}
+
+# Drift guard: the tools the runtime actually grants each role (roles.tools_of_role)
+# must equal the canonical policy the verifier checks (role_tools.tools_for). This
+# is what makes the independent re-derivation trustworthy — fails CI the moment
+# the two diverge.
+fn test_runtime_matches_policy() -> Result[Unit, Str] {
+  list.fold(["build", "py_build", "qa", "py_qa", "launch"], Ok(()), fn (acc :: Result[Unit, Str], r :: Str) -> Result[Unit, Str] {
+    match acc {
+      Err(e) => Err(e),
+      Ok(_) => {
+        let runtime := role_tools_csv(roles.tools_of_role(r))
+        let policy := str.join(rt.tools_for(r), ",")
+        if runtime == policy {
+          Ok(())
+        } else {
+          Err(str.join(["role ", r, ": runtime tools [", runtime, "] != policy [", policy, "]"], ""))
+        }
+      },
+    }
+  })
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy()]
 }
 
 fn run_all() -> Unit {

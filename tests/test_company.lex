@@ -8,6 +8,10 @@ import "std.int" as int
 
 import "std.sql" as sql
 
+import "std.io" as io
+
+import "std.crypto" as crypto
+
 import "lex-orm/src/connection" as conn
 
 import "lex-agent/src/memory" as mem
@@ -95,7 +99,11 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
         if a.max_iterations == b.max_iterations {
           if a.stop_when == b.stop_when {
             if a.pmf_when == b.pmf_when {
-              a.maintenance_when == b.maintenance_when
+              if a.maintenance_when == b.maintenance_when {
+                a.wake_when == b.wake_when
+              } else {
+                false
+              }
             } else {
               false
             }
@@ -116,19 +124,20 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
   }
 }
 
-fn test_company_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
+fn test_company_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
-        let cfg := { id: "acme", goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5" }
+        let id := rand_id("co-rt")
+        let cfg := { id: id, goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5", wake_when: "verdict-failed" }
         match company.save_company(db, cfg) {
           Err(e) => Err(str.concat("save_company: ", e)),
-          Ok(_) => match company.load_company(db, "acme") {
+          Ok(_) => match company.load_company(db, id) {
             None => Err("load_company returned None"),
             Some(c2) => if company_eq(c2, cfg) {
-              run_iter_roundtrip(db)
+              run_iter_roundtrip(db, id)
             } else {
               Err("company round-trip mismatch")
             },
@@ -140,15 +149,15 @@ fn test_company_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
 }
 
 # split out to keep nesting shallow
-fn run_iter_roundtrip(db :: conn.ConnDb) -> [sql, fs_write, time] Result[Unit, Str] {
-  match company.record_iteration(db, { company_id: "acme", idx: 1, sprint_id: "acme/iter-1", parent_sprint_id: "", status: "running" }) {
+fn run_iter_roundtrip(db :: conn.ConnDb, id :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "running" }) {
     Err(e) => Err(str.concat("record_iteration: ", e)),
-    Ok(_) => match company.record_iteration(db, { company_id: "acme", idx: 2, sprint_id: "acme/iter-2", parent_sprint_id: "acme/iter-1", status: "running" }) {
+    Ok(_) => match company.record_iteration(db, { company_id: id, idx: 2, sprint_id: str.concat(id, "/iter-2"), parent_sprint_id: str.concat(id, "/iter-1"), status: "running" }) {
       Err(e) => Err(str.concat("record_iteration 2: ", e)),
       Ok(_) => {
-        let latest := company.latest_iteration_idx(db, "acme")
+        let latest := company.latest_iteration_idx(db, id)
         if latest == 2 {
-          let its := company.load_iterations(db, "acme")
+          let its := company.load_iterations(db, id)
           if list.len(its) == 2 {
             Ok(())
           } else {
@@ -248,8 +257,21 @@ fn test_iteration_sprint_id() -> Result[Unit, Str] {
   }
 }
 
+# NOTE: this environment's "sqlite::memory:" connection is apparently keyed by
+# the literal URL string and can persist across SEPARATE process invocations
+# (confirmed empirically), not just within one process. Db-backed tests must
+# therefore use a fresh random id each run rather than a fixed literal, or they
+# can silently observe state left behind by an earlier `lex run` invocation.
+fn rand_id(prefix :: Str) -> [crypto, random] Str {
+  str.join([prefix, "-", crypto.random_str_hex(8)], "")
+}
+
 fn stage_cfg(pmf :: Str, maint :: Str) -> company.CompanyCfg {
-  { id: "acme", goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint }
+  stage_cfg_id("acme", pmf, maint)
+}
+
+fn stage_cfg_id(id :: Str, pmf :: Str, maint :: Str) -> company.CompanyCfg {
+  { id: id, goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint, wake_when: "" }
 }
 
 fn test_stage_advances_on_pmf() -> Result[Unit, Str] {
@@ -310,42 +332,149 @@ fn test_stage_sunset_from_any_stage() -> Result[Unit, Str] {
   }
 }
 
-fn test_stage_persistence_roundtrip() -> [sql, fs_write, time] Result[Unit, Str] {
+fn test_stage_persistence_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
-      Ok(_) => match company.save_company(db, stage_cfg("verdict-passed", "")) {
-        Err(e) => Err(str.concat("save_company: ", e)),
-        Ok(_) => {
-          let s0 := company.load_stage(db, "acme")
-          if s0 == Ideation {
-            match company.save_stage(db, "acme", Growth) {
-              Err(e) => Err(str.concat("save_stage: ", e)),
-              Ok(_) => {
-                let s1 := company.load_stage(db, "acme")
-                if s1 == Growth {
+      Ok(_) => {
+        let id := rand_id("stage-rt")
+        match company.save_company(db, stage_cfg_id(id, "verdict-passed", "")) {
+          Err(e) => Err(str.concat("save_company: ", e)),
+          Ok(_) => {
+            let s0 := company.load_stage(db, id)
+            if s0 == Ideation {
+              match company.save_stage(db, id, Growth) {
+                Err(e) => Err(str.concat("save_stage: ", e)),
+                Ok(_) => {
+                  let s1 := company.load_stage(db, id)
+                  if s1 == Growth {
+                    Ok(())
+                  } else {
+                    Err("stage did not persist as Growth")
+                  }
+                },
+              }
+            } else {
+              Err(str.concat("new company should start in Ideation, got: ", company.stage_to_str(s0)))
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_is_dormant() -> Result[Unit, Str] {
+  let failed := ctx(3, "failed", "", 0, 1)
+  let passed := ctx(3, "passed", "", 1, 0)
+  match expect("empty wake_when never dormant", company.is_dormant(Maintenance, "", passed), false) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("non-Maintenance never dormant", company.is_dormant(Growth, "verdict-failed", passed), false) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("wake_when unmet -> dormant", company.is_dormant(Maintenance, "verdict-failed", passed), true) {
+        Err(e) => Err(e),
+        Ok(_) => expect("wake_when met -> not dormant", company.is_dormant(Maintenance, "verdict-failed", failed), false),
+      },
+    },
+  }
+}
+
+fn test_resume_point_fresh() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let r := company.resume_point(db, rand_id("nope"))
+        if r.start_idx == 1 {
+          if str.is_empty(r.parent_sprint) {
+            Ok(())
+          } else {
+            Err("fresh company should have no parent_sprint")
+          }
+        } else {
+          Err(str.concat("fresh company should resume at 1, got ", int.to_str(r.start_idx)))
+        }
+      },
+    },
+  }
+}
+
+fn test_resume_point_after_iterations() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("resume-it")
+        let sprint1 := str.concat(id, "/iter-1")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: sprint1, parent_sprint_id: "", status: "success" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.finish_iteration(db, id, 1, "success") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let r := company.resume_point(db, id)
+              if r.start_idx == 2 {
+                if r.parent_sprint == sprint1 {
                   Ok(())
                 } else {
-                  Err("stage did not persist as Growth")
+                  Err(str.concat("wrong parent_sprint: ", r.parent_sprint))
+                }
+              } else {
+                Err(str.concat("expected resume at 2, got ", int.to_str(r.start_idx)))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_save_company_preserves_stage() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("save-pres")
+        let cfg := stage_cfg_id(id, "verdict-passed", "")
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.save_stage(db, id, Growth) {
+            Err(e) => Err(e),
+            Ok(_) => match company.save_company(db, cfg) {
+              Err(e) => Err(e),
+              Ok(_) => {
+                let s := company.load_stage(db, id)
+                if s == Growth {
+                  Ok(())
+                } else {
+                  Err("re-saving the company must not reset its stage")
                 }
               },
-            }
-          } else {
-            Err("new company should start in Ideation")
-          }
-        },
+            },
+          },
+        }
       },
     },
   }
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage()]
 }
 
-fn run_all() -> [sql, fs_read, fs_write, time, crypto, random] Unit {
-  let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
+fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {
+  let results := suite()
+  let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
+    match r {
+      Ok(_) => (),
+      Err(e) => io.print(str.concat("FAIL: ", e)),
+    }
+  })
+  let failures := list.fold(results, 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
     match r {
       Ok(_) => n,
       Err(_) => n + 1,

@@ -99,32 +99,60 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     let __st := tr.trail(db, ccfg.id, "stage_transition", str.join(["{\"iter\":", int.to_str(k), ",\"from\":\"", company.stage_to_str(cur_stage), "\",\"to\":\"", company.stage_to_str(new_stage), "\"}"], ""))
     io.print(str.join(["[company] stage: ", company.stage_to_str(cur_stage), " -> ", company.stage_to_str(new_stage)], ""))
   }
+  let dormant := company.is_dormant(new_stage, ccfg.wake_when, ctx)
   if decision.decision == "stop" {
     { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" }
   } else {
     if stop {
       { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "condition" }
     } else {
-      if k >= ccfg.max_iterations {
-        { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+      if dormant {
+        let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(k), ",\"stage\":\"", company.stage_to_str(new_stage), "\"}"], ""))
+        let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(new_stage), ", wake_when not met)"], ""))
+        { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "dormant" }
       } else {
-        run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, next_goal, evolve)
+        if k >= ccfg.max_iterations {
+          { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+        } else {
+          run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, next_goal, evolve)
+        }
       }
     }
   }
 }
 
-# Persist the company, then run its iterations from 1.
+# Persist the company (an upsert — preserves stage across invocations, C10),
+# then resume from wherever the last invocation left off. A Sunset company is
+# terminal and a dormant one (Maintenance, wake_when unmet) is a cheap no-op —
+# neither launches a sprint.
 fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
   let __save := company.save_company(db, ccfg)
-  let __p0 := io.print(str.join(["[company] start id=", ccfg.id, " max_iterations=", int.to_str(ccfg.max_iterations), " stop_when='", ccfg.stop_when, "' evolve=", if evolve {
+  let stage0 := company.load_stage(db, ccfg.id)
+  let resume := company.resume_point(db, ccfg.id)
+  let __p0 := io.print(str.join(["[company] start id=", ccfg.id, " stage=", company.stage_to_str(stage0), " resume_at=iter-", int.to_str(resume.start_idx), " max_iterations=", int.to_str(ccfg.max_iterations), " stop_when='", ccfg.stop_when, "' evolve=", if evolve {
     "on"
   } else {
     "off"
   }], ""))
-  let init_ctx := { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 }
-  let res := run_iterations(db, ccfg, 1, "", api_max, init_ctx, ccfg.goal, evolve)
-  let __pe := io.print(str.join(["[company] done iterations=", int.to_str(res.iterations), " stopped_by=", res.stopped_by, " last_verdict=", res.last_verdict], ""))
-  res
+  let done := resume.start_idx - 1
+  if stage0 == Sunset {
+    let __sp := io.print("[company] already sunset — nothing to do")
+    { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "sunset" }
+  } else {
+    if company.is_dormant(stage0, ccfg.wake_when, resume.prev_ctx) {
+      let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(done), ",\"stage\":\"", company.stage_to_str(stage0), "\"}"], ""))
+      let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(stage0), ", wake_when not met)"], ""))
+      { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "dormant" }
+    } else {
+      if resume.start_idx > ccfg.max_iterations {
+        let __mp := io.print("[company] max_iterations already reached — nothing to do")
+        { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "max_iterations" }
+      } else {
+        let res := run_iterations(db, ccfg, resume.start_idx, resume.parent_sprint, api_max, resume.prev_ctx, ccfg.goal, evolve)
+        let __pe := io.print(str.join(["[company] done iterations=", int.to_str(res.iterations), " stopped_by=", res.stopped_by, " last_verdict=", res.last_verdict], ""))
+        res
+      }
+    }
+  }
 }
 

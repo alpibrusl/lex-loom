@@ -155,6 +155,7 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __6 := try_ddl(db, "ALTER TABLE companies ADD COLUMN stage TEXT NOT NULL DEFAULT 'ideation'")
   let __7 := try_ddl(db, "ALTER TABLE companies ADD COLUMN pmf_when TEXT NOT NULL DEFAULT ''")
   let __8 := try_ddl(db, "ALTER TABLE companies ADD COLUMN maintenance_when TEXT NOT NULL DEFAULT ''")
+  let __9 := try_ddl(db, "ALTER TABLE companies ADD COLUMN wake_when TEXT NOT NULL DEFAULT ''")
   ()
 }
 

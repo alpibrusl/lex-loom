@@ -204,14 +204,19 @@ fn is_grounded_gate(gate :: Str) -> Bool {
 }
 
 # Re-materialize the fenced artifact and re-run the gate's tool in a scratch dir.
-fn reverify_grounded(content :: Str, gate :: Str) -> [io, proc] Result[Unit, Str] {
-  let __w := io.write("/tmp/loom-reverify-art.txt", content)
+# `scratch` is a per-(sprint, node) token so concurrent verifications don't race
+# on a shared `/tmp` path: each call gets its own art file and work dir, and the
+# work dir is wiped (`rm -rf`) on entry so a stale run can't leak into a re-run.
+fn reverify_grounded(content :: Str, gate :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-reverify-", scratch, "-art.txt"], "")
+  let work := str.join(["/tmp/loom-reverify-", scratch, "-work"], "")
+  let __w := io.write(art, content)
   let toolcmd := if gates.is_shell_gate(gate) {
     gates.shell_command(gate)
   } else {
     "ok=1; n=0; for f in *.lex; do [ -f \"$f\" ] && { n=$((n+1)); ${LEX:-lex} check \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.py; do [ -f \"$f\" ] && { n=$((n+1)); python3 -m py_compile \"$f\" >/dev/null 2>&1 || ok=0; }; done; [ $n -gt 0 ] && [ $ok -eq 1 ]"
   }
-  let script := str.join(["W=/tmp/loom-reverify-work; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py /tmp/loom-reverify-art.txt $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
+  let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
   match proc.run("bash", ["-c", script]) {
     Err(m) => Err(str.concat("reverify could not run: ", m)),
     Ok(r) => {
@@ -226,7 +231,7 @@ fn reverify_grounded(content :: Str, gate :: Str) -> [io, proc] Result[Unit, Str
 }
 
 # Re-run every grounded gate in a sprint; report how many still pass.
-fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, io, proc] ReReport {
+fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, crypto, io, proc] ReReport {
   let gq := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
   let grows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, gq, [])
   let gmap := match grows {
@@ -241,16 +246,17 @@ fn reverify_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [vcs, fs_read, sql, i
   match rows {
     Err(_) => { sprint_id: sprint_id, grounded: 0, passed: 0, failed: 0, verified: false },
     Ok(rs) => {
-      let t := list.fold(rs, { grounded: 0, passed: 0, failed: 0 }, fn (acc :: ReTally, row :: AcceptedRow) -> [vcs, fs_read, sql, io, proc] ReTally {
+      let t := list.fold(rs, { grounded: 0, passed: 0, failed: 0 }, fn (acc :: ReTally, row :: AcceptedRow) -> [vcs, fs_read, sql, crypto, io, proc] ReTally {
         let parsed := match jv.parse(row.data_json) {
           Err(_) => { node: "", hash: "" },
           Ok(j) => { node: json_str_field(j, "node"), hash: json_str_field(j, "artifact") },
         }
         let gate := lookup_gate(gmap, parsed.node)
         if is_grounded_gate(gate) {
+          let scratch := str.slice(crypto.sha256_str(str.join([sprint_id, "/", parsed.node], "")), 0, 16)
           match get_content(db, parsed.hash) {
             None => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
-            Some(content) => match reverify_grounded(content, gate) {
+            Some(content) => match reverify_grounded(content, gate, scratch) {
               Ok(_) => { grounded: acc.grounded + 1, passed: acc.passed + 1, failed: acc.failed },
               Err(_) => { grounded: acc.grounded + 1, passed: acc.passed, failed: acc.failed + 1 },
             },

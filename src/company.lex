@@ -13,6 +13,10 @@
 
 import "std.sql" as sql
 
+import "std.io" as io
+
+import "std.process" as proc
+
 import "std.str" as str
 
 import "std.list" as list
@@ -53,6 +57,8 @@ type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepte
 type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
+
+type ContentRow = { content :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
 # Upsert: a company is re-saved on every invocation (its mutable knobs — goal,
@@ -887,6 +893,49 @@ fn backlog_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
 # A human-readable, read-only board update: mission, stage, what's shipped,
 # what's queued, and the company's own recent reasoning — all derived from
 # the trail, not a separate claim the company makes about itself.
+# Find the largest artifact from this sprint whose node_id looks like a build
+# node (py_build/build, including improver-renamed variants like
+# "py_build-improved-<sprint>-next"). The largest one is picked because a
+# dynamic-extension round re-runs build multiple times within one sprint, and
+# later/bigger outputs supersede earlier ones.
+fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND (node_id LIKE '%py_build%' OR node_id LIKE '%build%') ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => Some(r.content),
+    },
+  }
+}
+
+# After a successful iteration, materialize the winning build artifact's fenced
+# code blocks into ONE canonical, ever-growing directory for the company
+# (projects/<company_id>/) — not a scratch/temp path. Without this, each
+# iteration's build tool writes to its own throwaway scratch dir with
+# self-invented filenames, so by the time the company stops there is no single
+# coherent source tree to extract — just scattered artifacts across DB rows and
+# /tmp scratch dirs (see: dataforge extraction, 2026-07-06). This makes
+# `projects/<company_id>/` the one place a human ever needs to look.
+fn sync_project_dir(company_id :: Str, sprint_id :: Str, content :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-project-sync-", str.replace(sprint_id, "/", "-"), "-art.txt"], "")
+  let dir := str.join(["projects/", company_id], "")
+  let __w := io.write(art, content)
+  let script := str.join(["mkdir -p '", dir, "' && python3 bin/extract_fenced.py '", art, "' '", dir, "' >/dev/null 2>&1 && echo SYNC_OK"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(m) => Err(str.concat("project sync could not run: ", m)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "SYNC_OK") {
+        Ok(())
+      } else {
+        Err(str.slice(combined, 0, 600))
+      }
+    },
+  }
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),

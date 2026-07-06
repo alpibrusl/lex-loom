@@ -22,6 +22,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Fall back to the credentials file if the key isn't already in the environment —
+# a missing key here causes every LLM call to silently return an empty answer
+# (no error), which is easy to mistake for a provider outage.
+if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
+  OPENCODE_API_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
+  export OPENCODE_API_KEY
+fi
+
 : "${COMPANY_ID:=acme}"
 : "${MODEL:=gemma4:latest}"
 : "${MAX_ITERATIONS:=3}"

@@ -549,10 +549,11 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let maintenance_when := get_env("MAINTENANCE_WHEN", "")
   let wake_when := get_env("WAKE_WHEN", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
-  let evolve := if get_env("EVOLVE", "") == "1" {
-    true
+  let evolve_flag := get_env("EVOLVE", "1")
+  let evolve := if evolve_flag == "0" {
+    false
   } else {
-    get_env("EVOLVE", "") == "true"
+    evolve_flag != "false"
   }
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
@@ -591,10 +592,11 @@ fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "1"), 1)
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
   let track_count := parse_int_or(get_env("TRACK_COUNT", "0"), 0)
-  let evolve := if get_env("EVOLVE", "") == "1" {
-    true
+  let evolve_flag := get_env("EVOLVE", "1")
+  let evolve := if evolve_flag == "0" {
+    false
   } else {
-    get_env("EVOLVE", "") == "true"
+    evolve_flag != "false"
   }
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[portfolio] FATAL: ", e)),

@@ -102,6 +102,17 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     "failed"
   })
+  let __sync := if result.success {
+    match company.find_build_artifact(db, sprint_id) {
+      None => (),
+      Some(content) => match company.sync_project_dir(ccfg.id, sprint_id, content) {
+        Ok(_) => io.print(str.join(["[company] synced build output to projects/", ccfg.id, "/"], "")),
+        Err(m) => io.print(str.join(["[company] project sync failed: ", m], "")),
+      },
+    }
+  } else {
+    ()
+  }
   let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count)], ""))
   let decision := if evolve {
     decide_next(db, ccfg, current_goal, ctx)

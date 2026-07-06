@@ -26,7 +26,11 @@ import "../src/company_runner" as company_runner
 
 # ── C2: condition DSL (pure) ──────────────────────────────────────────────────
 fn ctx(idx :: Int, verdict :: Str, summary :: Str, acc :: Int, bnc :: Int) -> company.IterCtx {
-  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc }
+  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc, spend_cents: 0 }
+}
+
+fn ctx_with_spend(idx :: Int, verdict :: Str, summary :: Str, acc :: Int, bnc :: Int, spend :: Int) -> company.IterCtx {
+  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc, spend_cents: spend }
 }
 
 fn expect(label :: Str, got :: Bool, want :: Bool) -> Result[Unit, Str] {
@@ -852,7 +856,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, ra
 
 # ── OP2 (#86): Strategist actually sees Operate signals ─────────────────────
 fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
-  let ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0 }
+  let ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
   let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "Add widget v2", ctx)
   if str.contains(prompt, "OPERATE SIGNALS") {
     if str.contains(prompt, "down") {
@@ -866,7 +870,7 @@ fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
 }
 
 fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
-  let ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0 }
+  let ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
   let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "Ship v1", ctx)
   if str.contains(prompt, "no launched server") {
     Ok(())
@@ -875,8 +879,115 @@ fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
   }
 }
 
+# ── OP3 (#87): cost ledger ────────────────────────────────────────────────────
+fn test_parse_dollars_to_cents() -> Result[Unit, Str] {
+  if company.parse_dollars_to_cents("5.00") == 500 {
+    if company.parse_dollars_to_cents("5") == 500 {
+      if company.parse_dollars_to_cents("0.30") == 30 {
+        if company.parse_dollars_to_cents("5.5") == 550 {
+          Ok(())
+        } else {
+          Err(str.concat("5.5 -> expected 550, got ", int.to_str(company.parse_dollars_to_cents("5.5"))))
+        }
+      } else {
+        Err(str.concat("0.30 -> expected 30, got ", int.to_str(company.parse_dollars_to_cents("0.30"))))
+      }
+    } else {
+      Err(str.concat("5 -> expected 500, got ", int.to_str(company.parse_dollars_to_cents("5"))))
+    }
+  } else {
+    Err(str.concat("5.00 -> expected 500, got ", int.to_str(company.parse_dollars_to_cents("5.00"))))
+  }
+}
+
+fn test_spend_condition() -> Result[Unit, Str] {
+  let under := ctx_with_spend(3, "passed", "", 0, 0, 250)
+  let over := ctx_with_spend(3, "passed", "", 0, 0, 600)
+  match expect("spend ge 5.00 under", company.eval_condition("spend ge 5.00", under), false) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("spend ge 5.00 over", company.eval_condition("spend ge 5.00", over), true) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("spend lt 5.00 under", company.eval_condition("spend lt 5.00", under), true) {
+        Err(e) => Err(e),
+        Ok(_) => expect("spend wf", company.is_well_formed_condition("spend ge 5.00"), true),
+      },
+    },
+  }
+}
+
+fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-cost")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let before := company.get_company_cost_cents(db, id)
+            if before == 0 {
+              match company.add_company_cost_cents(db, id, 123) {
+                Err(e) => Err(e),
+                Ok(_) => {
+                  let after := company.get_company_cost_cents(db, id)
+                  if after == 123 {
+                    match company.add_company_cost_cents(db, id, 77) {
+                      Err(e) => Err(e),
+                      Ok(_) => {
+                        let after2 := company.get_company_cost_cents(db, id)
+                        if after2 == 200 {
+                          Ok(())
+                        } else {
+                          Err(str.concat("expected cumulative 200 cents, got ", int.to_str(after2)))
+                        }
+                      },
+                    }
+                  } else {
+                    Err(str.concat("expected 123 cents, got ", int.to_str(after)))
+                  }
+                },
+              }
+            } else {
+              Err("fresh company should have 0 cost")
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_shows_spend() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-cost-report")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_company_cost_cents(db, id, 530) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let report := company.board_report(db, id)
+              if str.contains(report, "$5.30") {
+                Ok(())
+              } else {
+                Err(str.concat("report missing formatted spend: ", report))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

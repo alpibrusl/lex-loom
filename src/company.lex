@@ -52,7 +52,7 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 
 # The context a condition is evaluated against, derived from the iteration that
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
-type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int }
+type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int, spend_cents :: Int }
 
 type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
@@ -189,14 +189,98 @@ fn digest_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
   }
 }
 
+# ── Cost ledger v0 (#84/#87) ──────────────────────────────────────────────────
+# Nothing in loom tracks what a company actually costs to run — a real
+# business would kill an unprofitable line on cost grounds alone, but nothing
+# in the Strategist's or a stop_when condition's context reflects LLM spend.
+# v0 is a rough proxy, not real billing data: total characters of every
+# artifact a sprint produced, ÷4 as a chars-per-token estimate, × an assumed
+# blended $/1K-token rate. This undercounts real spend (retries, prompts, and
+# failed-node output aren't in `artifacts`) but it's cheap, requires no
+# provider-side change, and is enough to give the Strategist and a
+# stop_when="spend ge N" condition SOME real cost signal instead of none.
+# Tracked as integer CENTS (not a Float) so it reuses the exact same
+# comparator/parser machinery as `iter`/`accepted`/`bounced` below.
+fn cents_per_1k_tokens() -> Int {
+  30
+}
+
+fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT COALESCE(SUM(LENGTH(content)), 0) AS c FROM artifacts WHERE sprint_id=?", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => {
+        let tokens := r.c / 4
+        tokens * cents_per_1k_tokens() / 1000
+      },
+    },
+  }
+}
+
+fn get_company_cost_cents(db :: conn.ConnDb, company_id :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT total_cost_cents AS c FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.c,
+    },
+  }
+}
+
+fn add_company_cost_cents(db :: conn.ConnDb, company_id :: Str, delta_cents :: Int) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE companies SET total_cost_cents = total_cost_cents + ? WHERE id=?", params: [PInt(delta_cents), PStr(company_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# Record this iteration's estimated cost against the company's running total.
+# Called regardless of success/failure — a failed iteration still cost real
+# LLM calls. Returns the NEW running total so callers (derive_ctx) don't need
+# a second query.
+fn record_iteration_cost(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str) -> [sql] Result[Int, Str] {
+  let delta := estimate_iteration_cost_cents(db, sprint_id)
+  match add_company_cost_cents(db, company_id, delta) {
+    Err(e) => Err(e),
+    Ok(_) => Ok(get_company_cost_cents(db, company_id)),
+  }
+}
+
+fn format_cents(cents :: Int) -> Str {
+  str.join(["$", int.to_str(cents / 100), ".", pad2(cents_mod_100(cents))], "")
+}
+
+fn cents_mod_100(cents :: Int) -> Int {
+  let r := cents - (cents / 100) * 100
+  if r < 0 {
+    0 - r
+  } else {
+    r
+  }
+}
+
+fn pad2(n :: Int) -> Str {
+  if n < 10 {
+    str.concat("0", int.to_str(n))
+  } else {
+    int.to_str(n)
+  }
+}
+
 # Build the condition context from a finished iteration.
-fn derive_ctx(db :: conn.ConnDb, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
+fn derive_ctx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
   let verdict := if success {
     "passed"
   } else {
     "failed"
   }
-  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced") }
+  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced"), spend_cents: get_company_cost_cents(db, company_id) }
 }
 
 # ── C5: cross-sprint agent memory ─────────────────────────────────────────────
@@ -348,6 +432,25 @@ fn quoted_arg(c :: Str) -> Str {
   }
 }
 
+# Parse a dollars-and-cents string ("5", "5.00", "5.5", "0.30") into integer
+# cents, so config stays human-friendly ("spend ge 5.00") while everything
+# downstream is plain Int arithmetic. Malformed input parses as 0.
+fn parse_dollars_to_cents(s :: Str) -> Int {
+  let segs := str.split(str.trim(s), ".")
+  let whole := parse_int_or(part_at(segs, 0), 0)
+  let frac_raw := part_at(segs, 1)
+  let frac := if str.len(frac_raw) == 0 {
+    0
+  } else {
+    if str.len(frac_raw) == 1 {
+      parse_int_or(frac_raw, 0) * 10
+    } else {
+      parse_int_or(str.slice(frac_raw, 0, 2), 0)
+    }
+  }
+  whole * 100 + frac
+}
+
 fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
   let c := str.trim(cond)
   if str.is_empty(c) {
@@ -379,7 +482,11 @@ fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
                   if head == "bounced" {
                     cmp_int(part_at(parts, 1), ctx.bounced_count, parse_int_or(part_at(parts, 2), 0))
                   } else {
-                    false
+                    if head == "spend" {
+                      cmp_int(part_at(parts, 1), ctx.spend_cents, parse_dollars_to_cents(part_at(parts, 2)))
+                    } else {
+                      false
+                    }
                   }
                 }
               }
@@ -423,7 +530,11 @@ fn is_well_formed_condition(cond :: Str) -> Bool {
                   if head == "bounced" {
                     valid_cmp(part_at(parts, 1), part_at(parts, 2))
                   } else {
-                    false
+                    if head == "spend" {
+                      valid_cmp_dollars(part_at(parts, 1), part_at(parts, 2))
+                    } else {
+                      false
+                    }
                   }
                 }
               }
@@ -447,6 +558,29 @@ fn valid_cmp(op :: Str, n :: Str) -> Bool {
   }
   if op_ok {
     match str.to_int(n) {
+      None => false,
+      Some(_) => true,
+    }
+  } else {
+    false
+  }
+}
+
+# Same op-validity check as valid_cmp, but for a dollars string ("5.00") that
+# str.to_int would reject outright — used only by "spend ge <dollars>".
+fn valid_cmp_dollars(op :: Str, n :: Str) -> Bool {
+  let op_ok := if op == "lt" {
+    true
+  } else {
+    if op == "ge" {
+      true
+    } else {
+      op == "eq"
+    }
+  }
+  if op_ok {
+    let segs := str.split(str.trim(n), ".")
+    match str.to_int(part_at(segs, 0)) {
       None => false,
       Some(_) => true,
     }
@@ -671,8 +805,8 @@ fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
 
 fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
   match last_iteration(load_iterations(db, company_id)) {
-    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 }, last_goal: "" },
-    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal },
+    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 }, last_goal: "" },
+    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal },
   }
 }
 
@@ -1039,7 +1173,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
       let its := load_iterations(db, company_id)
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

@@ -164,7 +164,7 @@ fn max_expand_depth() -> Int {
 
 # Default iteration context for a standalone sprint (idx 1, no prior results).
 fn default_iter_ctx() -> company.IterCtx {
-  { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 }
+  { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 }
 }
 
 # Whether a node runs this iteration. Empty activate_when = always; otherwise the

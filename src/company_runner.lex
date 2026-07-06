@@ -94,7 +94,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
-  let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count }
+  let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }
   let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx) }
   let result := orch.run_sprint(scfg)
   let mem_n := company.persist_iteration_memory(db, sprint_id)
@@ -103,7 +103,11 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
-  let ctx := company.derive_ctx(db, sprint_id, k, result.success)
+  let __cost := match company.record_iteration_cost(db, ccfg.id, sprint_id) {
+    Ok(_) => (),
+    Err(m) => io.print(str.join(["[company] cost recording failed: ", m], "")),
+  }
+  let ctx := company.derive_ctx(db, ccfg.id, sprint_id, k, result.success)
   let __fin := company.finish_iteration(db, ccfg.id, k, if result.success {
     "success"
   } else {
@@ -128,7 +132,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
-  let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count)], ""))
+  let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count), " est_spend=", company.format_cents(ctx.spend_cents)], ""))
   let decision := if evolve {
     decide_next(db, ccfg, current_goal, ctx)
   } else {

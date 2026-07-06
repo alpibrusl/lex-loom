@@ -113,6 +113,14 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
+  let __liveness := if result.success {
+    match company.check_and_record_liveness(db, ccfg.id, k, sprint_id) {
+      Ok(_) => (),
+      Err(m) => io.print(str.join(["[company] liveness check failed: ", m], "")),
+    }
+  } else {
+    ()
+  }
   let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count)], ""))
   let decision := if evolve {
     decide_next(db, ccfg, current_goal, ctx)

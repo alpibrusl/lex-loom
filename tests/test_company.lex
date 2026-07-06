@@ -14,6 +14,8 @@ import "std.crypto" as crypto
 
 import "lex-orm/src/connection" as conn
 
+import "lex-orm/src/query" as ormq
+
 import "lex-agent/src/memory" as mem
 
 import "../src/migrate" as migrate
@@ -730,8 +732,124 @@ fn test_board_report_contains_sections() -> [sql, fs_write, time, crypto, random
   }
 }
 
+# ── Operate loop v0 (#84/#85) ─────────────────────────────────────────────
+fn insert_test_artifact(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let hash := str.join([sprint_id, "-", node_id, "-", now], "")
+  let q := ormq.for_dialect({ sql: "INSERT OR IGNORE INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES (?, ?, ?, ?, ?)", params: [PStr(hash), PStr(sprint_id), PStr(node_id), PStr(content), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn test_find_launch_url_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-launch")
+        match insert_test_artifact(db, sprint_id, "loom-launch", "{\"ok\":true,\"url\":\"http://localhost:9999\",\"response\":\"hi\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_launch_url(db, sprint_id) {
+            None => Err("expected a launch url, got None"),
+            Some(url) => if url == "http://localhost:9999" {
+              Ok(())
+            } else {
+              Err(str.concat("wrong url extracted: ", url))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_find_launch_url_none_for_cli() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-cli")
+        match insert_test_artifact(db, sprint_id, "loom-py-build", "print('hello')") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_launch_url(db, sprint_id) {
+            None => Ok(()),
+            Some(url) => Err(str.concat("expected no launch url for a CLI-only sprint, got ", url)),
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_operate_signal_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-signal")
+        let empty := company.recent_operate_signals(db, id, "liveness", 5)
+        if list.is_empty(empty) {
+          match company.record_operate_signal(db, id, 1, "liveness", "up") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let after := company.recent_operate_signals(db, id, "liveness", 5)
+              if list.len(after) == 1 {
+                let first := match list.head(after) {
+                  Some(s) => s,
+                  None => "",
+                }
+                if str.contains(first, "up") {
+                  Ok(())
+                } else {
+                  Err("recorded signal missing its value")
+                }
+              } else {
+                Err(str.concat("expected 1 signal, got ", int.to_str(list.len(after))))
+              }
+            },
+          }
+        } else {
+          Err("fresh company should have no operate signals")
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-report")
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.record_operate_signal(db, id, 1, "liveness", "down") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let report := company.board_report(db, id)
+              if str.contains(report, "down") {
+                Ok(())
+              } else {
+                Err(str.concat("report missing operate signal: ", report))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

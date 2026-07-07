@@ -195,6 +195,25 @@ fn is_build_kind(kind :: Str) -> Bool {
   }
 }
 
+# Per-role tool-call budget (max LLM rounds before the loop is force-stopped).
+# The lex-llm default is 20, which suits build/py_build (they legitimately
+# write+check many files across many rounds). But `launch` is single-shot: a
+# correct launch is exactly two rounds — call run_server once, then emit the
+# JSON verdict. Its run_server tool BLOCKS up to timeout_s (20-45s) waiting for
+# the server, so if a model stochastically keeps re-calling it (a real,
+# intermittent failure seen across runs — glm-5.2 et al.), a budget of 20
+# means ~10 minutes of wasted blocking launches before the cap trips and the
+# node fails its `spec json` gate anyway. A tight budget makes that failure
+# CHEAP and FAST, and the node-level retry (max_node_retries) still gives a
+# looping launch fresh attempts. Keep the default for every other role.
+fn max_steps_for(kind :: Str) -> Int {
+  if kind == "launch" {
+    4
+  } else {
+    20
+  }
+}
+
 fn has_fence(s :: Str) -> Bool {
   str.contains(s, "```")
 }
@@ -465,7 +484,9 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
         wrap_tool(ops_path, tl)
       })
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
-      let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
+      let base_opts := llm_agent.default_options()
+      let opts := { temperature: base_opts.temperature, top_p: base_opts.top_p, max_steps: Some(max_steps_for(def.kind)), max_tokens: base_opts.max_tokens }
+      let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: opts, permission_spec: None }
       let conv := conv_from_msg(def.kind, msg_json)
       let __clear := if is_build_kind(def.kind) {
         clear_work_dir(def.kind)

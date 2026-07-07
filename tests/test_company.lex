@@ -247,10 +247,10 @@ fn test_strategist_stop_and_garbage() -> Result[Unit, Str] {
   let s := company.parse_strategist_decision("{\"decision\":\"stop\",\"goal\":\"\",\"reason\":\"mission achieved\"}")
   if s.decision == "stop" {
     let g := company.parse_strategist_decision("not json at all")
-    if g.decision == "continue" {
+    if g.decision == "stop" {
       Ok(())
     } else {
-      Err(str.concat("garbage should default to continue, got ", g.decision))
+      Err(str.concat("unparseable reply should STOP (avoid thrash), got ", g.decision))
     }
   } else {
     Err(str.concat("expected stop, got ", s.decision))

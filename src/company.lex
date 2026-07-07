@@ -648,10 +648,15 @@ fn decision_needs_goal(decision :: Str) -> Bool {
 }
 
 # Parse the strategist's JSON reply. A revise/add with an empty goal degrades
-# to continue (nothing to pivot to / nothing to queue). Unparseable -> continue.
+# to continue (nothing to pivot to / nothing to queue). Unparseable -> STOP:
+# an unparseable reply correlates with a degraded/failing model, and defaulting
+# to "continue" re-runs the same (often already-failing) goal, thrashing into
+# repeated failures until max_iterations — observed live on linksnap iters 11-12,
+# ~$5 of wasted spend. "stop" is safe: it graduates the next backlog item if one
+# is queued, else halts cleanly, instead of burning iterations on garbage.
 fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
   match jv.parse(reply) {
-    Err(_) => { decision: "continue", goal: "", reason: "unparseable strategist reply" },
+    Err(_) => { decision: "stop", goal: "", reason: "unparseable strategist reply — stopping to avoid thrashing the current goal" },
     Ok(j) => {
       let decision := norm_decision(json_str_field(j, "decision"))
       let goal := str.trim(json_str_field(j, "goal"))
@@ -1077,18 +1082,21 @@ fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str]
 }
 
 # After a successful iteration, materialize the winning build artifact's fenced
-# code blocks into ONE canonical, ever-growing directory for the company
-# (projects/<company_id>/) — not a scratch/temp path. Without this, each
+# code blocks into ONE canonical, ever-growing directory for the company —
+# in a workspace OUTSIDE the loom repo ($LOOM_WORKSPACE/<company_id>/, default
+# ~/loom-companies/<company_id>/). loom is a generic tool; a company's product
+# code is its OUTPUT and must never pollute the tool's own repo (earlier this
+# wrote to ./projects/<id>, which accumulated random product code + stray files
+# in the loom working tree). Without a single canonical dir at all, each
 # iteration's build tool writes to its own throwaway scratch dir with
-# self-invented filenames, so by the time the company stops there is no single
-# coherent source tree to extract — just scattered artifacts across DB rows and
-# /tmp scratch dirs (see: dataforge extraction, 2026-07-06). This makes
-# `projects/<company_id>/` the one place a human ever needs to look.
+# self-invented filenames — no coherent source tree by the time the company
+# stops (see: dataforge extraction, 2026-07-06). bash resolves LOOM_WORKSPACE
+# (so $HOME/~ expand correctly and no `env` effect is needed here); the
+# extract_fenced.py path stays relative to loom's cwd (the runner's working dir).
 fn sync_project_dir(company_id :: Str, sprint_id :: Str, content :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-project-sync-", str.replace(sprint_id, "/", "-"), "-art.txt"], "")
-  let dir := str.join(["projects/", company_id], "")
   let __w := io.write(art, content)
-  let script := str.join(["mkdir -p '", dir, "' && python3 bin/extract_fenced.py '", art, "' '", dir, "' >/dev/null 2>&1 && echo SYNC_OK"], "")
+  let script := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; DIR=\"$WS/", company_id, "\"; mkdir -p \"$DIR\" && python3 bin/extract_fenced.py '", art, "' \"$DIR\" >/dev/null 2>&1 && echo SYNC_OK"], "")
   match proc.run("bash", ["-c", script]) {
     Err(m) => Err(str.concat("project sync could not run: ", m)),
     Ok(r) => {

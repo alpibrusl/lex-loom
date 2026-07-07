@@ -6,3 +6,12 @@ llm_call.lex
 .env
 ui/node_modules/
 ui/dist/
+
+# Company product code lives in $LOOM_WORKSPACE (default ~/loom-companies), never in the loom repo
+/projects/
+# Build-agent spillage into the tool's cwd (Python scratch, pycache, stray dbs)
+__pycache__/
+*.pyc
+/sqlite::memory:
+# Generated benchmark output
+/bench/results/

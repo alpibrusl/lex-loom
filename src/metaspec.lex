@@ -153,7 +153,7 @@ fn str_role_is(role :: Str, keyword :: Str) -> Bool {
 # metaspec and only fail at runtime with "unknown role" — after the design round
 # is already spent. Catch them up front. Keep in sync with roles.for_role.
 fn known_roles() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "fe_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "scribe"]
+  ["pm", "architect", "build", "py_build", "fe_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "scribe"]
 }
 
 fn role_is_known(role :: Str) -> Bool {

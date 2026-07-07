@@ -50,6 +50,16 @@ fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate
   str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
 }
 
+# Pure, testable: whether pending notes should be marked consumed given the
+# decision that was just made (#90 — OP6 item 1).
+fn should_consume_notes(notes :: List[Str], decision :: company.StrategistDecision) -> Bool {
+  if list.is_empty(notes) {
+    false
+  } else {
+    decision.decision != "continue"
+  }
+}
+
 fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
   let shipped := company.shipped_summary(db, ccfg.id)
@@ -59,10 +69,17 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let reply := runner.step(db, agent, prompt)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
-  let __mc := if list.is_empty(notes) {
-    Ok(())
-  } else {
+  # #84/#90 — OP6 item 1: a note with a conditional/deferred ask ("once core X
+  # ships, do Y") used to be consumed at the very FIRST decide_next call after
+  # being queued, even if that decision was "continue" (nothing changed —
+  # meaning the note's condition plainly wasn't acted on yet). Only consume
+  # once the strategist actually takes an action a note could plausibly have
+  # driven (revise/add/stop); a bare "continue" leaves it pending so it's
+  # shown again next iteration instead of silently discarded unread.
+  let __mc := if should_consume_notes(notes, decision) {
     company.mark_board_notes_consumed(db, ccfg.id)
+  } else {
+    Ok(())
   }
   decision
 }
@@ -75,6 +92,13 @@ fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sq
   match company.next_backlog_item(db, company_id) {
     None => None,
     Some(item) => {
+      let __md := match company.active_backlog_item(db, company_id) {
+        None => (),
+        Some(prev) => {
+          let __mp := company.mark_backlog_status(db, company_id, prev.idx, "done")
+          ()
+        },
+      }
       let __mb := company.mark_backlog_status(db, company_id, item.idx, "active")
       let __bt := tr.trail(db, company_id, "backlog_advanced", str.join(["{\"iter\":", int.to_str(at_iter), ",\"goal\":\"", company.json_escape(item.goal), "\"}"], ""))
       let __bp := io.print(str.join(["[company] backlog: graduating to \"", item.goal, "\""], ""))

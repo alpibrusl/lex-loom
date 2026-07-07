@@ -803,10 +803,24 @@ fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
   })
 }
 
-fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
+# A process kill (session teardown, a manual `kill`) leaves the last iteration
+# row permanently at status='running' — it never transitions to a terminal
+# status on its own. Harmless functionally (only the highest-idx row is ever
+# read), but cosmetically wrong in board_report, which otherwise shows a
+# company "still running" an iteration from days ago. Fix on resume, right
+# where we already read that row (#84/#90 — OP6 item 3).
+fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write, time] ResumePoint {
   match last_iteration(load_iterations(db, company_id)) {
     None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 }, last_goal: "" },
-    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal },
+    Some(it) => {
+      let __fix := if it.status == "running" {
+        let __f := finish_iteration(db, company_id, it.idx, "interrupted")
+        ()
+      } else {
+        ()
+      }
+      { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal }
+    },
   }
 }
 
@@ -846,6 +860,24 @@ fn load_backlog(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BacklogItem]
       { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status }
     }),
   }
+}
+
+# The currently "active" backlog item, if any (#84/#90 — OP6 item 4:
+# graduate_backlog used to advance the NEXT item to "active" without ever
+# marking the PREVIOUS one "done", so a fully-shipped backlog item sat at
+# "active" forever — functionally harmless (next_backlog_item only looks for
+# "pending") but confusing in board_report).
+fn active_backlog_item(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[BacklogItem] {
+  list.fold(load_backlog(db, company_id), None, fn (acc :: Option[BacklogItem], it :: BacklogItem) -> Option[BacklogItem] {
+    match acc {
+      Some(_) => acc,
+      None => if it.status == "active" {
+        Some(it)
+      } else {
+        None
+      },
+    }
+  })
 }
 
 # Earliest still-pending backlog item, if any.

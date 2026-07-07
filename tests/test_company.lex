@@ -986,8 +986,139 @@ fn test_board_report_shows_spend() -> [sql, fs_write, time, crypto, random] Resu
   }
 }
 
-fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend()]
+# ── OP6 (#90): rough-edge cleanups found live this session ───────────────────
+fn test_should_consume_notes_continue_keeps_pending() -> Result[Unit, Str] {
+  let notes := ["focus on licensing next"]
+  let continue_decision := { decision: "continue", goal: "", reason: "still improving" }
+  if company_runner.should_consume_notes(notes, continue_decision) == false {
+    Ok(())
+  } else {
+    Err("a 'continue' decision should NOT consume pending notes")
+  }
+}
+
+fn test_should_consume_notes_acted_on() -> Result[Unit, Str] {
+  let notes := ["focus on licensing next"]
+  let revise := { decision: "revise", goal: "add licensing", reason: "pivoting per board note" }
+  let add := { decision: "add", goal: "add licensing", reason: "queueing per board note" }
+  let stop := { decision: "stop", goal: "", reason: "mission complete" }
+  if company_runner.should_consume_notes(notes, revise) {
+    if company_runner.should_consume_notes(notes, add) {
+      if company_runner.should_consume_notes(notes, stop) {
+        Ok(())
+      } else {
+        Err("'stop' should consume pending notes")
+      }
+    } else {
+      Err("'add' should consume pending notes")
+    }
+  } else {
+    Err("'revise' should consume pending notes")
+  }
+}
+
+fn test_should_consume_notes_empty_is_noop() -> Result[Unit, Str] {
+  let stop := { decision: "stop", goal: "", reason: "mission complete" }
+  if company_runner.should_consume_notes([], stop) == false {
+    Ok(())
+  } else {
+    Err("no pending notes should never need consuming")
+  }
+}
+
+fn test_resume_point_marks_running_as_interrupted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-interrupt")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "running", goal: "g1" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let __rp := company.resume_point(db, id)
+            let its := company.load_iterations(db, id)
+            match list.head(its) {
+              None => Err("expected the iteration row to still exist"),
+              Some(it) => if it.status == "interrupted" {
+                Ok(())
+              } else {
+                Err(str.join(["expected status 'interrupted', got '", it.status, "'"], ""))
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_resume_point_leaves_terminal_status_alone() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-terminal")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "g1" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let __rp := company.resume_point(db, id)
+            let its := company.load_iterations(db, id)
+            match list.head(its) {
+              None => Err("expected the iteration row to still exist"),
+              Some(it) => if it.status == "success" {
+                Ok(())
+              } else {
+                Err(str.join(["resume_point should not touch a terminal status, got '", it.status, "'"], ""))
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_graduate_backlog_marks_previous_done() -> [sql, fs_write, time, crypto, random, io] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-graduate")
+        match company.append_backlog(db, id, "ship v1") {
+          Err(e) => Err(e),
+          Ok(_) => match company.append_backlog(db, id, "ship v2") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let __first := company_runner.graduate_backlog(db, id, 1)
+              let __second := company_runner.graduate_backlog(db, id, 2)
+              let items := company.load_backlog(db, id)
+              let v1 := list.fold(items, None, fn (acc :: Option[Str], it :: company.BacklogItem) -> Option[Str] {
+                match acc {
+                  Some(_) => acc,
+                  None => if it.idx == 1 { Some(it.status) } else { None },
+                }
+              })
+              match v1 {
+                Some(status) => if status == "done" {
+                  Ok(())
+                } else {
+                  Err(str.join(["expected item 1 to be 'done' after graduating past it, got '", status, "'"], ""))
+                },
+                None => Err("expected backlog item 1 to exist"),
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io] List[Result[Unit, Str]] {
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

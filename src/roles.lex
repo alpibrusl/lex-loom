@@ -309,7 +309,11 @@ fn tool_by_name(name :: Str) -> Option[t.Tool] {
             if name == "run_server" {
               Some(make_run_server_tool())
             } else {
-              None
+              if name == "security_scan" {
+                Some(lexskill.make_security_scan_tool())
+              } else {
+                None
+              }
             }
           }
         }
@@ -469,7 +473,7 @@ fn docs_system_prompt() -> Str {
 }
 
 fn security_system_prompt() -> Str {
-  "You are the Security Reviewer for a software sprint. Review the implementation for vulnerabilities before it ships.\n\nCHECKLIST (check each):\n1. Injection — SQL injection, command injection, path traversal\n2. Auth — missing authentication, insecure token handling, hardcoded secrets\n3. Input validation — unvalidated user input used in queries, file paths, or shell commands\n4. Dependency risks — known-vulnerable packages\n5. Data exposure — sensitive data in logs, error messages, or responses\n6. CORS / headers — missing security headers for HTTP services\n\nOUTPUT — JSON only, no prose:\n{\"verdict\":\"PASS\"|\"FAIL\"|\"WARN\",\"findings\":[{\"severity\":\"critical\"|\"high\"|\"medium\"|\"low\",\"location\":\"file:line\",\"description\":\"...\",\"recommendation\":\"...\"}]}\n\nVerdict PASS = no findings or low-only. WARN = medium findings. FAIL = high or critical (blocks demo)."
+  "You are the Security Reviewer for a software sprint. Review the implementation for vulnerabilities before it ships.\n\nWORKFLOW (mandatory):\n1. ALWAYS call security_scan FIRST, before writing anything. It greps the actual build files for known-dangerous patterns (hardcoded secrets, shell/eval injection, string-built SQL, debug-mode-on) and returns real findings — a GROUNDED check, not your own read of the code.\n2. Treat every security_scan finding as REAL — you must not omit it, downgrade its severity, or report PASS if any critical/high finding was returned. You MAY add additional findings security_scan cannot detect (see CHECKLIST below), but never invent a finding that contradicts what security_scan reported, and never claim it found nothing if it returned findings.\n3. Also manually check what a grep-based scan cannot catch:\n   - Auth — missing authentication, insecure token handling\n   - Input validation — unvalidated user input reaching queries/file paths/shell commands beyond the patterns already caught\n   - Dependency risks — known-vulnerable packages\n   - Data exposure — sensitive data in logs, error messages, or responses\n   - CORS / headers — missing security headers for HTTP services\n\nOUTPUT — JSON only, no prose:\n{\"verdict\":\"PASS\"|\"FAIL\"|\"WARN\",\"findings\":[{\"severity\":\"critical\"|\"high\"|\"medium\"|\"low\",\"location\":\"file:line\",\"description\":\"...\",\"recommendation\":\"...\"}]}\n\nVerdict PASS = no findings or low-only. WARN = medium findings only. FAIL = any high or critical finding — from security_scan or your own review (blocks demo)."
 }
 
 fn build_system_prompt() -> Str {
@@ -546,7 +550,7 @@ fn docs(model :: Str) -> [env] runner.AgentDef {
 
 fn security_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security"), proc_cmd: "", a2a_url: "" }
 }
 
 fn launch_system_prompt() -> Str {
@@ -719,7 +723,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
                   Some(mk("loom-docs", "docs", docs_system_prompt()))
                 } else {
                   if role == "security" {
-                    Some(mk("loom-security", "security", security_system_prompt()))
+                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security"), proc_cmd: "", a2a_url: "" })
                   } else {
                     if role == "ux_designer" {
                       Some(mk("loom-ux-designer", "ux_designer", ux_designer_system_prompt()))

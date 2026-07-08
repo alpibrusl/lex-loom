@@ -281,6 +281,44 @@ fn verify_shell(cmd :: Str, kind :: Str) -> [proc] Result[Unit, Str] {
   }
 }
 
+# `spec sh` for a NON-build role (devops, security, docs, finance, legal, ...).
+# verify_shell above only makes sense for build/py_build: those roles' tools
+# (lex_check/py_check) actually persist files to work_dir_for(kind) across the
+# node's tool-call turns. Every other role has no such tool — it just returns
+# prose/code fenced in its final answer, which never touches disk — so
+# verify_shell would run the gate command against a stale or unrelated work
+# dir (e.g. a devops node's `spec sh "docker build..."` silently checking
+# whatever the LAST build/py_build node happened to leave in /tmp/loom-lex-
+# work, which the devops agent never wrote to). Found live: an e2e sprint
+# where devops was denied every attempt because its Dockerfile output was
+# never written anywhere the gate could see (#21).
+#
+# Fix: re-materialize the node's own `output` into a fresh scratch dir via
+# extract_fenced.py (same mechanism verify.lex's independent reverify_grounded
+# already uses for post-hoc verification) and run the gate command there —
+# grounding it in what THIS node actually produced, for any role.
+fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
+  let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
+  let __w := io.write(art, output)
+  let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(msg) => Err(str.concat("gate command could not run: ", msg)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "##GATE_EXIT:0") {
+        Ok(())
+      } else {
+        if str.contains(combined, "NO_FILES") {
+          Err("gate: node produced no fenced files to check (write your output as fenced code blocks, e.g. ```Dockerfile)")
+        } else {
+          Err(str.concat("gate command failed:\n", str.slice(combined, 0, 1200)))
+        }
+      }
+    },
+  }
+}
+
 fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
   {
     let dir := work_dir_for(kind)

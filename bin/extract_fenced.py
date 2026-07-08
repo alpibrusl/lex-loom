@@ -24,6 +24,15 @@ LANG_EXT = {
     "json": "json", "yaml": "yml", "yml": "yml", "toml": "toml",
 }
 
+# Fence tags that are themselves the canonical, extension-less filename a real
+# tool looks for (docker build wants a file literally named "Dockerfile", not
+# "file1.txt"). Without this, `spec sh "docker build ..."` on a devops node's
+# ```Dockerfile fence always misses since "dockerfile" has no "." and isn't in
+# LANG_EXT, so it fell through to the generic file1.txt name (#21).
+NO_EXT_FILENAME = {
+    "dockerfile": "Dockerfile", "makefile": "Makefile", "procfile": "Procfile",
+}
+
 # A filename appearing backtick-quoted or as a lone heading/table-cell token,
 # e.g. "### `app.py`", "**app.py**", "| `app.py` | ... |", "# app.py".
 HEADING_NAME_RE = re.compile(r"[`*#|]\s*([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)\s*[`*|]?")
@@ -56,6 +65,8 @@ for i, ln in enumerate(lines):
         tag = s[3:].strip()
         if "." in tag:
             name = re.sub(r"[^A-Za-z0-9._/-]", "", tag)        # a filename
+        elif tag.lower() in NO_EXT_FILENAME:
+            name = NO_EXT_FILENAME[tag.lower()]                 # e.g. ```Dockerfile
         else:
             ext = LANG_EXT.get(tag.lower(), "txt")              # a language tag
             counter += 1

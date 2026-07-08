@@ -214,6 +214,34 @@ fn rule_expand_gates(g :: graph.SprintGraph) -> List[Violation] {
   })
 }
 
+# ── Rule 10: 'spec compiles' only means something for build/py_build (#21) ───
+# `spec compiles` runs the real compiler against work_dir_for(role) — but only
+# build/py_build ever write files there via a tool (lex_check/py_check). Every
+# other role (ux_designer, docs, devops, ...) just returns prose in its final
+# answer; nothing is ever persisted for the compiler to check, so the gate
+# fails FOREVER, burning every retry with no informative error. Found live: an
+# e2e sprint graph where the architect (a weaker local model) tagged a
+# ux_designer spec node with 'spec compiles', bouncing the whole phase 4 times
+# before the sprint failed. Catch this at graph-validation time — cheap — so
+# the architect is told to fix the graph before any node ever runs.
+fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
+  list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+    if str.trim(n.gate) == "spec compiles" {
+      if n.role == "build" {
+        acc
+      } else {
+        if n.role == "py_build" {
+          acc
+        } else {
+          list.concat(acc, [{ rule: "compiles-gate-matches-role", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead."], "") }])
+        }
+      }
+    } else {
+      acc
+    }
+  })
+}
+
 # ── Public API ────────────────────────────────────────────────────────────────
 fn check(g :: graph.SprintGraph) -> MetaspecResult
   examples {
@@ -223,10 +251,11 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g3", phase: graph.QA, nodes: [{ id: "q", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
     check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
     check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
-    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }])
+    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
+    check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

@@ -344,19 +344,28 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                     runner.verify_compiles(n.role)
                   } else {
                     if gates.is_shell_gate(n.gate) {
-                      runner.verify_shell(gates.shell_command(n.gate), n.role)
+                      if runner.is_build_kind(n.role) {
+                        runner.verify_shell(gates.shell_command(n.gate), n.role)
+                      } else {
+                        runner.verify_shell_on_output(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""))
+                      }
                     } else {
                       runner.verify_build_compiles(n.role)
                     }
                   } {
                     Err(compile_err) => {
-                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"build does not compile\",\"attempt\":", int.to_str(attempt), "}"], ""))
-                      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("build does not compile: ", compile_err), attempt)
+                      let gate_label := if gates.is_shell_gate(n.gate) {
+                        "gate command failed"
+                      } else {
+                        "build does not compile"
+                      }
+                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat(str.concat(gate_label, ": "), compile_err), attempt)
                       if attempt > max_node_retries() {
-                        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("build does not compile: ", compile_err) }
+                        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat(str.concat(gate_label, ": "), compile_err) }
                       } else {
                         let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                        invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your build does not compile. Fix EVERY file (including tests) until each one compiles:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                        invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your output did not pass the gate (", gate_label, "). Fix it:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
                       }
                     },
                     Ok(_) => {

@@ -12,6 +12,7 @@ ui/dist/
 # Build-agent spillage into the tool's cwd (Python scratch, pycache, stray dbs)
 __pycache__/
 *.pyc
+.pytest_cache/
 /sqlite::memory:
 # Generated benchmark output
 /bench/results/

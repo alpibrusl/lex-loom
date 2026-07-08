@@ -58,11 +58,19 @@ realized as bootstrap/deploy/golden-path wiring lands — see #92, #93).
 
 ## Vetted paths (`paths/<name>/`)
 
-A path is a skeleton dir the bootstrap copies in. Today: **`python-flask`** —
-`app.py` (PORT-aware Flask + `/health`), `requirements.txt`, a `Dockerfile`
-(`COPY . .` so it can't drift out of sync with the real file layout — the
-earlier devops failure mode), and a passing `tests/test_app.py`. Adding a path
-(TS-API, Next-PWA, RN-web) + its specialist agents is #92.
+A path is a skeleton dir the bootstrap copies in — `app.py` (PORT-aware,
+`/health`), `requirements.txt`, a `Dockerfile` (`COPY . .` so it can't drift
+out of sync with the real file layout — the earlier devops failure mode),
+and a passing `tests/test_app.py`. Two exist today, both proven to boot and
+pass their skeleton test in a clean venv:
+
+| Path | Pick when |
+|---|---|
+| **`python-flask`** | a genuinely minimal server — no request/response validation needed. This was picked for `linksnap` (3 thin JSON endpoints), matching `py_build`'s own existing convention: *"flask for simple servers, fastapi for REST APIs with validation."* |
+| **`python-fastapi`** | anything with real input validation (Pydantic models catch bad input before your handler runs), or that benefits from free OpenAPI/Swagger docs at `/docs` — the common case for a documented public API a developer integrates against, e.g. a paid micro-API. |
+
+Adding a path for another stack (TS-API, Next-PWA, RN-web) + its specialist
+agents is the remaining part of #92.
 
 ## Not in this slice (honest scope)
 

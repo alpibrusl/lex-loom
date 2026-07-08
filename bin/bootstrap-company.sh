@@ -85,7 +85,13 @@ while IFS= read -r -d '' src; do
     cp "$src" "$dest"
     copied=$((copied + 1))
   fi
-done < <(find "$SKELETON" -type f -print0)
+# Excludes generated junk (__pycache__, .pytest_cache, .DS_Store, node_modules)
+# that could accidentally end up in a skeleton dir (e.g. from running its own
+# tests directly) — a path skeleton must only ever contain hand-authored files.
+done < <(find "$SKELETON" -type f \
+  -not -path '*/__pycache__/*' -not -name '*.pyc' \
+  -not -path '*/.pytest_cache/*' -not -name '.DS_Store' \
+  -not -path '*/node_modules/*' -print0)
 
 # The company keeps its own copy of the manifest + a generated README.
 cp "$MANIFEST" "$DIR/company.toml"

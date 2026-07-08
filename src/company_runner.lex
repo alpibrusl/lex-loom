@@ -156,6 +156,16 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
+  let brand_n := if result.success {
+    company.persist_brand_memory(db, sprint_id)
+  } else {
+    0
+  }
+  let __pb := if brand_n > 0 {
+    io.print(str.join(["[company] persisted brand identity to ", int.to_str(brand_n), " agent(s) for next iteration"], ""))
+  } else {
+    ()
+  }
   let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count), " est_spend=", company.format_cents(ctx.spend_cents)], ""))
   let decision := if evolve {
     decide_next(db, ccfg, current_goal, ctx)

@@ -1081,6 +1081,54 @@ fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str]
   }
 }
 
+# ── Company-level brand persistence (#20) ─────────────────────────────────────
+# Brand identity (visual tokens + positioning/voice) drifted every iteration:
+# each sprint's brand_designer/brand_strategist started from nothing, so a
+# company that ran 3 iterations could ship 3 unrelated colour palettes and 3
+# different voices for the "same" product. Every OTHER cross-iteration signal
+# in this file (shipped_summary, tightened_specs, agent lessons) is threaded
+# forward deliberately; brand was the one gap the C5 agent-memory mechanism
+# didn't cover, because it only persists lessons, never a role's actual
+# artifact content.
+#
+# Reuses mem.store/mem.recall_all exactly as C5 already does for lessons —
+# runner.step already injects EVERY memory kind an agent has into its next
+# prompt (build_system_prompt -> mem.to_context), so writing a "brand" kind
+# entry here needs no new prompt-wiring at all; it rides the existing rail.
+fn find_brand_artifacts(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE '%brand%' ORDER BY created_at", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => "",
+    Ok(rs) => str.join(list.map(rs, fn (r :: ContentRow) -> Str { r.content }), "\n\n"),
+  }
+}
+
+# The fixed set of agent ids that read brand memory back on their next run —
+# both roles that PRODUCE brand identity (so they extend it, not reinvent it)
+# and content_designer, which should write copy in the SAME established voice.
+fn brand_reader_agent_ids() -> List[Str] {
+  ["loom-brand-designer", "loom-brand-strategist", "loom-content-designer"]
+}
+
+# Call only after a sprint SUCCEEDS (unlike lessons, which are worth keeping
+# even from a failure) — a botched sprint's half-finished tokens/positioning
+# are not a brand identity worth persisting over a real one from an earlier
+# iteration. Overwrites (kind="brand", key="identity" is a fixed key per
+# agent), so brand memory stays bounded to the latest established identity
+# rather than growing every iteration the way a log would.
+fn persist_brand_memory(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_write, time, crypto, random] Int {
+  let brand := find_brand_artifacts(db, sprint_id)
+  if str.is_empty(str.trim(brand)) {
+    0
+  } else {
+    list.fold(brand_reader_agent_ids(), 0, fn (n :: Int, a :: Str) -> [sql, fs_write, time, crypto, random] Int {
+      let __s := mem.store(db, a, "brand", "identity", brand)
+      n + 1
+    })
+  }
+}
+
 # After a successful iteration, materialize the winning build artifact's fenced
 # code blocks into ONE canonical, ever-growing directory for the company —
 # in a workspace OUTSIDE the loom repo ($LOOM_WORKSPACE/<company_id>/, default

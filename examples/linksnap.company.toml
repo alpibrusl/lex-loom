@@ -20,7 +20,7 @@ hosting = "hetzner-cx22"               # [declared-intent] until deploy path exi
 domain = "linksnap.dev"                # [declared-intent]
 
 [roles]
-packs = ["engineering"]       # [declared-intent] finance/legal packs not built yet (#92)
+packs = ["engineering"]       # [enforced] finance/legal packs now exist (#92 slice 1) but linksnap doesn't need them yet — a URL-shortener has no pricing/ToS work outstanding at this stage
 
 [monitoring]
 checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]

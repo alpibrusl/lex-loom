@@ -153,7 +153,7 @@ fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, pro
             None => Fail(str.join(["node not found in sprint graph: ", node_id], "")),
             Some(n) => {
               let roster_entry := cast.cast_node(db, n, request, model)
-              let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: api_calls_max, roster: [roster_entry], trail_log: None, review_transitions: false, depth: 0, iter_ctx: None }
+              let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: api_calls_max, roster: [roster_entry], trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline" }
               let outcome := orch.invoke_node_attempt(n, input_content, cfg, 1, "", None)
               let __rep := if str.is_empty(roster_entry.pool_agent_id) {
                 ()

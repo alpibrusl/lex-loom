@@ -23,6 +23,13 @@
 #   REQUEST       — project request text     (default: built-in toy request)
 #   SPRINT_ID     — sprint identifier        (default: sprint-1)
 #   MAX_API_CALLS — max LLM node invocations (default: 200; matches sprint manifest budget)
+#   EXEC_MODE     — "inline" (default) or "queue" (#93): "queue" enqueues each
+#                   layer's nodes onto lex-jobs instead of running them
+#                   in-process, and blocks on the results. Requires a separate
+#                   `lex run ... src/worker.lex run_worker` process (or several)
+#                   running against the SAME DB_PATH to actually drain the
+#                   queue — a "queue" sprint with no worker running just
+#                   times out waiting per layer.
 
 import "std.env" as env
 
@@ -149,7 +156,8 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
         get_env("REVIEW_TRANSITIONS", "") == "true"
       }
       let trail_log_none :: Option[tlog.Log] := None
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None }
+      let exec_mode := get_env("EXEC_MODE", "inline")
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None, exec_mode: exec_mode }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"

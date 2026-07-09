@@ -70,7 +70,12 @@ type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: 
 # `iter_ctx` (C4, #57) carries the current company-iteration context so a node's
 # `activate_when` condition can be evaluated. None ⇒ standalone sprint (a node is
 # active iff its activate_when is empty or evaluates true against a default ctx).
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool, depth :: Int, iter_ctx :: Option[company.IterCtx] }
+# exec_mode: "inline" (default) fans a layer out via in-process list.par_map,
+# same as always. "queue" (#93) enqueues each layer's nodes onto lex-jobs and
+# blocks on await_node_results instead — a separate `worker.lex::run_worker`
+# process (or several) must be running against the same DB to drain them; a
+# "queue" sprint with no worker running will simply time out per layer.
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool, depth :: Int, iter_ctx :: Option[company.IterCtx], exec_mode :: Str }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -210,7 +215,7 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
     }
     let __te := tr.trail(cfg.db, cfg.id, "node_expand_started", str.join(["{\"node\":\"", n.id, "\",\"child_sprint\":\"", child_id, "\",\"depth\":", int.to_str(cfg.depth + 1), "}"], ""))
     let started_id := emit_node_started(cfg, parent, n.id, n.role, 1)
-    let child_cfg := { id: child_id, request: child_request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cast.empty_roster(), trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth + 1, iter_ctx: cfg.iter_ctx }
+    let child_cfg := { id: child_id, request: child_request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cast.empty_roster(), trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth + 1, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
     let child_result :: SprintResult := run_sprint(child_cfg)
     let result_json := str.join(["{\"success\":", if child_result.success {
       "true"
@@ -516,9 +521,111 @@ fn invoke_node_for_layer(node_id :: Str, g :: graph.SprintGraph, input_ref :: St
   }
 }
 
-fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
-  let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
-    invoke_node_for_layer(node_id, g, input_ref, cache, cfg, parent)
+fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str], phase_name :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+  if cfg.exec_mode == "queue" {
+    run_layer_queued(layer, g, input_ref, cache, cfg, parent, phase_name)
+  } else {
+    let outcomes := list.par_map(layer, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
+      invoke_node_for_layer(node_id, g, input_ref, cache, cfg, parent)
+    })
+    let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
+      if o.attested {
+        cache_put(acc, o.node_id, o.artifact)
+      } else {
+        acc
+      }
+    })
+    { outcomes: outcomes, cache: new_cache }
+  }
+}
+
+# ── Queue-driven layer execution (#93) ────────────────────────────────────────
+# Same contract as the inline path above (same input/output shape, same
+# artifact-cache semantics) but fans a layer out onto lex-jobs instead of
+# list.par_map: cached nodes resolve immediately, everything else is
+# enqueue_node'd and then awaited via await_node_results. A separate
+# worker.lex::run_worker process (or several) must be draining the "loom:node"
+# queue against the same DB — this function only produces and waits, it never
+# executes a node itself.
+fn queue_await_timeout_ms() -> Int {
+  600000
+}
+
+fn queue_await_poll_ms() -> Int {
+  1000
+}
+
+fn node_result_for(rows :: List[tr.NodeResultRow], node_id :: Str) -> Option[tr.NodeResultRow] {
+  list.fold(rows, None, fn (acc :: Option[tr.NodeResultRow], r :: tr.NodeResultRow) -> Option[tr.NodeResultRow] {
+    match acc {
+      Some(_) => acc,
+      None => if r.node_id == node_id {
+        Some(r)
+      } else {
+        None
+      },
+    }
+  })
+}
+
+fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg, parent :: Option[Str], phase_name :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] { outcomes :: List[NodeOutcome], cache :: ArtifactCache } {
+  let to_enqueue := list.fold(layer, [], fn (acc :: List[Str], node_id :: Str) -> List[Str] {
+    match cache_get(cache, node_id) {
+      Some(_) => acc,
+      None => list.concat(acc, [node_id]),
+    }
+  })
+  # worker.execute_node_job looks a node up by loading THIS sprint's latest
+  # saved graph from sprint_graphs — but not every graph run through here was
+  # ever persisted there. The real Architect graph is (in the Design phase),
+  # but run_sprint also builds small synthetic single-node graphs in-memory
+  # for the Intake/Retro/Digest phases (e.g. the PM's "intake" node) that
+  # were never saved anywhere. Found live: a queue-mode sprint's very first
+  # node ("intake") failed with "node not found in sprint graph" because
+  # nothing had ever written it to sprint_graphs. Persist whatever graph is
+  # actually being executed right before farming its nodes out to the queue —
+  # cheap (one row), idempotent, and makes every phase queueable, not just
+  # the ones whose graph happened to already be saved for other reasons.
+  let __sg := if list.is_empty(to_enqueue) {
+    ()
+  } else {
+    let __s := tr.save_sprint_graph(cfg.db, cfg.id, phase_name, graph.to_json_str(g))
+    ()
+  }
+  let __enq := list.map(to_enqueue, fn (node_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+    match find_node_in_graph(g, node_id) {
+      None => (),
+      Some(n) => {
+        let prepared_input := prepare_input(n, input_ref, g, cfg, parent, 1)
+        let enqueued_ref := if str.is_empty(prepared_input) {
+          ""
+        } else {
+          match tr.artifact_put(cfg.db, cfg.id, str.join([node_id, "-input"], ""), prepared_input) {
+            Err(_) => "",
+            Ok(h) => h,
+          }
+        }
+        let __e := tr.enqueue_node(cfg.db, cfg.id, node_id, phase_name, enqueued_ref, cfg.model, cfg.request, cfg.api_calls_max)
+        ()
+      },
+    }
+  })
+  let awaited := if list.is_empty(to_enqueue) {
+    Ok([])
+  } else {
+    tr.await_node_results(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_timeout_ms(), queue_await_poll_ms())
+  }
+  let outcomes := list.map(layer, fn (node_id :: Str) -> NodeOutcome {
+    match cache_get(cache, node_id) {
+      Some(hash) => { node_id: node_id, attested: true, sealed: true, artifact: hash, reason: "" },
+      None => match awaited {
+        Err(m) => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.concat("queue await failed: ", m) },
+        Ok(rows) => match node_result_for(rows, node_id) {
+          None => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "no result recorded for this node (job lost?)" },
+          Some(r) => { node_id: node_id, attested: r.accepted == 1, sealed: r.accepted == 1, artifact: r.artifact, reason: r.reason },
+        },
+      },
+    }
   })
   let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {
     if o.attested {
@@ -564,7 +671,7 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
         if not acc.success {
           acc
         } else {
-          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg, acc.parent)
+          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
           let all_ok := list.fold(layer_result.outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
             if not ok {
               false
@@ -852,7 +959,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       Some(llog)
     },
   }
-  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx }
+  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
   let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [] }
   let intake_result := run_phase(intake_graph, graph.Intake, cfg.request, [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
@@ -870,7 +977,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let design_ref := intake_ref
       let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
-      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx }
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
       let __ltgv := match llog_opt {
         None => (),
         Some(log) => {

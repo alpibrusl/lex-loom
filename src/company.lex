@@ -13,6 +13,10 @@
 
 import "std.sql" as sql
 
+import "std.io" as io
+
+import "std.process" as proc
+
 import "std.str" as str
 
 import "std.list" as list
@@ -48,11 +52,13 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 
 # The context a condition is evaluated against, derived from the iteration that
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
-type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int }
+type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int, spend_cents :: Int }
 
 type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
+
+type ContentRow = { content :: Str }
 
 # ── C1: persistence ───────────────────────────────────────────────────────────
 # Upsert: a company is re-saved on every invocation (its mutable knobs — goal,
@@ -183,14 +189,98 @@ fn digest_summary(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
   }
 }
 
+# ── Cost ledger v0 (#84/#87) ──────────────────────────────────────────────────
+# Nothing in loom tracks what a company actually costs to run — a real
+# business would kill an unprofitable line on cost grounds alone, but nothing
+# in the Strategist's or a stop_when condition's context reflects LLM spend.
+# v0 is a rough proxy, not real billing data: total characters of every
+# artifact a sprint produced, ÷4 as a chars-per-token estimate, × an assumed
+# blended $/1K-token rate. This undercounts real spend (retries, prompts, and
+# failed-node output aren't in `artifacts`) but it's cheap, requires no
+# provider-side change, and is enough to give the Strategist and a
+# stop_when="spend ge N" condition SOME real cost signal instead of none.
+# Tracked as integer CENTS (not a Float) so it reuses the exact same
+# comparator/parser machinery as `iter`/`accepted`/`bounced` below.
+fn cents_per_1k_tokens() -> Int {
+  30
+}
+
+fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT COALESCE(SUM(LENGTH(content)), 0) AS c FROM artifacts WHERE sprint_id=?", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => {
+        let tokens := r.c / 4
+        tokens * cents_per_1k_tokens() / 1000
+      },
+    },
+  }
+}
+
+fn get_company_cost_cents(db :: conn.ConnDb, company_id :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT total_cost_cents AS c FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.c,
+    },
+  }
+}
+
+fn add_company_cost_cents(db :: conn.ConnDb, company_id :: Str, delta_cents :: Int) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE companies SET total_cost_cents = total_cost_cents + ? WHERE id=?", params: [PInt(delta_cents), PStr(company_id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# Record this iteration's estimated cost against the company's running total.
+# Called regardless of success/failure — a failed iteration still cost real
+# LLM calls. Returns the NEW running total so callers (derive_ctx) don't need
+# a second query.
+fn record_iteration_cost(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str) -> [sql] Result[Int, Str] {
+  let delta := estimate_iteration_cost_cents(db, sprint_id)
+  match add_company_cost_cents(db, company_id, delta) {
+    Err(e) => Err(e),
+    Ok(_) => Ok(get_company_cost_cents(db, company_id)),
+  }
+}
+
+fn format_cents(cents :: Int) -> Str {
+  str.join(["$", int.to_str(cents / 100), ".", pad2(cents_mod_100(cents))], "")
+}
+
+fn cents_mod_100(cents :: Int) -> Int {
+  let r := cents - cents / 100 * 100
+  if r < 0 {
+    0 - r
+  } else {
+    r
+  }
+}
+
+fn pad2(n :: Int) -> Str {
+  if n < 10 {
+    str.concat("0", int.to_str(n))
+  } else {
+    int.to_str(n)
+  }
+}
+
 # Build the condition context from a finished iteration.
-fn derive_ctx(db :: conn.ConnDb, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
+fn derive_ctx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
   let verdict := if success {
     "passed"
   } else {
     "failed"
   }
-  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced") }
+  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced"), spend_cents: get_company_cost_cents(db, company_id) }
 }
 
 # ── C5: cross-sprint agent memory ─────────────────────────────────────────────
@@ -342,6 +432,25 @@ fn quoted_arg(c :: Str) -> Str {
   }
 }
 
+# Parse a dollars-and-cents string ("5", "5.00", "5.5", "0.30") into integer
+# cents, so config stays human-friendly ("spend ge 5.00") while everything
+# downstream is plain Int arithmetic. Malformed input parses as 0.
+fn parse_dollars_to_cents(s :: Str) -> Int {
+  let segs := str.split(str.trim(s), ".")
+  let whole := parse_int_or(part_at(segs, 0), 0)
+  let frac_raw := part_at(segs, 1)
+  let frac := if str.len(frac_raw) == 0 {
+    0
+  } else {
+    if str.len(frac_raw) == 1 {
+      parse_int_or(frac_raw, 0) * 10
+    } else {
+      parse_int_or(str.slice(frac_raw, 0, 2), 0)
+    }
+  }
+  whole * 100 + frac
+}
+
 fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
   let c := str.trim(cond)
   if str.is_empty(c) {
@@ -373,7 +482,11 @@ fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
                   if head == "bounced" {
                     cmp_int(part_at(parts, 1), ctx.bounced_count, parse_int_or(part_at(parts, 2), 0))
                   } else {
-                    false
+                    if head == "spend" {
+                      cmp_int(part_at(parts, 1), ctx.spend_cents, parse_dollars_to_cents(part_at(parts, 2)))
+                    } else {
+                      false
+                    }
                   }
                 }
               }
@@ -417,7 +530,11 @@ fn is_well_formed_condition(cond :: Str) -> Bool {
                   if head == "bounced" {
                     valid_cmp(part_at(parts, 1), part_at(parts, 2))
                   } else {
-                    false
+                    if head == "spend" {
+                      valid_cmp_dollars(part_at(parts, 1), part_at(parts, 2))
+                    } else {
+                      false
+                    }
                   }
                 }
               }
@@ -441,6 +558,29 @@ fn valid_cmp(op :: Str, n :: Str) -> Bool {
   }
   if op_ok {
     match str.to_int(n) {
+      None => false,
+      Some(_) => true,
+    }
+  } else {
+    false
+  }
+}
+
+# Same op-validity check as valid_cmp, but for a dollars string ("5.00") that
+# str.to_int would reject outright — used only by "spend ge <dollars>".
+fn valid_cmp_dollars(op :: Str, n :: Str) -> Bool {
+  let op_ok := if op == "lt" {
+    true
+  } else {
+    if op == "ge" {
+      true
+    } else {
+      op == "eq"
+    }
+  }
+  if op_ok {
+    let segs := str.split(str.trim(n), ".")
+    match str.to_int(part_at(segs, 0)) {
       None => false,
       Some(_) => true,
     }
@@ -508,10 +648,15 @@ fn decision_needs_goal(decision :: Str) -> Bool {
 }
 
 # Parse the strategist's JSON reply. A revise/add with an empty goal degrades
-# to continue (nothing to pivot to / nothing to queue). Unparseable -> continue.
+# to continue (nothing to pivot to / nothing to queue). Unparseable -> STOP:
+# an unparseable reply correlates with a degraded/failing model, and defaulting
+# to "continue" re-runs the same (often already-failing) goal, thrashing into
+# repeated failures until max_iterations — observed live on linksnap iters 11-12,
+# ~$5 of wasted spend. "stop" is safe: it graduates the next backlog item if one
+# is queued, else halts cleanly, instead of burning iterations on garbage.
 fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
   match jv.parse(reply) {
-    Err(_) => { decision: "continue", goal: "", reason: "unparseable strategist reply" },
+    Err(_) => { decision: "stop", goal: "", reason: "unparseable strategist reply — stopping to avoid thrashing the current goal" },
     Ok(j) => {
       let decision := norm_decision(json_str_field(j, "decision"))
       let goal := str.trim(json_str_field(j, "goal"))
@@ -663,10 +808,24 @@ fn last_iteration(its :: List[CompanyIteration]) -> Option[CompanyIteration] {
   })
 }
 
-fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql] ResumePoint {
+# A process kill (session teardown, a manual `kill`) leaves the last iteration
+# row permanently at status='running' — it never transitions to a terminal
+# status on its own. Harmless functionally (only the highest-idx row is ever
+# read), but cosmetically wrong in board_report, which otherwise shows a
+# company "still running" an iteration from days ago. Fix on resume, right
+# where we already read that row (#84/#90 — OP6 item 3).
+fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write, time] ResumePoint {
   match last_iteration(load_iterations(db, company_id)) {
-    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0 }, last_goal: "" },
-    Some(it) => { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal },
+    None => { start_idx: 1, parent_sprint: "", prev_ctx: { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 }, last_goal: "" },
+    Some(it) => {
+      let __fix := if it.status == "running" {
+        let __f := finish_iteration(db, company_id, it.idx, "interrupted")
+        ()
+      } else {
+        ()
+      }
+      { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal }
+    },
   }
 }
 
@@ -706,6 +865,24 @@ fn load_backlog(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BacklogItem]
       { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status }
     }),
   }
+}
+
+# The currently "active" backlog item, if any (#84/#90 — OP6 item 4:
+# graduate_backlog used to advance the NEXT item to "active" without ever
+# marking the PREVIOUS one "done", so a fully-shipped backlog item sat at
+# "active" forever — functionally harmless (next_backlog_item only looks for
+# "pending") but confusing in board_report).
+fn active_backlog_item(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[BacklogItem] {
+  list.fold(load_backlog(db, company_id), None, fn (acc :: Option[BacklogItem], it :: BacklogItem) -> Option[BacklogItem] {
+    match acc {
+      Some(_) => acc,
+      None => if it.status == "active" {
+        Some(it)
+      } else {
+        None
+      },
+    }
+  })
 }
 
 # Earliest still-pending backlog item, if any.
@@ -887,6 +1064,197 @@ fn backlog_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
 # A human-readable, read-only board update: mission, stage, what's shipped,
 # what's queued, and the company's own recent reasoning — all derived from
 # the trail, not a separate claim the company makes about itself.
+# Find the largest artifact from this sprint whose node_id looks like a build
+# node (py_build/build, including improver-renamed variants like
+# "py_build-improved-<sprint>-next"). The largest one is picked because a
+# dynamic-extension round re-runs build multiple times within one sprint, and
+# later/bigger outputs supersede earlier ones.
+fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND (node_id LIKE '%py_build%' OR node_id LIKE '%build%') ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => Some(r.content),
+    },
+  }
+}
+
+# ── Company-level brand persistence (#20) ─────────────────────────────────────
+# Brand identity (visual tokens + positioning/voice) drifted every iteration:
+# each sprint's brand_designer/brand_strategist started from nothing, so a
+# company that ran 3 iterations could ship 3 unrelated colour palettes and 3
+# different voices for the "same" product. Every OTHER cross-iteration signal
+# in this file (shipped_summary, tightened_specs, agent lessons) is threaded
+# forward deliberately; brand was the one gap the C5 agent-memory mechanism
+# didn't cover, because it only persists lessons, never a role's actual
+# artifact content.
+#
+# Reuses mem.store/mem.recall_all exactly as C5 already does for lessons —
+# runner.step already injects EVERY memory kind an agent has into its next
+# prompt (build_system_prompt -> mem.to_context), so writing a "brand" kind
+# entry here needs no new prompt-wiring at all; it rides the existing rail.
+fn find_brand_artifacts(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE '%brand%' ORDER BY created_at", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => "",
+    Ok(rs) => str.join(list.map(rs, fn (r :: ContentRow) -> Str {
+      r.content
+    }), "\n\n"),
+  }
+}
+
+# The fixed set of agent ids that read brand memory back on their next run —
+# both roles that PRODUCE brand identity (so they extend it, not reinvent it)
+# and content_designer, which should write copy in the SAME established voice.
+fn brand_reader_agent_ids() -> List[Str] {
+  ["loom-brand-designer", "loom-brand-strategist", "loom-content-designer"]
+}
+
+# Call only after a sprint SUCCEEDS (unlike lessons, which are worth keeping
+# even from a failure) — a botched sprint's half-finished tokens/positioning
+# are not a brand identity worth persisting over a real one from an earlier
+# iteration. Overwrites (kind="brand", key="identity" is a fixed key per
+# agent), so brand memory stays bounded to the latest established identity
+# rather than growing every iteration the way a log would.
+fn persist_brand_memory(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_write, time, crypto, random] Int {
+  let brand := find_brand_artifacts(db, sprint_id)
+  if str.is_empty(str.trim(brand)) {
+    0
+  } else {
+    list.fold(brand_reader_agent_ids(), 0, fn (n :: Int, a :: Str) -> [sql, fs_write, time, crypto, random] Int {
+      let __s := mem.store(db, a, "brand", "identity", brand)
+      n + 1
+    })
+  }
+}
+
+# After a successful iteration, materialize the winning build artifact's fenced
+# code blocks into ONE canonical, ever-growing directory for the company —
+# in a workspace OUTSIDE the loom repo ($LOOM_WORKSPACE/<company_id>/, default
+# ~/loom-companies/<company_id>/). loom is a generic tool; a company's product
+# code is its OUTPUT and must never pollute the tool's own repo (earlier this
+# wrote to ./projects/<id>, which accumulated random product code + stray files
+# in the loom working tree). Without a single canonical dir at all, each
+# iteration's build tool writes to its own throwaway scratch dir with
+# self-invented filenames — no coherent source tree by the time the company
+# stops (see: dataforge extraction, 2026-07-06). bash resolves LOOM_WORKSPACE
+# (so $HOME/~ expand correctly and no `env` effect is needed here); the
+# extract_fenced.py path stays relative to loom's cwd (the runner's working dir).
+fn sync_project_dir(company_id :: Str, sprint_id :: Str, content :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-project-sync-", str.replace(sprint_id, "/", "-"), "-art.txt"], "")
+  let __w := io.write(art, content)
+  let script := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; DIR=\"$WS/", company_id, "\"; mkdir -p \"$DIR\" && python3 bin/extract_fenced.py '", art, "' \"$DIR\" >/dev/null 2>&1 && echo SYNC_OK"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(m) => Err(str.concat("project sync could not run: ", m)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "SYNC_OK") {
+        Ok(())
+      } else {
+        Err(str.slice(combined, 0, 600))
+      }
+    },
+  }
+}
+
+# ── Operate loop v0 (#84/#85): between-iteration liveness signal ────────────
+# No signal from outside a company's own build sandbox reaches the Strategist
+# today — every decision is made from internal QA verdicts and digests. This
+# is the smallest possible first Operate signal: if the last successful
+# iteration launched a real server (evidence: a `launch`-role artifact with
+# {"ok":true,"url":...}), re-curl that same URL between iterations. The
+# server is a genuinely detached `nohup` process (roles.lex's run_server), so
+# it persists across iterations independent of any sprint currently running —
+# this is a real external fact, not a re-run of the build.
+fn find_launch_url(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE '%launch%' ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => match jv.parse(r.content) {
+        Err(_) => None,
+        Ok(j) => {
+          let url := json_str_field(j, "url")
+          if str.is_empty(url) {
+            None
+          } else {
+            Some(url)
+          }
+        },
+      },
+    },
+  }
+}
+
+# Curl the URL with a short timeout; "up" iff the server answered at all
+# (any HTTP status — even a 404 means the process is alive and listening),
+# "down" iff the connection failed outright (refused, timed out).
+fn check_liveness(url :: Str) -> [proc] Str {
+  let script := str.join(["curl -s -o /dev/null -w '%{http_code}' --max-time 5 '", url, "' 2>/dev/null || echo CURL_FAILED"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "down",
+    Ok(r) => if str.contains(r.stdout, "CURL_FAILED") {
+      "down"
+    } else {
+      if str.is_empty(str.trim(r.stdout)) {
+        "down"
+      } else {
+        "up"
+      }
+    },
+  }
+}
+
+fn record_operate_signal(db :: conn.ConnDb, company_id :: Str, idx :: Int, kind :: Str, value :: Str) -> [sql, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let id := str.join([company_id, "-", int.to_str(idx), "-", kind, "-", now], "")
+  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO company_operate_signals (id, company_id, idx, kind, value, observed_at) VALUES (?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(company_id), PInt(idx), PStr(kind), PStr(value), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# After a successful iteration whose sprint launched a real server, check it's
+# still live and record the observation. A no-op (Ok(())) for companies with
+# no launch node — e.g. a CLI tool like dataforge has nothing to check.
+fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [sql, time, proc] Result[Unit, Str] {
+  match find_launch_url(db, sprint_id) {
+    None => Ok(()),
+    Some(url) => {
+      let status := check_liveness(url)
+      record_operate_signal(db, company_id, idx, "liveness", status)
+    },
+  }
+}
+
+type SignalRow = { value :: Str, observed_at :: Str }
+
+fn recent_operate_signals(db :: conn.ConnDb, company_id :: Str, kind :: Str, limit :: Int) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT value, observed_at FROM company_operate_signals WHERE company_id=? AND kind=? ORDER BY idx DESC LIMIT ?", params: [PStr(company_id), PStr(kind), PInt(limit)] }, db.dialect)
+  let rows :: Result[List[SignalRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.reverse(list.map(rs, fn (r :: SignalRow) -> Str {
+      str.join([r.observed_at, ": ", r.value], "")
+    })),
+  }
+}
+
+fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let signals := recent_operate_signals(db, company_id, "liveness", 5)
+  if list.is_empty(signals) {
+    "(no launched server for this company, or no liveness checks yet)"
+  } else {
+    str.join(signals, "\n")
+  }
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
@@ -895,7 +1263,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
       let its := load_iterations(db, company_id)
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

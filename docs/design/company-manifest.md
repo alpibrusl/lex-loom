@@ -1,0 +1,81 @@
+# Company manifest (`company.toml`) + deterministic bootstrap — #91
+
+Status: v0 landed 2026-07-08. The keystone that turns "run a company" from a
+pile of env vars into one declarative, reproducible artifact.
+
+## Principle
+
+Repo layout, chosen stack, infra, budget and policy are **plumbing, not
+judgment** — decided once, up front, from config, by a deterministic script.
+The LLM agents never decide structure; they only fill in features inside a
+pre-decided skeleton. loom's runtime stays env-var driven and unchanged;
+`bin/bootstrap-company.sh` is the *only* thing that reads `company.toml`.
+
+```
+company.toml  →  bin/bootstrap-company.sh  →  $LOOM_WORKSPACE/<id>/   →  bin/run-company.sh
+ (declarative)     (deterministic scaffold)    (own git repo + skeleton)   (agents fill it in)
+```
+
+## Usage
+
+```bash
+bin/bootstrap-company.sh examples/linksnap.company.toml            # scaffold + run
+bin/bootstrap-company.sh examples/linksnap.company.toml --no-run   # scaffold only (free, deterministic)
+```
+
+`--no-run` scaffolds the workspace, skeleton, and git repo and prints the
+resolved run command without spending anything — safe for inspection/tests.
+
+## What the bootstrap does (all deterministic)
+
+1. Parses `company.toml` (python `tomllib`).
+2. Validates `[stack].path` is a **vetted path** (a skeleton dir under `paths/`).
+3. Creates `$LOOM_WORKSPACE/<id>/` (default `~/loom-companies`, **outside** the loom repo).
+4. Lays down the path skeleton into empty slots only — never clobbers existing
+   product code (idempotent; re-bootstrapping a live company is safe).
+5. Writes the company's own `company.toml` copy + a generated `README.md`.
+6. `git init` + initial commit; `gh repo create` (private) only if `GITHUB_PUBLISH=1`.
+7. Maps `[policy]` → `run-company.sh` env vars and hands off.
+
+## Field reference & status
+
+Each field is `enforced` (acted on today) or `declared-intent` (recorded now,
+realized as bootstrap/deploy/golden-path wiring lands — see #92, #93).
+
+| Field | Maps to | Status |
+|---|---|---|
+| `[identity].id` | `COMPANY_ID` + workspace dir name | **enforced** |
+| `[identity].mission` | `GOAL` | **enforced** |
+| `[stack].path` | skeleton selection (+ tech-specialist agents in #92) | **enforced** (must be a vetted path) |
+| `[stack].model` | `MODEL` | **enforced** |
+| `[policy].max_iterations` | `MAX_ITERATIONS` | **enforced** |
+| `[policy].budget_eur` | `STOP_WHEN="spend ge N.00"` (rough estimate guard; EUR≈USD) | **enforced** |
+| `[monitoring].checks=["liveness"]` | OP1 liveness | **enforced** (error_rate/usage declared-intent) |
+| `[infra].repo` | `gh repo create` | declared-intent (only with `GITHUB_PUBLISH=1`) |
+| `[infra].hosting` / `.domain` | deploy target | declared-intent (needs deploy path) |
+| `[roles].packs` | active function packs | declared-intent (finance/legal packs not built — #92) |
+| `[policy].human_gates` | `lex-os-manifest` grants | declared-intent |
+
+## Vetted paths (`paths/<name>/`)
+
+A path is a skeleton dir the bootstrap copies in — `app.py` (PORT-aware,
+`/health`), `requirements.txt`, a `Dockerfile` (`COPY . .` so it can't drift
+out of sync with the real file layout — the earlier devops failure mode),
+and a passing `tests/test_app.py`. Two exist today, both proven to boot and
+pass their skeleton test in a clean venv:
+
+| Path | Pick when |
+|---|---|
+| **`python-flask`** | a genuinely minimal server — no request/response validation needed. This was picked for `linksnap` (3 thin JSON endpoints), matching `py_build`'s own existing convention: *"flask for simple servers, fastapi for REST APIs with validation."* |
+| **`python-fastapi`** | anything with real input validation (Pydantic models catch bad input before your handler runs), or that benefits from free OpenAPI/Swagger docs at `/docs` — the common case for a documented public API a developer integrates against, e.g. a paid micro-API. |
+
+Adding a path for another stack (TS-API, Next-PWA, RN-web) + its specialist
+agents is the remaining part of #92.
+
+## Not in this slice (honest scope)
+
+- Build agents **reading and extending** the skeleton (vs building from scratch)
+  is #92 — the skeleton is laid down and git-tracked, but the agents don't yet
+  consume it.
+- `[infra]` realization (real Hetzner deploy) and `[roles].packs` (finance/legal)
+  are declared-intent until #92/#93 land.

@@ -19,8 +19,25 @@
 # Uses --max-steps 0 (unbounded): a real multi-agent build phase can exceed the
 # lex VM's default 10M-step cap (par_map worker step limit), aborting a sprint
 # mid-build with no code defect involved.
+#
+# EXEC_MODE=queue by default (#93): every sprint node runs via lex-jobs
+# instead of in-process, executed by WORKER_COUNT (default 2) separate
+# `worker.lex::run_worker` processes this script launches, monitors, and
+# tears down on exit — so a company's long-running, unattended build phase
+# survives an individual worker crashing (reclaim_stale requeues its
+# orphaned job for another worker) instead of taking the whole run down
+# with it. Set EXEC_MODE=inline to go back to the old single-process
+# in-process fan-out (no workers launched).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Fall back to the credentials file if the key isn't already in the environment —
+# a missing key here causes every LLM call to silently return an empty answer
+# (no error), which is easy to mistake for a provider outage.
+if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
+  OPENCODE_API_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
+  export OPENCODE_API_KEY
+fi
 
 : "${COMPANY_ID:=acme}"
 : "${MODEL:=gemma4:latest}"
@@ -29,10 +46,38 @@ cd "$(dirname "$0")/.."
 : "${MAX_API_CALLS:=200}"
 : "${DB_PATH:=company-${COMPANY_ID}.db}"
 : "${GOAL:=Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.}"
+: "${EXEC_MODE:=queue}"
+: "${WORKER_COUNT:=2}"
+: "${POLL_MS:=500}"
+: "${RECLAIM_LEASE_SECONDS:=300}"
 
-export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL
+export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS
 
-echo "[run-company] id=$COMPANY_ID model=$MODEL max_iterations=$MAX_ITERATIONS stop_when='${STOP_WHEN}' db=$DB_PATH"
+WORKER_PIDS=()
+WORKER_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loom-company-workers.XXXXXX")"
+
+cleanup() {
+  if [ "${#WORKER_PIDS[@]}" -gt 0 ]; then
+    echo "[run-company] stopping ${#WORKER_PIDS[@]} worker process(es): ${WORKER_PIDS[*]}"
+    kill "${WORKER_PIDS[@]}" 2>/dev/null || true
+    wait "${WORKER_PIDS[@]}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+if [ "$EXEC_MODE" = "queue" ]; then
+  echo "[run-company] EXEC_MODE=queue: launching $WORKER_COUNT worker process(es), logs in $WORKER_LOG_DIR"
+  for i in $(seq 1 "$WORKER_COUNT"); do
+    lex run --max-steps 0 \
+      --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
+      src/worker.lex run_worker > "$WORKER_LOG_DIR/worker-$i.log" 2>&1 &
+    WORKER_PIDS+=("$!")
+  done
+  echo "[run-company] worker pids: ${WORKER_PIDS[*]}"
+  sleep 1
+fi
+
+echo "[run-company] id=$COMPANY_ID model=$MODEL max_iterations=$MAX_ITERATIONS stop_when='${STOP_WHEN}' db=$DB_PATH exec_mode=$EXEC_MODE"
 lex run --max-steps 0 \
   --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
   src/main.lex run_company_cmd

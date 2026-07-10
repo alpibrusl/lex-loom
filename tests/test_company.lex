@@ -14,15 +14,23 @@ import "std.crypto" as crypto
 
 import "lex-orm/src/connection" as conn
 
+import "lex-orm/src/query" as ormq
+
 import "lex-agent/src/memory" as mem
 
 import "../src/migrate" as migrate
 
 import "../src/company" as company
 
+import "../src/company_runner" as company_runner
+
 # ── C2: condition DSL (pure) ──────────────────────────────────────────────────
 fn ctx(idx :: Int, verdict :: Str, summary :: Str, acc :: Int, bnc :: Int) -> company.IterCtx {
-  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc }
+  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc, spend_cents: 0 }
+}
+
+fn ctx_with_spend(idx :: Int, verdict :: Str, summary :: Str, acc :: Int, bnc :: Int, spend :: Int) -> company.IterCtx {
+  { idx: idx, last_verdict: verdict, digest_summary: summary, accepted_count: acc, bounced_count: bnc, spend_cents: spend }
 }
 
 fn expect(label :: Str, got :: Bool, want :: Bool) -> Result[Unit, Str] {
@@ -204,6 +212,55 @@ fn test_persist_memory() -> [sql, fs_read, fs_write, time, crypto, random] Resul
   }
 }
 
+fn test_persist_brand_memory_writes_to_all_reader_agents() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let __a1 := exec(db, "INSERT INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('h1-brandtest', 'acme/brand-iter-1', 'brand-designer-tokens', '--color-primary: #1a73e8;', 't1')")
+        let __a2 := exec(db, "INSERT INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('h2-brandtest', 'acme/brand-iter-1', 'brand-strategist-voice', 'Positioning: the fast, no-nonsense shortener.', 't2')")
+        let n := company.persist_brand_memory(db, "acme/brand-iter-1")
+        if n == 3 {
+          let entries := mem.recall_all(db, "loom-brand-designer")
+          match list.head(entries) {
+            None => Err("no brand memory recalled for loom-brand-designer"),
+            Some(e) => if str.contains(e.content, "#1a73e8") {
+              if str.contains(e.content, "Positioning") {
+                Ok(())
+              } else {
+                Err(str.concat("missing positioning text: ", e.content))
+              }
+            } else {
+              Err(str.concat("missing design tokens: ", e.content))
+            },
+          }
+        } else {
+          Err(str.concat("expected 3 brand-reader agents updated, got ", int.to_str(n)))
+        }
+      },
+    },
+  }
+}
+
+fn test_persist_brand_memory_noop_when_no_brand_artifact() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let __a1 := exec(db, "INSERT INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES ('h1-nobrandtest', 'acme/no-brand-iter-1', 'py-build', 'print(1)', 't1')")
+        let n := company.persist_brand_memory(db, "acme/no-brand-iter-1")
+        if n == 0 {
+          Ok(())
+        } else {
+          Err(str.concat("expected 0 (no brand node ran), got ", int.to_str(n)))
+        }
+      },
+    },
+  }
+}
+
 fn test_strategist_continue() -> Result[Unit, Str] {
   let d := company.parse_strategist_decision("{\"decision\":\"continue\",\"goal\":\"\",\"reason\":\"not met yet\"}")
   if d.decision == "continue" {
@@ -239,10 +296,10 @@ fn test_strategist_stop_and_garbage() -> Result[Unit, Str] {
   let s := company.parse_strategist_decision("{\"decision\":\"stop\",\"goal\":\"\",\"reason\":\"mission achieved\"}")
   if s.decision == "stop" {
     let g := company.parse_strategist_decision("not json at all")
-    if g.decision == "continue" {
+    if g.decision == "stop" {
       Ok(())
     } else {
-      Err(str.concat("garbage should default to continue, got ", g.decision))
+      Err(str.concat("unparseable reply should STOP (avoid thrash), got ", g.decision))
     }
   } else {
     Err(str.concat("expected stop, got ", s.decision))
@@ -730,8 +787,391 @@ fn test_board_report_contains_sections() -> [sql, fs_write, time, crypto, random
   }
 }
 
-fn suite() -> [sql, fs_read, fs_write, time, crypto, random] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections()]
+# ── Operate loop v0 (#84/#85) ─────────────────────────────────────────────
+fn insert_test_artifact(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let hash := str.join([sprint_id, "-", node_id, "-", now], "")
+  let q := ormq.for_dialect({ sql: "INSERT OR IGNORE INTO artifacts (hash, sprint_id, node_id, content, created_at) VALUES (?, ?, ?, ?, ?)", params: [PStr(hash), PStr(sprint_id), PStr(node_id), PStr(content), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn test_find_launch_url_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-launch")
+        match insert_test_artifact(db, sprint_id, "loom-launch", "{\"ok\":true,\"url\":\"http://localhost:9999\",\"response\":\"hi\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_launch_url(db, sprint_id) {
+            None => Err("expected a launch url, got None"),
+            Some(url) => if url == "http://localhost:9999" {
+              Ok(())
+            } else {
+              Err(str.concat("wrong url extracted: ", url))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_find_launch_url_none_for_cli() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-cli")
+        match insert_test_artifact(db, sprint_id, "loom-py-build", "print('hello')") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_launch_url(db, sprint_id) {
+            None => Ok(()),
+            Some(url) => Err(str.concat("expected no launch url for a CLI-only sprint, got ", url)),
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_operate_signal_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-signal")
+        let empty := company.recent_operate_signals(db, id, "liveness", 5)
+        if list.is_empty(empty) {
+          match company.record_operate_signal(db, id, 1, "liveness", "up") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let after := company.recent_operate_signals(db, id, "liveness", 5)
+              if list.len(after) == 1 {
+                let first := match list.head(after) {
+                  Some(s) => s,
+                  None => "",
+                }
+                if str.contains(first, "up") {
+                  Ok(())
+                } else {
+                  Err("recorded signal missing its value")
+                }
+              } else {
+                Err(str.concat("expected 1 signal, got ", int.to_str(list.len(after))))
+              }
+            },
+          }
+        } else {
+          Err("fresh company should have no operate signals")
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-report")
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.record_operate_signal(db, id, 1, "liveness", "down") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let report := company.board_report(db, id)
+              if str.contains(report, "down") {
+                Ok(())
+              } else {
+                Err(str.concat("report missing operate signal: ", report))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# ── OP2 (#86): Strategist actually sees Operate signals ─────────────────────
+fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
+  let iter_ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "Add widget v2", iter_ctx)
+  if str.contains(prompt, "OPERATE SIGNALS") {
+    if str.contains(prompt, "down") {
+      Ok(())
+    } else {
+      Err(str.concat("prompt missing the actual signal value: ", prompt))
+    }
+  } else {
+    Err(str.concat("prompt missing OPERATE SIGNALS section: ", prompt))
+  }
+}
+
+fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
+  let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "Ship v1", iter_ctx)
+  if str.contains(prompt, "no launched server") {
+    Ok(())
+  } else {
+    Err(str.concat("prompt should gracefully state no signals exist yet: ", prompt))
+  }
+}
+
+# ── OP3 (#87): cost ledger ────────────────────────────────────────────────────
+fn test_parse_dollars_to_cents() -> Result[Unit, Str] {
+  if company.parse_dollars_to_cents("5.00") == 500 {
+    if company.parse_dollars_to_cents("5") == 500 {
+      if company.parse_dollars_to_cents("0.30") == 30 {
+        if company.parse_dollars_to_cents("5.5") == 550 {
+          Ok(())
+        } else {
+          Err(str.concat("5.5 -> expected 550, got ", int.to_str(company.parse_dollars_to_cents("5.5"))))
+        }
+      } else {
+        Err(str.concat("0.30 -> expected 30, got ", int.to_str(company.parse_dollars_to_cents("0.30"))))
+      }
+    } else {
+      Err(str.concat("5 -> expected 500, got ", int.to_str(company.parse_dollars_to_cents("5"))))
+    }
+  } else {
+    Err(str.concat("5.00 -> expected 500, got ", int.to_str(company.parse_dollars_to_cents("5.00"))))
+  }
+}
+
+fn test_spend_condition() -> Result[Unit, Str] {
+  let under := ctx_with_spend(3, "passed", "", 0, 0, 250)
+  let over := ctx_with_spend(3, "passed", "", 0, 0, 600)
+  match expect("spend ge 5.00 under", company.eval_condition("spend ge 5.00", under), false) {
+    Err(e) => Err(e),
+    Ok(_) => match expect("spend ge 5.00 over", company.eval_condition("spend ge 5.00", over), true) {
+      Err(e) => Err(e),
+      Ok(_) => match expect("spend lt 5.00 under", company.eval_condition("spend lt 5.00", under), true) {
+        Err(e) => Err(e),
+        Ok(_) => expect("spend wf", company.is_well_formed_condition("spend ge 5.00"), true),
+      },
+    },
+  }
+}
+
+fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-cost")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let before := company.get_company_cost_cents(db, id)
+            if before == 0 {
+              match company.add_company_cost_cents(db, id, 123) {
+                Err(e) => Err(e),
+                Ok(_) => {
+                  let after := company.get_company_cost_cents(db, id)
+                  if after == 123 {
+                    match company.add_company_cost_cents(db, id, 77) {
+                      Err(e) => Err(e),
+                      Ok(_) => {
+                        let after2 := company.get_company_cost_cents(db, id)
+                        if after2 == 200 {
+                          Ok(())
+                        } else {
+                          Err(str.concat("expected cumulative 200 cents, got ", int.to_str(after2)))
+                        }
+                      },
+                    }
+                  } else {
+                    Err(str.concat("expected 123 cents, got ", int.to_str(after)))
+                  }
+                },
+              }
+            } else {
+              Err("fresh company should have 0 cost")
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_shows_spend() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-cost-report")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_company_cost_cents(db, id, 530) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let report := company.board_report(db, id)
+              if str.contains(report, "$5.30") {
+                Ok(())
+              } else {
+                Err(str.concat("report missing formatted spend: ", report))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# ── OP6 (#90): rough-edge cleanups found live this session ───────────────────
+fn test_should_consume_notes_continue_keeps_pending() -> Result[Unit, Str] {
+  let notes := ["focus on licensing next"]
+  let continue_decision := { decision: "continue", goal: "", reason: "still improving" }
+  if company_runner.should_consume_notes(notes, continue_decision) == false {
+    Ok(())
+  } else {
+    Err("a 'continue' decision should NOT consume pending notes")
+  }
+}
+
+fn test_should_consume_notes_acted_on() -> Result[Unit, Str] {
+  let notes := ["focus on licensing next"]
+  let revise := { decision: "revise", goal: "add licensing", reason: "pivoting per board note" }
+  let add := { decision: "add", goal: "add licensing", reason: "queueing per board note" }
+  let stop := { decision: "stop", goal: "", reason: "mission complete" }
+  if company_runner.should_consume_notes(notes, revise) {
+    if company_runner.should_consume_notes(notes, add) {
+      if company_runner.should_consume_notes(notes, stop) {
+        Ok(())
+      } else {
+        Err("'stop' should consume pending notes")
+      }
+    } else {
+      Err("'add' should consume pending notes")
+    }
+  } else {
+    Err("'revise' should consume pending notes")
+  }
+}
+
+fn test_should_consume_notes_empty_is_noop() -> Result[Unit, Str] {
+  let stop := { decision: "stop", goal: "", reason: "mission complete" }
+  if company_runner.should_consume_notes([], stop) == false {
+    Ok(())
+  } else {
+    Err("no pending notes should never need consuming")
+  }
+}
+
+fn test_resume_point_marks_running_as_interrupted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-interrupt")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "running", goal: "g1" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let __rp := company.resume_point(db, id)
+            let its := company.load_iterations(db, id)
+            match list.head(its) {
+              None => Err("expected the iteration row to still exist"),
+              Some(it) => if it.status == "interrupted" {
+                Ok(())
+              } else {
+                Err(str.join(["expected status 'interrupted', got '", it.status, "'"], ""))
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_resume_point_leaves_terminal_status_alone() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-terminal")
+        match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "g1" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let __rp := company.resume_point(db, id)
+            let its := company.load_iterations(db, id)
+            match list.head(its) {
+              None => Err("expected the iteration row to still exist"),
+              Some(it) => if it.status == "success" {
+                Ok(())
+              } else {
+                Err(str.join(["resume_point should not touch a terminal status, got '", it.status, "'"], ""))
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_graduate_backlog_marks_previous_done() -> [sql, fs_write, time, crypto, random, io] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-graduate")
+        match company.append_backlog(db, id, "ship v1") {
+          Err(e) => Err(e),
+          Ok(_) => match company.append_backlog(db, id, "ship v2") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let __first := company_runner.graduate_backlog(db, id, 1)
+              let __second := company_runner.graduate_backlog(db, id, 2)
+              let items := company.load_backlog(db, id)
+              let v1 := list.fold(items, None, fn (acc :: Option[Str], it :: company.BacklogItem) -> Option[Str] {
+                match acc {
+                  Some(_) => acc,
+                  None => if it.idx == 1 {
+                    Some(it.status)
+                  } else {
+                    None
+                  },
+                }
+              })
+              match v1 {
+                Some(status) => if status == "done" {
+                  Ok(())
+                } else {
+                  Err(str.join(["expected item 1 to be 'done' after graduating past it, got '", status, "'"], ""))
+                },
+                None => Err("expected backlog item 1 to exist"),
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io] List[Result[Unit, Str]] {
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

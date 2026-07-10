@@ -23,6 +23,13 @@
 #   REQUEST       — project request text     (default: built-in toy request)
 #   SPRINT_ID     — sprint identifier        (default: sprint-1)
 #   MAX_API_CALLS — max LLM node invocations (default: 200; matches sprint manifest budget)
+#   EXEC_MODE     — "inline" (default) or "queue" (#93): "queue" enqueues each
+#                   layer's nodes onto lex-jobs instead of running them
+#                   in-process, and blocks on the results. Requires a separate
+#                   `lex run ... src/worker.lex run_worker` process (or several)
+#                   running against the SAME DB_PATH to actually drain the
+#                   queue — a "queue" sprint with no worker running just
+#                   times out waiting per layer.
 
 import "std.env" as env
 
@@ -149,7 +156,8 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
         get_env("REVIEW_TRANSITIONS", "") == "true"
       }
       let trail_log_none :: Option[tlog.Log] := None
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None }
+      let exec_mode := get_env("EXEC_MODE", "inline")
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None, exec_mode: exec_mode }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"
@@ -549,10 +557,11 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let maintenance_when := get_env("MAINTENANCE_WHEN", "")
   let wake_when := get_env("WAKE_WHEN", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
-  let evolve := if get_env("EVOLVE", "") == "1" {
-    true
+  let evolve_flag := get_env("EVOLVE", "1")
+  let evolve := if evolve_flag == "0" {
+    false
   } else {
-    get_env("EVOLVE", "") == "true"
+    evolve_flag != "false"
   }
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
@@ -591,10 +600,11 @@ fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "1"), 1)
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
   let track_count := parse_int_or(get_env("TRACK_COUNT", "0"), 0)
-  let evolve := if get_env("EVOLVE", "") == "1" {
-    true
+  let evolve_flag := get_env("EVOLVE", "1")
+  let evolve := if evolve_flag == "0" {
+    false
   } else {
-    get_env("EVOLVE", "") == "true"
+    evolve_flag != "false"
   }
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[portfolio] FATAL: ", e)),

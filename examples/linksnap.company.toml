@@ -1,0 +1,31 @@
+# Example company manifest (#91). Consumed by bin/bootstrap-company.sh, never
+# by the LLM. Declares identity + stack + policy ONCE, up front; the bootstrap
+# realizes it deterministically and the agents only fill in features.
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "linksnap"                                          # [enforced] → COMPANY_ID + workspace dir
+name    = "LinkSnap"
+mission = "Build linksnap: a hosted URL-shortener and link-preview API for developers who want a self-hostable bit.ly alternative. Single Python HTTP server: POST /shorten (long URL → short code), GET /<code> (302 redirect, 404 if unknown), GET /preview/<code> (fetch destination, return title/description/og:image as JSON). SQLite store. Tests for every endpoint."   # [enforced] → GOAL
+
+[stack]
+path  = "python-flask"        # [enforced] → skeleton + (later) tech-specialist agents; MUST be a vetted path under paths/
+model = "glm-5.2"             # [enforced] → MODEL
+storage = "sqlite"            # [declared-intent] informs skeleton
+
+[infra]
+repo   = "github:alpibrusl/linksnap"   # [declared-intent] realized only with GITHUB_PUBLISH=1
+hosting = "hetzner-cx22"               # [declared-intent] until deploy path exists
+domain = "linksnap.dev"                # [declared-intent]
+
+[roles]
+packs = ["engineering"]       # [enforced] finance/legal packs now exist (#92 slice 1) but linksnap doesn't need them yet — a URL-shortener has no pricing/ToS work outstanding at this stage
+
+[monitoring]
+checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]
+
+[policy]
+max_iterations = 12           # [enforced] → MAX_ITERATIONS
+budget_eur     = 25           # [enforced] → STOP_WHEN="spend ge 25.00" (rough estimate guard)
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants

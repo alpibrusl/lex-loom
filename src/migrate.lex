@@ -8,6 +8,8 @@ import "std.sql" as sql
 
 import "std.list" as list
 
+import "lex-jobs/src/jobs" as jobs
+
 fn ddl_sprint_graphs() -> Str {
   "CREATE TABLE IF NOT EXISTS sprint_graphs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, phase TEXT NOT NULL, graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
 }
@@ -166,6 +168,18 @@ fn ddl_company_board_notes_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_board_notes_status ON company_board_notes(company_id, status, idx)"
 }
 
+# Operate loop (#84/#85) — observations from OUTSIDE a company's own build
+# sandbox: is the last-launched server actually still responding, between
+# iterations. Append-only, timestamped, sourced by `kind` so later signal
+# types (revenue, support volume) can share the table without a schema change.
+fn ddl_company_operate_signals() -> Str {
+  "CREATE TABLE IF NOT EXISTS company_operate_signals (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, observed_at TEXT NOT NULL)"
+}
+
+fn ddl_company_operate_signals_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_operate_signals_company ON company_operate_signals(company_id, kind, idx)"
+}
+
 # did:lex portable reputation (#52): signed attestation bundles. Reputation is
 # DERIVED (count of verified rows per did), never stored — nothing to forge.
 fn ddl_attestations() -> Str {
@@ -192,6 +206,7 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __8 := try_ddl(db, "ALTER TABLE companies ADD COLUMN maintenance_when TEXT NOT NULL DEFAULT ''")
   let __9 := try_ddl(db, "ALTER TABLE companies ADD COLUMN wake_when TEXT NOT NULL DEFAULT ''")
   let __10 := try_ddl(db, "ALTER TABLE company_iterations ADD COLUMN goal TEXT NOT NULL DEFAULT ''")
+  let __11 := try_ddl(db, "ALTER TABLE companies ADD COLUMN total_cost_cents INTEGER NOT NULL DEFAULT 0")
   ()
 }
 
@@ -206,9 +221,10 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
+      let __jobs := jobs.init_schema(db)
       let __up := run_upgrades(db)
       Ok(())
     },

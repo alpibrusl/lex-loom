@@ -14,7 +14,7 @@
 # so the check can never silently diverge from what was granted.
 #
 # Roles not listed wield no tools (pm, architect, demo, scribe, docs, devops,
-# security, ux, brand, content_designer, judge, …). The architect's `emit_graph`
+# ux, brand, content_designer, judge, …). The architect's `emit_graph`
 # tool is sprint-scoped and injected outside the node loop, so it never appears
 # in an op_grant — it is intentionally not a role policy entry.
 
@@ -34,7 +34,11 @@ fn tools_for(role :: Str) -> List[Str] {
           if role == "launch" {
             ["run_server"]
           } else {
-            []
+            if role == "security" {
+              ["security_scan"]
+            } else {
+              []
+            }
           }
         }
       }

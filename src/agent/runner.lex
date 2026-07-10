@@ -195,6 +195,25 @@ fn is_build_kind(kind :: Str) -> Bool {
   }
 }
 
+# Per-role tool-call budget (max LLM rounds before the loop is force-stopped).
+# The lex-llm default is 20, which suits build/py_build (they legitimately
+# write+check many files across many rounds). But `launch` is single-shot: a
+# correct launch is exactly two rounds — call run_server once, then emit the
+# JSON verdict. Its run_server tool BLOCKS up to timeout_s (20-45s) waiting for
+# the server, so if a model stochastically keeps re-calling it (a real,
+# intermittent failure seen across runs — glm-5.2 et al.), a budget of 20
+# means ~10 minutes of wasted blocking launches before the cap trips and the
+# node fails its `spec json` gate anyway. A tight budget makes that failure
+# CHEAP and FAST, and the node-level retry (max_node_retries) still gives a
+# looping launch fresh attempts. Keep the default for every other role.
+fn max_steps_for(kind :: Str) -> Int {
+  if kind == "launch" {
+    4
+  } else {
+    20
+  }
+}
+
 fn has_fence(s :: Str) -> Bool {
   str.contains(s, "```")
 }
@@ -254,6 +273,44 @@ fn verify_shell(cmd :: Str, kind :: Str) -> [proc] Result[Unit, Str] {
       } else {
         if str.contains(combined, "NO_WORKDIR") {
           Err("gate: node produced no files (work dir missing)")
+        } else {
+          Err(str.concat("gate command failed:\n", str.slice(combined, 0, 1200)))
+        }
+      }
+    },
+  }
+}
+
+# `spec sh` for a NON-build role (devops, security, docs, finance, legal, ...).
+# verify_shell above only makes sense for build/py_build: those roles' tools
+# (lex_check/py_check) actually persist files to work_dir_for(kind) across the
+# node's tool-call turns. Every other role has no such tool — it just returns
+# prose/code fenced in its final answer, which never touches disk — so
+# verify_shell would run the gate command against a stale or unrelated work
+# dir (e.g. a devops node's `spec sh "docker build..."` silently checking
+# whatever the LAST build/py_build node happened to leave in /tmp/loom-lex-
+# work, which the devops agent never wrote to). Found live: an e2e sprint
+# where devops was denied every attempt because its Dockerfile output was
+# never written anywhere the gate could see (#21).
+#
+# Fix: re-materialize the node's own `output` into a fresh scratch dir via
+# extract_fenced.py (same mechanism verify.lex's independent reverify_grounded
+# already uses for post-hoc verification) and run the gate command there —
+# grounding it in what THIS node actually produced, for any role.
+fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
+  let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
+  let __w := io.write(art, output)
+  let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(msg) => Err(str.concat("gate command could not run: ", msg)),
+    Ok(r) => {
+      let combined := str.concat(r.stdout, r.stderr)
+      if str.contains(combined, "##GATE_EXIT:0") {
+        Ok(())
+      } else {
+        if str.contains(combined, "NO_FILES") {
+          Err("gate: node produced no fenced files to check (write your output as fenced code blocks, e.g. ```Dockerfile)")
         } else {
           Err(str.concat("gate command failed:\n", str.slice(combined, 0, 1200)))
         }
@@ -465,7 +522,9 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
         wrap_tool(ops_path, tl)
       })
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
-      let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: llm_agent.default_options(), permission_spec: None }
+      let base_opts := llm_agent.default_options()
+      let opts := { temperature: base_opts.temperature, top_p: base_opts.top_p, max_steps: Some(max_steps_for(def.kind)), max_tokens: base_opts.max_tokens }
+      let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: opts, permission_spec: None }
       let conv := conv_from_msg(def.kind, msg_json)
       let __clear := if is_build_kind(def.kind) {
         clear_work_dir(def.kind)

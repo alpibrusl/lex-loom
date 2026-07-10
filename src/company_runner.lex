@@ -8,6 +8,8 @@
 
 import "std.str" as str
 
+import "std.env" as env
+
 import "std.int" as int
 
 import "std.io" as io
@@ -44,18 +46,35 @@ fn board_notes_section(notes :: List[Str]) -> Str {
   }
 }
 
+# Pure prompt construction, split out from decide_next so it's testable
+# without a real LLM call or a live DB (#86).
+fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
+  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+}
+
+# Pure, testable: whether pending notes should be marked consumed given the
+# decision that was just made (#90 — OP6 item 1).
+fn should_consume_notes(notes :: List[Str], decision :: company.StrategistDecision) -> Bool {
+  if list.is_empty(notes) {
+    false
+  } else {
+    decision.decision != "continue"
+  }
+}
+
 fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
   let shipped := company.shipped_summary(db, ccfg.id)
   let notes := company.pending_board_notes(db, ccfg.id)
-  let prompt := str.join(["MISSION:\n", ccfg.goal, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+  let operate := company.operate_section(db, ccfg.id)
+  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, current_goal, ctx)
   let reply := runner.step(db, agent, prompt)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
-  let __mc := if list.is_empty(notes) {
-    Ok(())
-  } else {
+  let __mc := if should_consume_notes(notes, decision) {
     company.mark_board_notes_consumed(db, ccfg.id)
+  } else {
+    Ok(())
   }
   decision
 }
@@ -68,6 +87,13 @@ fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sq
   match company.next_backlog_item(db, company_id) {
     None => None,
     Some(item) => {
+      let __md := match company.active_backlog_item(db, company_id) {
+        None => (),
+        Some(prev) => {
+          let __mp := company.mark_backlog_status(db, company_id, prev.idx, "done")
+          ()
+        },
+      }
       let __mb := company.mark_backlog_status(db, company_id, item.idx, "active")
       let __bt := tr.trail(db, company_id, "backlog_advanced", str.join(["{\"iter\":", int.to_str(at_iter), ",\"goal\":\"", company.json_escape(item.goal), "\"}"], ""))
       let __bp := io.print(str.join(["[company] backlog: graduating to \"", item.goal, "\""], ""))
@@ -87,8 +113,16 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
-  let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count }
-  let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx) }
+  let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }
+  let exec_mode := match env.get("EXEC_MODE") {
+    Some(m) => if str.is_empty(m) {
+      "inline"
+    } else {
+      m
+    },
+    None => "inline",
+  }
+  let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx), exec_mode: exec_mode }
   let result := orch.run_sprint(scfg)
   let mem_n := company.persist_iteration_memory(db, sprint_id)
   let __pm := if mem_n > 0 {
@@ -96,13 +130,46 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   } else {
     ()
   }
-  let ctx := company.derive_ctx(db, sprint_id, k, result.success)
+  let __cost := match company.record_iteration_cost(db, ccfg.id, sprint_id) {
+    Ok(_) => (),
+    Err(m) => io.print(str.join(["[company] cost recording failed: ", m], "")),
+  }
+  let ctx := company.derive_ctx(db, ccfg.id, sprint_id, k, result.success)
   let __fin := company.finish_iteration(db, ccfg.id, k, if result.success {
     "success"
   } else {
     "failed"
   })
-  let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count)], ""))
+  let __sync := if result.success {
+    match company.find_build_artifact(db, sprint_id) {
+      None => (),
+      Some(content) => match company.sync_project_dir(ccfg.id, sprint_id, content) {
+        Ok(_) => io.print(str.join(["[company] synced build output to $LOOM_WORKSPACE/", ccfg.id, "/"], "")),
+        Err(m) => io.print(str.join(["[company] project sync failed: ", m], "")),
+      },
+    }
+  } else {
+    ()
+  }
+  let __liveness := if result.success {
+    match company.check_and_record_liveness(db, ccfg.id, k, sprint_id) {
+      Ok(_) => (),
+      Err(m) => io.print(str.join(["[company] liveness check failed: ", m], "")),
+    }
+  } else {
+    ()
+  }
+  let brand_n := if result.success {
+    company.persist_brand_memory(db, sprint_id)
+  } else {
+    0
+  }
+  let __pb := if brand_n > 0 {
+    io.print(str.join(["[company] persisted brand identity to ", int.to_str(brand_n), " agent(s) for next iteration"], ""))
+  } else {
+    ()
+  }
+  let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count), " est_spend=", company.format_cents(ctx.spend_cents)], ""))
   let decision := if evolve {
     decide_next(db, ccfg, current_goal, ctx)
   } else {

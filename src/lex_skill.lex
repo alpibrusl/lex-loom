@@ -14,6 +14,8 @@
 
 import "std.str" as str
 
+import "std.list" as list
+
 import "std.io" as io
 
 import "lex-llm/src/tool" as t
@@ -247,6 +249,58 @@ fn make_py_check_tool() -> t.Tool {
             })), ("output", JStr(combined))]))
           },
         }
+      },
+    }
+  })
+}
+
+# ── security_scan ─────────────────────────────────────────────────────────────
+# Grounds the security role's verdict in a real check instead of self-report:
+# greps both build work dirs for a curated set of known-dangerous patterns
+# (hardcoded secrets, shell/eval injection, string-built SQL, debug-mode-on).
+# No external scanner (semgrep/bandit) is assumed installed — this is the
+# same "real tool, not a string check" philosophy as py_check, scoped to what
+# grep can verify deterministically. It is a floor, not a replacement for a
+# real SAST tool in a production pipeline.
+fn part_at_or(xs :: List[Str], i :: Int, default :: Str) -> Str {
+  if i <= 0 {
+    match list.head(xs) {
+      None => default,
+      Some(h) => h,
+    }
+  } else {
+    part_at_or(list.tail(xs), i - 1, default)
+  }
+}
+
+fn parse_security_record(rec :: Str) -> jv.Json {
+  let fields := str.split(rec, "@@F@@")
+  let sev := part_at_or(fields, 0, "")
+  let file := part_at_or(fields, 1, "")
+  let line := part_at_or(fields, 2, "")
+  let snip := part_at_or(fields, 3, "")
+  JObj([("severity", JStr(sev)), ("file", JStr(file)), ("line", JStr(line)), ("snippet", JStr(snip))])
+}
+
+fn make_security_scan_tool() -> t.Tool {
+  let params := { title: "SecurityScan", description: "Scan the build work dirs for known-dangerous code patterns", fields: [] }
+  t.define("security_scan", "Call this FIRST, before writing your verdict. Greps every file in the Lex and Python work dirs for hardcoded secrets, shell/eval injection, string-built SQL, and debug-mode-on. Returns {findings: [{severity, file, line, snippet}]} (empty list if none found). A GROUNDED check — you must not report PASS if this returns critical/high findings, and must not invent findings it did not report.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let script := str.join(["scan() {\n", "  local dir=\"$1\"\n", "  [ -d \"$dir\" ] || return 0\n", "  cd \"$dir\" || return 0\n", "  local pats=(\n", "    'critical:(api_key|apikey|secret|password|passwd|token)[[:space:]]*[:=][[:space:]]*[\"'\"'\"'][A-Za-z0-9+/=_-]{8,}[\"'\"'\"']'\n", "    'critical:shell[[:space:]]*=[[:space:]]*True'\n", "    'critical:os\\.(system|popen)\\('\n", "    'critical:\\b(eval|exec)\\('\n", "    'high:execute\\((f[\"'\"'\"']|[\"'\"'\"'].*%s|[\"'\"'\"'].*\\+)'\n", "    'medium:debug[[:space:]]*=[[:space:]]*[Tt]rue'\n", "  )\n", "  for p in \"${pats[@]}\"; do\n", "    local sev=\"${p%%:*}\"\n", "    local rx=\"${p#*:}\"\n", "    grep -rniE \"$rx\" . --include='*.py' --include='*.lex' --include='*.js' 2>/dev/null | while IFS=: read -r f l snip; do\n", "      clean=$(echo \"$snip\" | sed -e 's/^[[:space:]]*//' -e 's/@@[FR]@@//g' | cut -c1-200)\n", "      printf '%s@@F@@%s@@F@@%s@@F@@%s@@R@@\\n' \"$sev\" \"${f#./}\" \"$l\" \"$clean\"\n", "    done\n", "  done\n", "}\n", "scan '", work_dir(), "'\n", "scan '", py_work_dir(), "'\n"], "")
+    match proc.run("bash", ["-c", script]) {
+      Err(msg) => Err(e.single("", "proc_error", str.concat("security_scan failed: ", msg))),
+      Ok(r) => {
+        let trimmed := str.trim(r.stdout)
+        let cleaned := str.replace(trimmed, "@@R@@", "")
+        let records := if str.is_empty(trimmed) {
+          []
+        } else {
+          str.split(cleaned, "\n")
+        }
+        let non_empty := list.filter(records, fn (rec :: Str) -> Bool {
+          str.is_empty(str.trim(rec)) == false
+        })
+        let findings := list.map(non_empty, parse_security_record)
+        Ok(JObj([("findings", JList(findings))]))
       },
     }
   })

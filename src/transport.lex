@@ -146,12 +146,17 @@ fn node_handler() -> Str {
   "invoke"
 }
 
-fn node_job_payload(sprint_id :: Str, node_id :: Str, phase :: Str, input_ref :: Str, model :: Str) -> Str {
-  jv.stringify(JObj([("sprint_id", JStr(sprint_id)), ("node_id", JStr(node_id)), ("phase", JStr(phase)), ("input_ref", JStr(input_ref)), ("model", JStr(model))]))
+# `request` (the sprint's original request text) and `api_calls_max` are
+# carried so the worker can build a real orchestrator.SprintCfg and call
+# orchestrator.invoke_node_attempt directly — the same gate/retry/roster
+# logic the in-process path uses, instead of a separately-maintained
+# reimplementation that drifts (#93).
+fn node_job_payload(sprint_id :: Str, node_id :: Str, phase :: Str, input_ref :: Str, model :: Str, request :: Str, api_calls_max :: Int) -> Str {
+  jv.stringify(JObj([("sprint_id", JStr(sprint_id)), ("node_id", JStr(node_id)), ("phase", JStr(phase)), ("input_ref", JStr(input_ref)), ("model", JStr(model)), ("request", JStr(request)), ("api_calls_max", JInt(api_calls_max))]))
 }
 
-fn enqueue_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, phase :: Str, input_ref :: Str, model :: Str) -> [sql, time] Result[Int, Str] {
-  let payload := node_job_payload(sprint_id, node_id, phase, input_ref, model)
+fn enqueue_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, phase :: Str, input_ref :: Str, model :: Str, request :: Str, api_calls_max :: Int) -> [sql, time] Result[Int, Str] {
+  let payload := node_job_payload(sprint_id, node_id, phase, input_ref, model, request, api_calls_max)
   jobs.enqueue(db.handle, node_queue(), node_handler(), payload)
 }
 

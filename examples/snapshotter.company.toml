@@ -1,0 +1,31 @@
+# Example company manifest (#91/#92). Consumed by bin/bootstrap-company.sh,
+# never by the LLM. Declares identity + stack + policy ONCE, up front; the
+# bootstrap realizes it deterministically and the agents only fill in
+# features. Authored via the create-company skill (.claude/skills/create-company/).
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "snapshotter"                                       # [enforced] → COMPANY_ID + workspace dir
+name    = "Snapshotter"
+mission = "A hosted screenshot-as-a-service API: POST /screenshot {url} returns a PNG of the rendered page. API-key gated, usage-tiered pricing."   # [enforced] → GOAL
+
+[stack]
+path  = "python-fastapi"       # [enforced] → skeleton + (later) tech-specialist agents; MUST be a vetted path under paths/ — picked over python-flask for Pydantic input validation on the {url} payload + free /docs for API integrators
+model = "glm-5.2"              # [enforced] → MODEL
+
+[infra]
+# repo/hosting/domain intentionally left unset for now — all [declared-intent]
+# anyway (nothing deploys/publishes automatically); add repo="github:org/name"
+# later and it still only becomes real with GITHUB_PUBLISH=1.
+
+[roles]
+packs = ["engineering", "finance", "legal"]   # [enforced] finance+legal roles exist (#92 slice 1) — finance for the usage-tiered pricing, legal for a ToS/privacy draft before accepting real users
+
+[monitoring]
+checks = ["liveness"]          # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]
+
+[policy]
+max_iterations = 12            # [enforced] → MAX_ITERATIONS
+budget_eur     = 25            # [enforced] → STOP_WHEN="spend ge 25.00" (rough estimate guard — see cost-ledger caveat in docs/design/company-manifest.md)
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants — standing policy, not loosened

@@ -1,0 +1,160 @@
+# Agentic Company — conceptual design
+
+Status as of 2026-07-06. Extends #53 (Company epic), #62 (lifecycle design), and
+#82 (board layer) — all closed. This is the next layer: what a Company needs to
+be an actual *business*, not just a loop that keeps building features. Written
+after two live end-to-end runs (`dataforge`, a Gumroad-sold CLI; `linksnap`, a
+hosted API) surfaced the same structural gap from two different angles.
+
+---
+
+## The core problem this document addresses
+
+`dataforge` shipped: JSON/YAML/TOML conversion, schema validation, a Gumroad
+license-key gate, `pyproject.toml` packaging — every feature the Strategist
+queued, it built, QA'd, and shipped. `linksnap` shipped a working URL-shortener
+API with a real `launch`-node boot. Both runs are proof the **build loop**
+works end to end.
+
+Neither product has a single real user. Nobody paid. No support ticket has
+ever been read. The Strategist's every decision — `continue` / `revise` /
+`add` / `stop` — was made by an LLM reading another LLM's QA verdict and
+digest summary. The company never once received a signal from outside its own
+sandbox. That is the difference between a software factory and a company, and
+it is the one gap that matters most.
+
+---
+
+## Three loops, not one
+
+A Company today is really one loop wearing three hats. Splitting it out makes
+the missing piece visible:
+
+| Loop | Question it answers | loom status |
+|---|---|---|
+| **Build** | Can we make it? | **Have it.** Sprint → Digest → Improve (C1–C6), dynamic extension, cross-sprint memory. Proven twice this session. |
+| **Operate** | Is it working, for real people? | **Missing entirely.** No uptime signal, no usage signal, no support-message ingestion. Nothing external ever enters the system. |
+| **Strategy** | What should we do next? | **Have a primitive version.** The Strategist (C8, #75) decides continue/revise/add/stop — but its only inputs are internal: mission text, shipped list, last QA verdict, digest summary, board notes. No revenue, no usage, no cost. |
+
+The Strategist cannot make a real business decision because it is never given
+a real business signal. Today "the mission is achieved" is judged entirely by
+an LLM re-reading its own prior work.
+
+---
+
+## Layer inventory — what a Company needs, and what exists
+
+Ordered roughly bottom-up, product → business:
+
+1. **Product** (the build loop) — ✅ have it (C1–C6, dynamic DAGs #41).
+2. **Distribution** — marketing/launch surface: landing copy, SEO, positioning.
+   ⚠️ Roles are *speced but not built*: Brand Strategist (#14), Content Creator
+   (#15), Copywriter (#16), SEO Specialist (#17) are all still pending in the
+   role catalogue. A company today cannot get *anyone* to its product.
+3. **Monetization** — payment processing, pricing, license/billing.
+   ⚠️ `dataforge` proved the *pattern* (a license-key gate module, correctly
+   fail-closed) but the actual money-moving integration (a real Gumroad
+   product, a real Stripe account) has never been wired, and per the
+   attestation-ladder philosophy (`roles.lex`), it should **never be
+   autonomous** — this is the one place a human must always sign.
+4. **Operate** — uptime, error rates, usage counts, support inbox.
+   ❌ **Does not exist at all.** This is the primary gap this document exists
+   to name.
+5. **Strategy** — decide what to build/kill next.
+   ⚠️ Exists (C8) but only sees internal signals. Needs augmenting with
+   Operate-loop output.
+6. **Board / human oversight** — advisory, non-blocking notes from a human.
+   ✅ Have it (#82, this session). One real gap found in use: notes are
+   one-shot-consumed on the *first* decision after being queued, even if
+   their own stated condition ("once X ships, do Y") isn't true yet — a
+   conditional note can be silently discarded before it ever applies.
+7. **Portfolio** — one company, N concurrent product lines.
+   ✅ Have it (C7, #78, `portfolio_tracks`).
+8. **Cost / budget discipline** — is this company spending more than it could
+   ever earn?
+   ❌ **Does not exist.** Nothing in the Strategist's context today reflects
+   LLM/infra spend. This session alone burned dozens of iterations across
+   `dataforge` and `linksnap` for $0 combined revenue — a real company would
+   have killed at least one of those lines on cost grounds alone.
+9. **Lifecycle** (Ideation → Validation → Growth → Maintenance → Sunset) and
+   **dormancy/resume** — ✅ have both (`company.lex` stage FSM, C10).
+10. **Project coherence** (one real, inspectable codebase per company) —
+    ✅ **fixed this session** (`sync_project_dir`, `extract_fenced.py` heading
+    lookback) after `dataforge`'s extraction turned out to be scattered across
+    incoherent scratch directories.
+
+---
+
+## What "done" looks like for the missing pieces
+
+**Operate loop.** A new role (or a small set of them) whose job is to *read
+the real world* on a schedule, independent of any sprint: poll a usage/error
+metric, poll a support inbox, poll a payment ledger. Each read becomes a
+grounded fact (like a QA verdict is a grounded fact today) that the Strategist
+can cite. This needs its own effect surface (`net` calls to whatever the real
+integration is — Stripe, a helpdesk, an analytics endpoint) and its own DB
+table (real-world observations, timestamped, sourced) — not folded into
+`traces`, which is sprint-internal.
+
+**Strategist augmentation.** Extend `decide_next`'s prompt (`company_runner.lex`)
+and the `IterCtx`/board-notes-style inputs with an "OPERATE SIGNALS" section —
+revenue-to-date, active users, open support items, cumulative LLM spend — the
+same way "BOARD NOTES" was added this session. The Strategist's rules
+(`strategist_system_prompt`) need a new consideration: a shipped, QA-passed
+feature nobody uses is not evidence to keep going.
+
+**Cost ledger.** A running total of LLM API cost (and eventually infra cost)
+per company, checked the same way `stop_when`/`wake_when` conditions are
+checked today (C2's condition DSL already has the right shape — `accepted ge
+N`, `iter ge N` — this just needs a `spend ge N` term and a company-level
+running total to compare it against, likely fed by loom's own cost-tracking
+if it has one, or a manual per-call estimate).
+
+**Monetization, for real.** Wiring an actual Gumroad/Stripe product — a
+`human <oracle>` gate, per the attestation ladder, since this is legal/money
+territory. Not autonomous by design.
+
+**Distribution roles.** Activate the four pending marketing roles (#14–#17) —
+they're already speced in the task backlog, just never built.
+
+---
+
+## Smaller, already-diagnosed rough edges (not new, but worth closing)
+
+Found live in `dataforge`/`linksnap` this session, not yet fixed:
+
+- **One-shot board notes fire too early.** A note queued with a conditional
+  ask ("once core X ships, do Y") is consumed at the very next decision point
+  — which may be *before* X ships — and is then gone. It should persist until
+  a decision cites it, or until an explicit expiry.
+- **Redundant re-verification after "add."** The Strategist's `add` decision
+  intentionally doesn't change `current_goal` (so as not to interrupt
+  in-progress work) — but this means the *same, already-passing* goal gets
+  re-run and re-verified one extra iteration before the next `stop`/`revise`
+  actually moves on. Minor cost, but avoidable.
+- **Stale `running` iteration rows.** A process kill (session teardown, `kill`)
+  leaves a `company_iterations` row permanently at `status='running'`.
+  Harmless functionally (`resume_point` only reads the highest-idx row) but
+  cosmetically wrong in the board report.
+- **Backlog items never marked `done`.** `graduate_backlog` marks the *next*
+  item `active` but never marks the *previous* one `done` once its goal is
+  fully shipped — it just stays `active` forever, which is confusing in
+  `board_report`'s backlog section even though it's functionally inert.
+
+---
+
+## Recommended sequencing
+
+1. **Operate loop v0** — a single, simple signal source (even something as
+   basic as "does the launched server still respond, checked once between
+   iterations" — reusing the existing `launch` node's live-check machinery)
+   proves the wiring before reaching for a real Stripe/support integration.
+2. **Strategist augmentation** — thread that v0 signal into `decide_next`'s
+   prompt. This is the smallest change that makes the Strategist's decisions
+   actually grounded in something outside its own sandbox.
+3. **Cost ledger** — cheap to add (a running total + a condition-DSL term),
+   high value (this session's actual token spend is the best available
+   evidence it's needed).
+4. **Distribution roles** — activate #14–#17; they're already speced.
+5. **Real monetization wiring** — deliberately last, deliberately human-gated.
+6. **Rough-edge cleanups** — low-risk, can land anytime, don't block the above.

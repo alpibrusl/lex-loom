@@ -71,6 +71,8 @@ import "./company_runner" as company_runner
 
 import "./identity" as identity
 
+import "./dag_view" as dagv
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type RunRow = { run_id :: Str }
@@ -442,6 +444,22 @@ fn reputation_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   match conn.open(db_path) {
     Err(_) => io.print("[loom] FATAL open db"),
     Ok(db) => io.print(identity.registry_json(db)),
+  }
+}
+
+# ── sprint_dag_cmd ────────────────────────────────────────────────────────────
+# Prints a Mermaid flowchart of a sprint's graph, including every expand-node
+# sub-sprint nested as its own subgraph, with each node coloured by its
+# current status (pending/running/done/FAILED, read from the trail).
+# Paste the output into a ```mermaid fence or https://mermaid.live.
+#
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,sql,fs_read,fs_write src/main.lex sprint_dag_cmd
+fn sprint_dag_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => io.print(dagv.sprint_dag_mermaid(db, sprint_id)),
   }
 }
 

@@ -905,8 +905,8 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, ra
 
 # ── OP2 (#86): Strategist actually sees Operate signals ─────────────────────
 fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
-  let ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "Add widget v2", ctx)
+  let iter_ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "Add widget v2", iter_ctx)
   if str.contains(prompt, "OPERATE SIGNALS") {
     if str.contains(prompt, "down") {
       Ok(())
@@ -919,8 +919,8 @@ fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
 }
 
 fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
-  let ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "Ship v1", ctx)
+  let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "Ship v1", iter_ctx)
   if str.contains(prompt, "no launched server") {
     Ok(())
   } else {
@@ -1147,7 +1147,11 @@ fn test_graduate_backlog_marks_previous_done() -> [sql, fs_write, time, crypto, 
               let v1 := list.fold(items, None, fn (acc :: Option[Str], it :: company.BacklogItem) -> Option[Str] {
                 match acc {
                   Some(_) => acc,
-                  None => if it.idx == 1 { Some(it.status) } else { None },
+                  None => if it.idx == 1 {
+                    Some(it.status)
+                  } else {
+                    None
+                  },
                 }
               })
               match v1 {

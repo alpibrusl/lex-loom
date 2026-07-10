@@ -296,7 +296,9 @@ fn make_security_scan_tool() -> t.Tool {
         } else {
           str.split(cleaned, "\n")
         }
-        let non_empty := list.filter(records, fn (rec :: Str) -> Bool { str.is_empty(str.trim(rec)) == false })
+        let non_empty := list.filter(records, fn (rec :: Str) -> Bool {
+          str.is_empty(str.trim(rec)) == false
+        })
         let findings := list.map(non_empty, parse_security_record)
         Ok(JObj([("findings", JList(findings))]))
       },

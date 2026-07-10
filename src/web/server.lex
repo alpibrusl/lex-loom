@@ -263,7 +263,7 @@ fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, ra
         }
         let mac := parse_int_or_l(get_jv_str(j, "max_api_calls"), 200)
         let trail_log_none :: Option[tlog.Log] := None
-        let cfg := { id: sid, request: req, model: mdl, db: db, api_calls_max: mac, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0, iter_ctx: None }
+        let cfg := { id: sid, request: req, model: mdl, db: db, api_calls_max: mac, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline" }
         let result := orch.run_sprint(cfg)
         resp.json(str.join(["{\"sprint_id\":", esc(sid), ",\"success\":", if result.success {
           "true"

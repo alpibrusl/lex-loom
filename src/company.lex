@@ -257,7 +257,7 @@ fn format_cents(cents :: Int) -> Str {
 }
 
 fn cents_mod_100(cents :: Int) -> Int {
-  let r := cents - (cents / 100) * 100
+  let r := cents - cents / 100 * 100
   if r < 0 {
     0 - r
   } else {
@@ -1100,7 +1100,9 @@ fn find_brand_artifacts(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Str {
   let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => "",
-    Ok(rs) => str.join(list.map(rs, fn (r :: ContentRow) -> Str { r.content }), "\n\n"),
+    Ok(rs) => str.join(list.map(rs, fn (r :: ContentRow) -> Str {
+      r.content
+    }), "\n\n"),
   }
 }
 

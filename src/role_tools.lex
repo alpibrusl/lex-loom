@@ -35,8 +35,6 @@ fn tools_for(role :: Str) -> List[Str] {
             ["run_server"]
           } else {
             if role == "security" {
-              # security_scan (#13): grounds the security verdict in a real
-              # grep-based check instead of trusting the model's self-report.
               ["security_scan"]
             } else {
               []

@@ -71,13 +71,6 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let reply := runner.step(db, agent, prompt)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
-  # #84/#90 — OP6 item 1: a note with a conditional/deferred ask ("once core X
-  # ships, do Y") used to be consumed at the very FIRST decide_next call after
-  # being queued, even if that decision was "continue" (nothing changed —
-  # meaning the note's condition plainly wasn't acted on yet). Only consume
-  # once the strategist actually takes an action a note could plausibly have
-  # driven (revise/add/stop); a bare "continue" leaves it pending so it's
-  # shown again next iteration instead of silently discarded unread.
   let __mc := if should_consume_notes(notes, decision) {
     company.mark_board_notes_consumed(db, ccfg.id)
   } else {

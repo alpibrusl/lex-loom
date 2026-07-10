@@ -575,17 +575,6 @@ fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str
       None => list.concat(acc, [node_id]),
     }
   })
-  # worker.execute_node_job looks a node up by loading THIS sprint's latest
-  # saved graph from sprint_graphs — but not every graph run through here was
-  # ever persisted there. The real Architect graph is (in the Design phase),
-  # but run_sprint also builds small synthetic single-node graphs in-memory
-  # for the Intake/Retro/Digest phases (e.g. the PM's "intake" node) that
-  # were never saved anywhere. Found live: a queue-mode sprint's very first
-  # node ("intake") failed with "node not found in sprint graph" because
-  # nothing had ever written it to sprint_graphs. Persist whatever graph is
-  # actually being executed right before farming its nodes out to the queue —
-  # cheap (one row), idempotent, and makes every phase queueable, not just
-  # the ones whose graph happened to already be saved for other reasons.
   let __sg := if list.is_empty(to_enqueue) {
     ()
   } else {

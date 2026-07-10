@@ -112,6 +112,18 @@ fn test_finance_legal_roles_pass_resolution() -> Result[Unit, Str] {
   assert_valid("finance/legal roles are known", g("m13e", [node("b", "build"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), node("leg", "legal"), node("sc", "scribe")], [edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "leg"), edge("leg", "sc")]))
 }
 
+# #89: monetization_handoff resolves as a known role, AND is rejected unless
+# its gate is 'human <oracle>' — the one node a model must never self-certify.
+fn test_monetization_handoff_resolves_with_human_gate() -> Result[Unit, Str] {
+  let mh := { id: "mh", role: "monetization_handoff", gate: "human founder", expand: None, activate_when: "" }
+  assert_valid("monetization_handoff with a human gate is valid", g("m13f", [node("b", "build"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), mh, node("sc", "scribe")], [edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "mh"), edge("mh", "sc")]))
+}
+
+fn test_monetization_handoff_rejects_autonomous_gate() -> Result[Unit, Str] {
+  let mh := { id: "mh", role: "monetization_handoff", gate: "spec judge \"looks fine\"", expand: None, activate_when: "" }
+  assert_has_rule("monetization_handoff with a judge gate is rejected", "monetization-handoff-human-gated", g("m13g", [node("b", "build"), node("q", "qa"), node("d", "demo"), mh], [edge("b", "q"), edge("q", "d"), edge("d", "mh")]))
+}
+
 fn test_unrecognized_gate_fails() -> Result[Unit, Str] {
   assert_has_rule("garbage gate", "gates-well-formed", g("m14", [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], []))
 }
@@ -148,7 +160,7 @@ fn test_expand_non_empty_gate_valid() -> Result[Unit, Str] {
 
 # ── Suite ─────────────────────────────────────────────────────────────────────
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid()]
 }
 
 fn run_all() -> Unit {

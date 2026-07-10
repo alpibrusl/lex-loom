@@ -153,7 +153,7 @@ fn str_role_is(role :: Str, keyword :: Str) -> Bool {
 # metaspec and only fail at runtime with "unknown role" — after the design round
 # is already spent. Catch them up front. Keep in sync with roles.for_role.
 fn known_roles() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "fe_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "scribe"]
+  ["pm", "architect", "build", "py_build", "fe_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "monetization_handoff", "scribe"]
 }
 
 fn role_is_known(role :: Str) -> Bool {
@@ -242,6 +242,28 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
   })
 }
 
+# ── Rule 11: monetization_handoff must never be self-certified (#89) ─────────
+# The one node in the whole graph a model must never attest itself: it hands
+# off creating a real payment/product integration to a human. A `spec judge`
+# or any autonomous gate here would let the model decide monetization is
+# "shipped" on its own say-so — exactly what this role exists to prevent.
+# Enforced structurally, not just by prompt instruction, matching this
+# codebase's own attestation-ladder philosophy (grounded > judge > human):
+# if the model's prompt-following slips, the graph is rejected outright.
+fn rule_monetization_handoff_is_human_gated(g :: graph.SprintGraph) -> List[Violation] {
+  list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+    if n.role == "monetization_handoff" {
+      if gates.is_judgeable(n.gate) {
+        acc
+      } else {
+        list.concat(acc, [{ rule: "monetization-handoff-human-gated", message: str.join(["node ", n.id, " (role 'monetization_handoff') uses gate '", n.gate, "', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')."], "") }])
+      }
+    } else {
+      acc
+    }
+  })
+}
+
 # ── Public API ────────────────────────────────────────────────────────────────
 fn check(g :: graph.SprintGraph) -> MetaspecResult
   examples {
@@ -252,10 +274,11 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
     check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
     check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
-    check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }])
+    check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
+    check({ id: "g8", phase: graph.Intake, nodes: [{ id: "n1", role: "monetization_handoff", gate: "spec judge \"looks good\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "monetization-handoff-human-gated", message: "node n1 (role 'monetization_handoff') uses gate 'spec judge \"looks good\"', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_monetization_handoff_is_human_gated(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

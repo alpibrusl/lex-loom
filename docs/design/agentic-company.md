@@ -143,6 +143,54 @@ Found live in `dataforge`/`linksnap` this session, not yet fixed:
 
 ---
 
+## Monetization boundary (#89)
+
+`dataforge` built a real Gumroad license-key verification module (fail-closed,
+cached, correct API shape) — but it was never wired to an actual Gumroad
+product, because no real product/account exists. This is deliberate, not a
+gap to close by giving the company real credentials.
+
+**What the company automates:**
+- Pricing tiers and unit-economics sketch (`finance` role) — grounded, flags
+  every non-tracked-spend figure as an assumption.
+- Landing/positioning copy (`copywriter`, `brand_strategist`).
+- The license-check code itself (build/py_build) — this can and should be
+  real, tested code; verifying a license key is a technical problem with a
+  correct answer.
+- A human-facing handoff checklist (`monetization_handoff` role) naming the
+  exact manual steps: create the product, set the price, wire the webhook,
+  point the already-built license-check module at the real product/API key.
+
+**What a human must do — always, no exception:**
+- Actually create the Gumroad/Stripe product and hold the account.
+- Enter real credentials anywhere (the company never sees or handles them).
+- Attest that a real product exists and is live before monetization is
+  considered "shipped."
+
+**How it's enforced, not just documented:** `monetization_handoff`'s gate
+must be `human <oracle>` (e.g. `human founder`) — metaspec rejects the graph
+outright if the Architect ever assigns it an autonomous gate (`spec judge`,
+`spec compiles`, anything else), because a model must never self-certify
+this milestone. A `human <oracle>` node is *attested* immediately (the
+sprint can proceed) but stays *unsealed* — `sprint_status`'s `fully_sealed`
+flag stays false — until a person actually resolves it:
+
+```sh
+# see everything awaiting a human, including the full handoff checklist text
+lex run --allow-effects env,io,sql,fs_read,fs_write,vcs src/main.lex attention_list_cmd
+
+# after actually creating the product and confirming it's live
+ATTENTION_ID=<id> VERDICT=approved REASON="created gumroad product, tested one purchase" \
+  lex run --allow-effects env,io,sql,fs_read,fs_write,time src/main.lex attention_resolve_cmd
+```
+
+Out of scope, by design not omission: any code that calls a real payment API
+with real credentials autonomously. If that's ever wanted, it needs its own
+explicit, separately-reviewed decision — not a natural extension of this
+work.
+
+---
+
 ## Recommended sequencing
 
 1. **Operate loop v0** — a single, simple signal source (even something as
@@ -157,4 +205,5 @@ Found live in `dataforge`/`linksnap` this session, not yet fixed:
    evidence it's needed).
 4. **Distribution roles** — activate #14–#17; they're already speced.
 5. **Real monetization wiring** — deliberately last, deliberately human-gated.
+   Done (#89): see "Monetization boundary" above.
 6. **Rough-edge cleanups** — low-risk, can land anytime, don't block the above.

@@ -463,6 +463,68 @@ fn sprint_dag_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   }
 }
 
+# ── attention queue: list + resolve (#89) ─────────────────────────────────────
+# The `human <oracle>` gate lane (monetization_handoff and any other
+# human-gated node) pushes here and the node stays UNSEALED until a human
+# calls attention_resolve_cmd — nothing else in the system can advance it.
+#
+#   lex run --allow-effects env,io,sql,fs_read,fs_write src/main.lex attention_list_cmd
+#   ATTENTION_ID=<id> VERDICT=approved|rejected REASON="..." \
+#     lex run --allow-effects env,io,sql,fs_read,fs_write,vcs src/main.lex attention_resolve_cmd
+fn attention_list_cmd() -> [env, io, sql, fs_read, fs_write, vcs] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => {
+      let pending := tr.list_attention_pending(db)
+      if list.is_empty(pending) {
+        io.print("(no pending human-attestation items)")
+      } else {
+        let __h := io.print(str.join(["Pending human attestation (", int.to_str(list.len(pending)), "):"], ""))
+        let __sep := io.print("──────────────────────────────────────")
+        let __rows := list.map(pending, fn (a :: tr.AttentionRow) -> [io, sql, fs_read, vcs] Unit {
+          let __p1 := io.print(str.join(["id=", a.id, "  sprint=", a.sprint_id, "  node=", a.node_id, "  oracle=", a.oracle], ""))
+          match tr.artifact_get(db, a.artifact_hash) {
+            Err(_) => io.print("  (artifact unavailable)"),
+            Ok(content) => io.print(str.join(["  ---\n", content, "\n  ---"], "")),
+          }
+        })
+        ()
+      }
+    },
+  }
+}
+
+fn attention_resolve_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let id := get_env("ATTENTION_ID", "")
+  let verdict := get_env("VERDICT", "")
+  let reason := get_env("REASON", "")
+  if str.is_empty(id) {
+    io.print("[loom] ATTENTION_ID is required")
+  } else {
+    if verdict != "approved" {
+      if verdict != "rejected" {
+        io.print("[loom] VERDICT must be 'approved' or 'rejected'")
+      } else {
+        resolve_attention_cmd_run(db_path, id, verdict, reason)
+      }
+    } else {
+      resolve_attention_cmd_run(db_path, id, verdict, reason)
+    }
+  }
+}
+
+fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :: Str) -> [env, io, sql, fs_write, time] Unit {
+  match conn.open(db_path) {
+    Err(_) => io.print("[loom] FATAL open db"),
+    Ok(db) => match tr.resolve_attention(db, id, verdict, reason) {
+      Err(e) => io.print(str.concat("[loom] resolve failed: ", e)),
+      Ok(_) => io.print(str.join(["[loom] ", id, " -> ", verdict], "")),
+    },
+  }
+}
+
 # ── sprint_trail ──────────────────────────────────────────────────────────────
 fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

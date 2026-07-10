@@ -306,7 +306,9 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                 },
               }
             } else {
-              let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"judge fail\",\"attempt\":", int.to_str(attempt), "}"], ""))
+              let __sa := tr.artifact_put(cfg.db, cfg.id, n.id, output)
+              let judge_reason := str.slice(company.json_escape(verdict_raw), 0, 500)
+              let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", judge_reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
               let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("judge FAIL: ", verdict_raw), attempt)
               if attempt > max_node_retries() {
                 { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("judge rejected: ", verdict_raw) }

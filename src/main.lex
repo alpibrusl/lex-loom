@@ -536,7 +536,7 @@ fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
       let __h := io.print(str.join(["Trail for sprint: ", sprint_id, " (", int.to_str(list.len(rows)), " events)"], ""))
       let __sep := io.print("──────────────────────────────────────")
       let __rs := list.map(rows, fn (r :: dg.TrailRow) -> [io] Unit {
-        io.print(str.join(["[", r.ts, "] ", r.event_kind, "  ", str.slice(r.data_json, 0, 80)], ""))
+        io.print(str.join(["[", r.ts, "] ", r.event_kind, "  ", str.slice(r.data_json, 0, 600)], ""))
       })
       ()
     },

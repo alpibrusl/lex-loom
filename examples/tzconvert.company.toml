@@ -1,0 +1,31 @@
+# Example company manifest (#91). Consumed by bin/bootstrap-company.sh, never
+# by the LLM. Declares identity + stack + policy ONCE, up front; the bootstrap
+# realizes it deterministically and the agents only fill in features.
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "tzconvert"                                         # [enforced] → COMPANY_ID + workspace dir
+name    = "tzconvert"
+mission = "Build tzconvert: a paid, hosted micro-API for developers who need to convert a timestamp between timezones and formats. Single Python FastAPI server: POST /convert takes {timestamp, from_tz, to_tz, output_format} (output_format one of iso8601|rfc2822|unix_epoch), validates the timezone names and format against a known list (reject with a clear 400 otherwise), and returns the converted timestamp. Since this ships to real, paying users: draft pricing tiers (a free tier + one paid tier) and a ToS/privacy policy draft before considering monetization ready — real payment/product creation stays a human step, never autonomous. Tests for every endpoint including invalid-timezone and invalid-format cases."   # [enforced] → GOAL
+
+[stack]
+path  = "python-fastapi"      # [enforced] → skeleton + (later) tech-specialist agents; MUST be a vetted path under paths/
+model = "qwen3-coder:30b"     # [enforced] → MODEL (OpenCode quota exhausted ~48h; using local Ollama)
+storage = "none"              # [declared-intent] informs skeleton — no persistent store needed, pure conversion
+
+[infra]
+# repo intentionally left blank — nothing publishes without GITHUB_PUBLISH=1 anyway
+hosting = "hetzner-cx22"      # [declared-intent] until deploy path exists
+domain  = "tzconvert.dev"     # [declared-intent]
+
+[roles]
+packs = ["engineering", "finance", "legal", "distribution"]   # [declared-intent] NOT yet read by bootstrap-company.sh — recorded here as intent; whether the Architect actually adds finance/legal/distribution nodes depends on the mission text above naming them explicitly (it does)
+
+[monitoring]
+checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]
+
+[policy]
+max_iterations = 3            # [enforced] → MAX_ITERATIONS (kept small for this demo run — local Ollama, not the usual 12)
+budget_eur     = 25            # [enforced] → STOP_WHEN="spend ge 25.00" (rough estimate guard, not real billing)
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants — money/legal-identity actions never autonomous

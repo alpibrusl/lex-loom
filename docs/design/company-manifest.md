@@ -53,7 +53,7 @@ realized as bootstrap/deploy/golden-path wiring lands — see #92, #93).
 | `[monitoring].checks=["liveness"]` | OP1 liveness | **enforced** (error_rate/usage declared-intent) |
 | `[infra].repo` | `gh repo create` | declared-intent (only with `GITHUB_PUBLISH=1`) |
 | `[infra].hosting` / `.domain` | deploy target | declared-intent (needs deploy path) |
-| `[roles].packs` | active function packs | declared-intent (finance/legal packs not built — #92) |
+| `[roles].packs` | active function packs | **enforced** for finance/legal/distribution roles (#92 slice 1, shipped); declared-intent only for stack-specific specialist packs not yet built |
 | `[policy].human_gates` | `lex-os-manifest` grants | declared-intent |
 
 ## Vetted paths (`paths/<name>/`)
@@ -77,5 +77,6 @@ agents is the remaining part of #92.
 - Build agents **reading and extending** the skeleton (vs building from scratch)
   is #92 — the skeleton is laid down and git-tracked, but the agents don't yet
   consume it.
-- `[infra]` realization (real Hetzner deploy) and `[roles].packs` (finance/legal)
-  are declared-intent until #92/#93 land.
+- `[infra]` realization (real Hetzner deploy) is declared-intent until deploy
+  wiring lands. `[roles].packs` for finance/legal/distribution already work
+  (#92 slice 1); only stack-specific specialist packs remain declared-intent.

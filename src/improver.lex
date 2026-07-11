@@ -110,7 +110,7 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
   let current_opt := load_best_agent(db, role)
   let current_prompt := match current_opt {
     Some(a) => a.system_prompt,
-    None => match roles.for_role(role, model) {
+    None => match roles.for_role(role, model, "") {
       Some(def) => def.system_prompt,
       None => str.join(["You are the ", role, " agent. Complete your assigned task carefully and accurately."], ""),
     },

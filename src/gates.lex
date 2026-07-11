@@ -51,6 +51,14 @@ fn is_grounded(gate :: Str) -> Bool {
   str.trim(gate) == "spec compiles"
 }
 
+# `spec json-verdict-pass` is grounded too (#/py_qa self-attestation gap):
+# the orchestrator additionally requires real run_code evidence agreeing
+# with the claimed verdict (runner.verify_json_verdict_evidence), rather
+# than trusting the agent's self-reported "verdict" string alone.
+fn is_json_verdict_pass(gate :: Str) -> Bool {
+  str.trim(gate) == "spec json-verdict-pass"
+}
+
 # True iff `gate` is a recognized gate expression — i.e. `evaluate` has a real
 # rule for it and will NOT silently fall back to the non-empty default. The
 # metaspec uses this (#33) to reject graphs whose gates would otherwise pass on

@@ -100,7 +100,13 @@ fn make_run_server_tool() -> t.Tool {
   })
 }
 
-fn make_run_code_tool() -> t.Tool {
+# `evidence_path` is where every real invocation's outcome is recorded —
+# {"ran":true,"passed":true|false} — independent of whatever the agent's
+# final text claims. The `spec json-verdict-pass` gate (orchestrator.lex)
+# checks this file rather than trusting the agent's self-reported
+# "verdict" field, so a verdict that was never actually run (or that
+# contradicts what really ran) gets denied instead of silently accepted.
+fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
   let params := { title: "RunCode", description: "Execute Python code and assertions, return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
   t.define("run_code", "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let code := match jv.get_field(args, "code") {
@@ -119,10 +125,26 @@ fn make_run_code_tool() -> t.Tool {
         let __w := io.write(path, full)
         let cmd := str.join(["perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
         match proc.run("bash", ["-c", cmd]) {
-          Err(msg) => Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))])),
+          Err(msg) => {
+            let __ev := if str.is_empty(evidence_path) {
+              Ok(())
+            } else {
+              io.write(evidence_path, "{\"ran\":true,\"passed\":false}")
+            }
+            Ok(JObj([("passed", JStr("false")), ("exit_code", JInt(1)), ("output", JStr(msg))]))
+          },
           Ok(r) => {
             let combined := str.concat(r.stdout, r.stderr)
             let passed := str.contains(combined, "##EXIT:0")
+            let __ev := if str.is_empty(evidence_path) {
+              Ok(())
+            } else {
+              io.write(evidence_path, str.join(["{\"ran\":true,\"passed\":", if passed {
+                "true"
+              } else {
+                "false"
+              }, "}"], ""))
+            }
             Ok(JObj([("passed", JStr(if passed {
               "true"
             } else {
@@ -290,7 +312,9 @@ fn make_provider_no_mistral() -> [env] prov.Provider {
 
 # Construct a tool from its canonical name. The inverse of `tool.name`; the only
 # place a role-policy name (role_tools.tools_for) is bound to its implementation.
-fn tool_by_name(name :: Str) -> Option[t.Tool] {
+# `evidence_path` only matters to `run_code` (see make_run_code_tool); every
+# other tool ignores it.
+fn tool_by_name(name :: Str, evidence_path :: Str) -> Option[t.Tool] {
   if name == "lex_guidelines" {
     Some(lexskill.make_lex_guidelines_tool())
   } else {
@@ -304,7 +328,7 @@ fn tool_by_name(name :: Str) -> Option[t.Tool] {
           Some(lexskill.make_py_check_tool())
         } else {
           if name == "run_code" {
-            Some(make_run_code_tool())
+            Some(make_run_code_tool(evidence_path))
           } else {
             if name == "run_server" {
               Some(make_run_server_tool())
@@ -324,9 +348,11 @@ fn tool_by_name(name :: Str) -> Option[t.Tool] {
 
 # An agent's tool set, derived from its role's canonical policy — so the tools a
 # node is granted at runtime are exactly the tools the verifier checks against.
-fn tools_of_role(role :: Str) -> List[t.Tool] {
+# `evidence_path` is forwarded to `run_code` (see make_run_code_tool); pass ""
+# for roles/callers that don't need grounded json-verdict evidence.
+fn tools_of_role(role :: Str, evidence_path :: Str) -> List[t.Tool] {
   list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> List[t.Tool] {
-    match tool_by_name(name) {
+    match tool_by_name(name, evidence_path) {
       Some(tool) => list.concat(acc, [tool]),
       None => acc,
     }
@@ -520,22 +546,26 @@ fn strategist_system_prompt() -> Str {
 
 fn build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", ""), proc_cmd: "", a2a_url: "" }
 }
 
 fn py_build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" }
 }
 
 fn qa(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", ""), proc_cmd: "", a2a_url: "" }
 }
 
-fn py_qa(model :: Str) -> [env] runner.AgentDef {
+# `evidence_path` grounds `spec json-verdict-pass` (see make_run_code_tool) —
+# the caller derives it per sprint+node (runner.qa_evidence_path) so a
+# verdict can be checked against real run_code evidence instead of trusted
+# blind.
+fn py_qa(model :: Str, evidence_path :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path), proc_cmd: "", a2a_url: "" }
 }
 
 fn devops(model :: Str) -> [env] runner.AgentDef {
@@ -550,7 +580,7 @@ fn docs(model :: Str) -> [env] runner.AgentDef {
 
 fn security_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", ""), proc_cmd: "", a2a_url: "" }
 }
 
 fn launch_system_prompt() -> Str {
@@ -559,7 +589,7 @@ fn launch_system_prompt() -> Str {
 
 fn launch(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch"), proc_cmd: "", a2a_url: "" }
+  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -710,7 +740,9 @@ fn monetization_handoff_agent(model :: Str) -> [env] runner.AgentDef {
 
 # Resolve a node role string to an AgentDef using a pre-computed Provider.
 # Pure (no env effect) -- callers that have already resolved the provider use this.
-fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Option[runner.AgentDef] {
+# `evidence_path` grounds py_qa's `run_code` tool (see make_run_code_tool) —
+# pass "" when the caller doesn't need grounded json-verdict evidence.
+fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str) -> Option[runner.AgentDef] {
   let mk := fn (id :: Str, kind :: Str, sp :: Str) -> runner.AgentDef {
     { id: id, kind: kind, system_prompt: sp, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
   }
@@ -721,16 +753,16 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
       Some(mk("loom-architect", "architect", architect_system_prompt()))
     } else {
       if role == "build" {
-        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build"), proc_cmd: "", a2a_url: "" })
+        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", ""), proc_cmd: "", a2a_url: "" })
       } else {
         if role == "py_build" {
-          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build"), proc_cmd: "", a2a_url: "" })
+          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" })
         } else {
           if role == "qa" {
-            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa"), proc_cmd: "", a2a_url: "" })
+            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", ""), proc_cmd: "", a2a_url: "" })
           } else {
             if role == "py_qa" {
-              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa"), proc_cmd: "", a2a_url: "" })
+              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path), proc_cmd: "", a2a_url: "" })
             } else {
               if role == "devops" {
                 Some(mk("loom-devops", "devops", devops_system_prompt()))
@@ -739,7 +771,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
                   Some(mk("loom-docs", "docs", docs_system_prompt()))
                 } else {
                   if role == "security" {
-                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security"), proc_cmd: "", a2a_url: "" })
+                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", ""), proc_cmd: "", a2a_url: "" })
                   } else {
                     if role == "ux_designer" {
                       Some(mk("loom-ux-designer", "ux_designer", ux_designer_system_prompt()))
@@ -754,7 +786,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
                             Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
                           } else {
                             if role == "launch" {
-                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch"), proc_cmd: "", a2a_url: "" })
+                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" })
                             } else {
                               if role == "demo" {
                                 Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
@@ -810,7 +842,10 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider) -> Opti
 }
 
 # Resolve a node role string to an AgentDef.
-fn for_role(role :: Str, model :: Str) -> [env] Option[runner.AgentDef] {
+# `evidence_path` grounds py_qa's `run_code` tool — pass "" if the caller
+# doesn't need grounded json-verdict evidence (e.g. improver.lex only reads
+# .system_prompt off the result).
+fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[runner.AgentDef] {
   if role == "pm" {
     Some(pm(model))
   } else {
@@ -827,7 +862,7 @@ fn for_role(role :: Str, model :: Str) -> [env] Option[runner.AgentDef] {
             Some(qa(model))
           } else {
             if role == "py_qa" {
-              Some(py_qa(model))
+              Some(py_qa(model, evidence_path))
             } else {
               if role == "devops" {
                 Some(devops(model))

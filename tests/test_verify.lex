@@ -171,7 +171,7 @@ fn test_runtime_matches_policy() -> Result[Unit, Str] {
     match acc {
       Err(e) => Err(e),
       Ok(_) => {
-        let runtime := role_tools_csv(roles.tools_of_role(r))
+        let runtime := role_tools_csv(roles.tools_of_role(r, ""))
         let policy := str.join(rt.tools_for(r), ",")
         if runtime == policy {
           Ok(())

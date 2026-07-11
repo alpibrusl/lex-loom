@@ -121,8 +121,8 @@ fn pool_agent_to_config(a :: PoolAgent, fallback :: runner.AgentDef, model :: St
   { id: a.id, kind: a.role, system_prompt: a.system_prompt, model_name: raw, provider: fallback.provider, tools: fallback.tools, proc_cmd: proc_cmd, a2a_url: a2a_url }
 }
 
-fn default_config_for_role(role :: Str, model :: Str) -> [env] runner.AgentDef {
-  match roles.for_role(role, model) {
+fn default_config_for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] runner.AgentDef {
+  match roles.for_role(role, model, evidence_path) {
     Some(c) => c,
     None => { id: str.concat("fallback-", role), kind: role, system_prompt: "", model_name: model, provider: providers.ollama_local(), tools: [], proc_cmd: "", a2a_url: "" },
   }
@@ -147,9 +147,10 @@ fn empty_roster() -> Roster {
 }
 
 # ── Cast a single node ────────────────────────────────────────────────────────
-fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str) -> [env, sql, fs_read] RosterEntry {
+fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read] RosterEntry {
+  let evidence_path := runner.qa_evidence_path(sprint_id, n.id)
   let candidates := load_pool_for_role(db, n.role)
-  let fallback := default_config_for_role(n.role, model)
+  let fallback := default_config_for_role(n.role, model, evidence_path)
   match best_agent(candidates, request) {
     None => { node_id: n.id, pool_agent_id: "", agent_config: fallback },
     Some(agent) => {
@@ -160,9 +161,9 @@ fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str) -
 }
 
 # ── Build full roster for a sprint graph ─────────────────────────────────────
-fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, model :: Str) -> [env, sql, fs_read] Roster {
+fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read] Roster {
   list.map(g.nodes, fn (n :: graph.Node) -> [env, sql, fs_read] RosterEntry {
-    cast_node(db, n, request, model)
+    cast_node(db, n, request, model, sprint_id)
   })
 }
 

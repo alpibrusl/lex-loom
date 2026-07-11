@@ -247,7 +247,7 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
-    None => roles.for_role(n.role, cfg.model),
+    None => roles.for_role(n.role, cfg.model, runner.qa_evidence_path(cfg.id, n.id)),
   }
   match agent_cfg_opt {
     None => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
@@ -273,6 +273,12 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
           tl.name
         }), ",")
         let __og := tr.trail(cfg.db, cfg.id, "op_grant", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"agent\":\"", agent_cfg.id, "\",\"tools\":\"", tool_names, "\"}"], ""))
+        let evidence_path := runner.qa_evidence_path(cfg.id, n.id)
+        let __ce := if gates.is_json_verdict_pass(n.gate) {
+          runner.clear_qa_evidence(evidence_path)
+        } else {
+          ()
+        }
         let output := runner.step(cfg.db, agent_cfg, prompt)
         if str.is_empty(output) {
           if attempt > max_node_retries() {
@@ -357,14 +363,26 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                         runner.verify_shell_on_output(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""))
                       }
                     } else {
-                      runner.verify_build_compiles(n.role)
+                      if gates.is_json_verdict_pass(n.gate) {
+                        let claimed_pass := match gates.extract_verdict(output) {
+                          Some(v) => v == "PASS",
+                          None => false,
+                        }
+                        runner.verify_json_verdict_evidence(evidence_path, claimed_pass)
+                      } else {
+                        runner.verify_build_compiles(n.role)
+                      }
                     }
                   } {
                     Err(compile_err) => {
                       let gate_label := if gates.is_shell_gate(n.gate) {
                         "gate command failed"
                       } else {
-                        "build does not compile"
+                        if gates.is_json_verdict_pass(n.gate) {
+                          "verdict not grounded"
+                        } else {
+                          "build does not compile"
+                        }
                       }
                       let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
                       let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat(str.concat(gate_label, ": "), compile_err), attempt)
@@ -382,7 +400,11 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                         if gates.is_shell_gate(n.gate) {
                           tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"sh\",\"result\":\"ok\"}"], ""))
                         } else {
-                          ()
+                          if gates.is_json_verdict_pass(n.gate) {
+                            tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"run_code\",\"result\":\"ok\"}"], ""))
+                          } else {
+                            ()
+                          }
                         }
                       }
                       match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
@@ -966,7 +988,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
     },
     DesignOk(sprint_graph) => {
       let design_ref := intake_ref
-      let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model)
+      let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model, cfg.id)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
       let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
       let __ltgv := match llog_opt {

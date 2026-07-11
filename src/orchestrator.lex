@@ -618,6 +618,7 @@ fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str
             Ok(h) => h,
           }
         }
+        let __cl := tr.clear_node_result(cfg.db, cfg.id, phase_name, node_id)
         let __e := tr.enqueue_node(cfg.db, cfg.id, node_id, phase_name, enqueued_ref, cfg.model, cfg.request, cfg.api_calls_max)
         ()
       },

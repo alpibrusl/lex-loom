@@ -160,6 +160,28 @@ fn enqueue_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, phase :: St
   jobs.enqueue(db.handle, node_queue(), node_handler(), payload)
 }
 
+# Delete any row(s) already recorded for (sprint_id, phase, node_id) before
+# enqueueing a fresh job for that node. `read_node_results`/`await_node_results`
+# key their "is this node done yet" check on node_id+phase alone, with no
+# per-enqueue generation marker — dynamic-extension rounds (#run_extensions)
+# reuse the SAME phase name ("Implementation") and the SAME node ids (e.g.
+# "py_build-api", "py_qa-tests") every round, so a STALE accepted row from an
+# earlier round satisfied a later round's await instantly, letting the
+# orchestrator race ahead to Demo/Digest/Complete while the real job for that
+# round was still running on a worker — which then wrote its own late
+# node_started/node_accepted trace events well after the sprint had already
+# "completed". Found live running a real company (tzconvert): sprint_complete
+# fired with fully_sealed:false while a passing py_qa-tests/launch-api round
+# was still landing. Clearing the stale row first forces await_node_results
+# to see only a row written by THIS round's job.
+fn clear_node_result(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id :: Str) -> [sql] Result[Unit, Str] {
+  let q := str.join(["DELETE FROM node_results WHERE sprint_id='", sq(sprint_id), "' AND phase='", sq(phase), "' AND node_id='", sq(node_id), "'"], "")
+  match sql.exec(db.handle, q, []) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
 fn write_node_result(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, phase :: Str, accepted :: Bool, artifact :: Str, reason :: Str) -> [sql, fs_write, time, random, crypto] Result[Unit, Str] {
   let id := crypto.random_str_hex(16)
   let now := time.now_str()

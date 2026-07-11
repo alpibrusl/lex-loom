@@ -785,6 +785,24 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
 
 # ── run_sprint ────────────────────────────────────────────────────────────────
 #
+# Node ids in `g` whose role is exactly "qa" or "demo" -- i.e. the graph
+# already embeds its own qa/demo-style gate as part of its normal topology
+# (as opposed to a bare build-only graph with nothing resembling a final
+# quality gate). Non-empty here means the "QA phase" step in run_sprint must
+# NOT re-run the graph -- see the call site for why.
+fn qa_demo_role_nodes(g :: graph.SprintGraph) -> List[Str] {
+  graph.str_filter(graph.node_ids(g), fn (id :: Str) -> Bool {
+    match find_node_in_graph(g, id) {
+      None => false,
+      Some(n) => if n.role == "qa" {
+        true
+      } else {
+        n.role == "demo"
+      },
+    }
+  })
+}
+
 fn max_qa_bounces() -> Int {
   4
 }
@@ -1040,22 +1058,13 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let impl_ref := ext.ref
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
       let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
-      let qa_demo_nodes := graph.str_filter(graph.node_ids(sprint_graph), fn (id :: Str) -> Bool {
-        match find_node_in_graph(sprint_graph, id) {
-          None => false,
-          Some(n) => if n.role == "qa" {
-            true
-          } else {
-            n.role == "demo"
-          },
-        }
-      })
-      let qa_demo_graph := if list.is_empty(qa_demo_nodes) {
-        { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+      let qa_demo_nodes := qa_demo_role_nodes(sprint_graph)
+      let qa_impl_result := if list.is_empty(qa_demo_nodes) {
+        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        run_qa_with_bounce(synthetic_graph, sprint_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       } else {
-        sprint_graph
+        { qa: impl_result, impl: impl_result }
       }
-      let qa_impl_result := run_qa_with_bounce(qa_demo_graph, sprint_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl
       let demo_ref := first_accepted_artifact(qa_result.outcomes)

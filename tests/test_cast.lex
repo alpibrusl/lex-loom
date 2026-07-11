@@ -107,7 +107,7 @@ fn test_cast_node_falls_back_when_pool_empty() -> [env, sql, fs_read, fs_write, 
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
-      let entry := cast.cast_node(db, node("n1", "docs"), "some request", "gemma4:latest")
+      let entry := cast.cast_node(db, node("n1", "docs"), "some request", "gemma4:latest", "test-sprint")
       if str.is_empty(entry.pool_agent_id) {
         Ok(())
       } else {
@@ -124,7 +124,7 @@ fn test_cast_node_picks_seeded_pool_agent() -> [env, random, sql, fs_read, fs_wr
       let agent_id := uniq("cast-py")
       let role := uniq("cast_role_a")
       let __s := seed_pool_agent(db, agent_id, role, 3, "[]")
-      let entry := cast.cast_node(db, node("n1", role), "some request", "gemma4:latest")
+      let entry := cast.cast_node(db, node("n1", role), "some request", "gemma4:latest", "test-sprint")
       if entry.pool_agent_id == agent_id {
         Ok(())
       } else {
@@ -139,7 +139,7 @@ fn test_select_roster_covers_every_node() -> [env, sql, fs_read, fs_write, time]
     Err(m) => Err(m),
     Ok(db) => {
       let g := { id: "g1", phase: graph.Intake, nodes: [node("a", "build"), node("b", "qa")], edges: [] }
-      let roster := cast.select_roster(db, g, "some request", "gemma4:latest")
+      let roster := cast.select_roster(db, g, "some request", "gemma4:latest", "test-sprint")
       if list.len(roster) == 2 {
         match cast.roster_lookup(roster, "a") {
           None => Err("expected a roster entry for node 'a'"),
@@ -256,7 +256,7 @@ fn test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected() -> [env,
       let bad_id := uniq("sprint-bad")
       let __sa := seed_pool_agent(db, good_id, "role", 0, "[]")
       let __sb := seed_pool_agent(db, bad_id, "role", 0, "[]")
-      let roster := [{ node_id: "good-node", pool_agent_id: good_id, agent_config: cast.default_config_for_role("role", "gemma4:latest") }, { node_id: "bad-node", pool_agent_id: bad_id, agent_config: cast.default_config_for_role("role", "gemma4:latest") }]
+      let roster := [{ node_id: "good-node", pool_agent_id: good_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "") }, { node_id: "bad-node", pool_agent_id: bad_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "") }]
       let __u := cast.update_pool_from_sprint(db, roster, ["good-node"])
       if count_of_row(db, good_id) == 1 {
         if count_of_row(db, bad_id) == -1 {

@@ -355,6 +355,50 @@ fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
   }
 }
 
+# ── Grounded evidence for `spec json-verdict-pass` ──────────────────────────
+# The gate used to trust a QA agent's self-reported "verdict" field
+# unconditionally (gates.lex's extract_verdict is a linear string scan with
+# no independent check). That let a hallucinated or stale PASS through with
+# no evidence run_code was ever actually called. This ties the verdict to a
+# real subprocess result instead, the same grounding `spec compiles` already
+# has via verify_compiles.
+#
+# Keyed by sprint+node (not attempt): the roster's AgentDef -- and therefore
+# its run_code tool closure -- is built once per node before any attempt
+# runs (cast.select_roster), so every retry's run_code calls land in the
+# same file; each attempt's real result simply overwrites the last.
+fn qa_evidence_path(sprint_id :: Str, node_id :: Str) -> Str {
+  str.join(["/tmp/loom-qa-evidence-", str.replace(str.join([sprint_id, "_", node_id], ""), "/", "_"), ".json"], "")
+}
+
+# Clear any evidence left over from a previous attempt/sprint so a
+# fabricated verdict can't be validated against stale real evidence.
+fn clear_qa_evidence(path :: Str) -> [proc] Unit {
+  let __ := proc.run("bash", ["-c", str.join(["rm -f '", path, "'"], "")])
+  ()
+}
+
+# Deny unless the agent actually called run_code and its real result
+# agrees with the verdict it claimed. `claimed_pass` is the gate's own
+# extract_verdict("PASS"/other) reduced to a bool by the caller.
+fn verify_json_verdict_evidence(path :: Str, claimed_pass :: Bool) -> [io] Result[Unit, Str] {
+  match io.read(path) {
+    Err(_) => Err("no run_code evidence found — the QA agent must call run_code before emitting a verdict, never guess"),
+    Ok(raw) => {
+      let evidence_pass := str.contains(raw, "\"passed\":true")
+      if claimed_pass == evidence_pass {
+        Ok(())
+      } else {
+        Err(str.join(["claimed verdict does not match run_code evidence (run_code actually reported passed=", if evidence_pass {
+          "true"
+        } else {
+          "false"
+        }, ")"], ""))
+      }
+    },
+  }
+}
+
 fn build_system_prompt(def :: AgentDef, state_json :: Str, entries :: List[mem.MemoryEntry]) -> Str {
   let state_part := if state_json == "{}" {
     ""

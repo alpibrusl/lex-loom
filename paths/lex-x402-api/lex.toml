@@ -1,0 +1,10 @@
+[package]
+name        = "lex-x402-api"
+version     = "0.1.0"
+lex         = "0.10.0"
+description = "Golden-path skeleton for a Lex HTTP API that charges per call via x402."
+license     = "EUPL-1.2"
+
+[dependencies]
+lex-x402   = { git = "https://github.com/alpibrusl/lex-x402" }
+lex-schema = { git = "https://github.com/alpibrusl/lex-schema" }

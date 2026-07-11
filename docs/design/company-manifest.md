@@ -58,19 +58,26 @@ realized as bootstrap/deploy/golden-path wiring lands — see #92, #93).
 
 ## Vetted paths (`paths/<name>/`)
 
-A path is a skeleton dir the bootstrap copies in — `app.py` (PORT-aware,
-`/health`), `requirements.txt`, a `Dockerfile` (`COPY . .` so it can't drift
-out of sync with the real file layout — the earlier devops failure mode),
-and a passing `tests/test_app.py`. Two exist today, both proven to boot and
-pass their skeleton test in a clean venv:
+A path is a skeleton dir the bootstrap copies in — an entry point
+(PORT-aware, `/health`), dependency manifest, a `Dockerfile` (`COPY . .` so
+it can't drift out of sync with the real file layout — the earlier devops
+failure mode), and a passing skeleton test. Three exist today, all proven
+to boot and pass their skeleton test:
 
 | Path | Pick when |
 |---|---|
 | **`python-flask`** | a genuinely minimal server — no request/response validation needed. This was picked for `linksnap` (3 thin JSON endpoints), matching `py_build`'s own existing convention: *"flask for simple servers, fastapi for REST APIs with validation."* |
 | **`python-fastapi`** | anything with real input validation (Pydantic models catch bad input before your handler runs), or that benefits from free OpenAPI/Swagger docs at `/docs` — the common case for a documented public API a developer integrates against, e.g. a paid micro-API. |
+| **`lex-x402-api`** | a metered API that charges per call via the x402 protocol — the only real, tested payment-*receiving* rail loom has (`lex-x402`/`lex-guard` are Lex-only packages, so the priced endpoint has to be a Lex server, not Python, to call the real protocol code rather than reimplement it). Ships a pre-written `payments.lex` gate (build agents call it, never hand-roll the handshake) — proven end-to-end in a real Docker build: `/health` returns 200, an unpaid call to the priced route returns a real 402 with a valid base64 `PAYMENT-REQUIRED` challenge header. |
 
 Adding a path for another stack (TS-API, Next-PWA, RN-web) + its specialist
 agents is the remaining part of #92.
+
+Deployment for any path is still a manual, one-time human step — see
+`devops`'s prompt (`src/roles.lex`), which now produces BOTH a Google Cloud
+Run deploy command and a Hetzner (Docker Compose + Caddy) deploy path, so
+whichever a human picks is copy-paste, not a from-scratch decision. Loom
+does not push to the cloud itself (#92/#93 gap, still open).
 
 ## Not in this slice (honest scope)
 

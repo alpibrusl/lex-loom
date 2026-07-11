@@ -793,34 +793,65 @@ fn max_qa_bounces() -> Int {
 # Returns both the final QA result and the latest impl result (possibly updated).
 type QaBounceResult = { qa :: PhaseResult, impl :: PhaseResult }
 
+# A stalled bounce: the rebuild the previous denial triggered came back with
+# the EXACT SAME QA denial reason, or produced byte-identical content
+# (content-addressed artifact hashes match) -- either way the rebuild
+# attempt changed nothing that mattered, so spending yet another full
+# Implementation+QA round on it would just repeat the same outcome. Found
+# live burning a real OpenCode subscription: build<->QA bounced the full
+# max_qa_bounces() every iteration without the underlying defect (wrong
+# framework, missing output format) ever actually changing -- every round
+# after the first was pure wasted spend once the denial reason stopped
+# changing.
+fn bounce_stalled(qa_denial :: Str, prior_denial :: Str, new_impl_ref :: Str, prior_impl_ref :: Str) -> Bool {
+  if str.is_empty(prior_denial) {
+    false
+  } else {
+    if qa_denial == prior_denial {
+      true
+    } else {
+      new_impl_ref == prior_impl_ref
+    }
+  }
+}
+
 fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] QaBounceResult {
+  run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_ref, task_input, cfg, bounce, "", impl_ref)
+}
+
+fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int, prior_denial :: Str, prior_impl_ref :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
   let qa_passed := qa_result.success
   if qa_passed {
     { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
   } else {
-    if bounce > max_qa_bounces() {
+    let qa_denial := list.fold(qa_result.outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
+      if str.is_empty(acc) {
+        o.reason
+      } else {
+        acc
+      }
+    })
+    if bounce_stalled(qa_denial, prior_denial, impl_ref, prior_impl_ref) {
+      let __tst := tr.trail(cfg.db, cfg.id, "phase_bounce_stalled", str.join(["{\"bounce\":", int.to_str(bounce), ",\"reason\":\"", qa_denial, "\"}"], ""))
       { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
     } else {
-      let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced", str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
-      let __tt := tr.record_transition(cfg.db, cfg.id, "QA", "Implementation", "QaFailed")
-      let qa_denial := list.fold(qa_result.outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
-        if str.is_empty(acc) {
-          o.reason
-        } else {
-          acc
+      if bounce > max_qa_bounces() {
+        { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
+      } else {
+        let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced", str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
+        let __tt := tr.record_transition(cfg.db, cfg.id, "QA", "Implementation", "QaFailed")
+        let bounce_input := str.join(["<<<LOOM_BOUNCE>>>", task_input, "<<<LOOM_SEP>>>", resolve_input(cfg.db, impl_ref), "<<<LOOM_SEP>>>", qa_denial], "")
+        let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
+        let new_impl_ref := match new_impl_ref_result {
+          Ok(h) => h,
+          Err(_) => impl_ref,
         }
-      })
-      let bounce_input := str.join(["<<<LOOM_BOUNCE>>>", task_input, "<<<LOOM_SEP>>>", resolve_input(cfg.db, impl_ref), "<<<LOOM_SEP>>>", qa_denial], "")
-      let new_impl_ref_result := tr.artifact_put(cfg.db, cfg.id, "bounce-input", bounce_input)
-      let new_impl_ref := match new_impl_ref_result {
-        Ok(h) => h,
-        Err(_) => impl_ref,
+        let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
+        let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
+        let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
+        run_qa_with_bounce_tracked(qa_graph, impl_graph, new_impl_ref2, task_input, cfg, bounce + 1, qa_denial, impl_ref)
       }
-      let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
-      let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
-      let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
-      run_qa_with_bounce(qa_graph, impl_graph, new_impl_ref2, task_input, cfg, bounce + 1)
     }
   }
 }

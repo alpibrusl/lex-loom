@@ -525,6 +525,39 @@ fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :
   }
 }
 
+# ── company_monitor_cmd ────────────────────────────────────────────────────────
+# Health-checks a company's latest iteration OUTSIDE the iteration loop, and
+# records the result into the same company_operate_signals table the
+# strategist's prompt reads from (#102). Meant to be run from cron/a systemd
+# timer against a company that isn't actively iterating right now, so
+# monitoring doesn't stop just because the loom isn't currently running.
+#
+#   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write,time,proc \
+#     src/main.lex company_monitor_cmd
+fn company_monitor_cmd() -> [env, io, sql, fs_read, fs_write, time, proc] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let company_id := get_env("COMPANY_ID", "")
+  if str.is_empty(company_id) {
+    io.print("[loom] COMPANY_ID is required")
+  } else {
+    match conn.open(db_path) {
+      Err(_) => io.print("[loom] FATAL open db"),
+      Ok(db) => {
+        let idx := company.latest_iteration_idx(db, company_id)
+        if idx == 0 {
+          io.print(str.join(["[loom] no iterations recorded yet for company ", company_id], ""))
+        } else {
+          let sprint_id := company.iteration_sprint_id(company_id, idx)
+          match company.check_and_record_liveness(db, company_id, idx, sprint_id) {
+            Err(e) => io.print(str.concat("[loom] liveness check failed: ", e)),
+            Ok(_) => io.print(str.join(["[loom] liveness checked for ", company_id, " iter ", int.to_str(idx)], "")),
+          }
+        }
+      },
+    }
+  }
+}
+
 # ── sprint_trail ──────────────────────────────────────────────────────────────
 fn sprint_trail() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

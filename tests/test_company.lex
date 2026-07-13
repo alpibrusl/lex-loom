@@ -1146,6 +1146,161 @@ fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
 }
 
 # ── OP3 (#87): cost ledger ────────────────────────────────────────────────────
+fn insert_test_usage(db :: conn.ConnDb, owner_id :: Str, total_tokens :: Int) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let json := str.join(["{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":", int.to_str(total_tokens), "}"], "")
+  let q := ormq.for_dialect({ sql: "INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES (?, ?, 'llm_usage', ?, ?)", params: [PStr("r"), PStr(owner_id), PStr(json), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn test_real_usage_tokens_sums_multiple_calls() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let owner := rand_id("usage-owner")
+        match insert_test_usage(db, owner, 100) {
+          Err(e) => Err(e),
+          Ok(_) => match insert_test_usage(db, owner, 50) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let total := company.real_usage_tokens(db, owner)
+              if total == 150 {
+                Ok(())
+              } else {
+                Err(str.concat("expected 150 summed tokens, got ", int.to_str(total)))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_real_usage_tokens_zero_when_none_recorded() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let owner := rand_id("usage-none")
+        let total := company.real_usage_tokens(db, owner)
+        if total == 0 {
+          Ok(())
+        } else {
+          Err(str.concat("expected 0 for an owner with no usage rows, got ", int.to_str(total)))
+        }
+      },
+    },
+  }
+}
+
+# When real token usage was recorded for a sprint, it must win over the old
+# char-count proxy -- that's the entire point of #94 (the proxy undercounts
+# real spend). 500 tokens * 30 cents/1k = 15 cents, NOT whatever the (much
+# larger) artifact char count would estimate.
+fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("cost-real")
+        match insert_test_artifact(db, sprint_id, "loom-build", str.join(list.map(list.range(0, 200), fn (_i :: Int) -> Str {
+          "x"
+        }), "")) {
+          Err(e) => Err(e),
+          Ok(_) => match insert_test_usage(db, sprint_id, 500) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let cents := company.estimate_iteration_cost_cents(db, sprint_id)
+              if cents == 15 {
+                Ok(())
+              } else {
+                Err(str.concat("expected 15 cents from real tokens, got ", int.to_str(cents)))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# A sprint with real artifacts but NO recorded usage (e.g. every provider
+# involved doesn't report it) must fall back to the char-count proxy rather
+# than silently reporting zero cost.
+fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("cost-fallback")
+        match insert_test_artifact(db, sprint_id, "loom-build", str.join(list.map(list.range(0, 4000), fn (_i :: Int) -> Str {
+          "x"
+        }), "")) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let cents := company.estimate_iteration_cost_cents(db, sprint_id)
+            if cents > 0 {
+              Ok(())
+            } else {
+              Err("expected a nonzero char-estimate fallback when no usage was recorded")
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+# The strategist runs between iterations under a per-iteration owner id
+# (strategist_cost_owner), not the bare company_id -- so a SECOND iteration's
+# strategist usage adds on top of the first's rather than being invisible to
+# real_usage_tokens (which sums only the exact owner id it's given).
+fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let company_id := rand_id("strategist-cost")
+        let cfg := { id: company_id, goal: "g", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => match insert_test_usage(db, company.strategist_cost_owner(company_id, 1), 1000) {
+            Err(e) => Err(e),
+            Ok(_) => match company.record_strategist_cost(db, company_id, 1) {
+              Err(e) => Err(e),
+              Ok(total1) => if total1 == 30 {
+                match insert_test_usage(db, company.strategist_cost_owner(company_id, 2), 1000) {
+                  Err(e) => Err(e),
+                  Ok(_) => match company.record_strategist_cost(db, company_id, 2) {
+                    Err(e) => Err(e),
+                    Ok(total2) => if total2 == 60 {
+                      Ok(())
+                    } else {
+                      Err(str.concat("iter 2's own usage should add on top, expected 60, got ", int.to_str(total2)))
+                    },
+                  },
+                }
+              } else {
+                Err(str.concat("expected 30 cents (1000 tokens) after iter 1, got ", int.to_str(total1)))
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn test_parse_dollars_to_cents() -> Result[Unit, Str] {
   if company.parse_dollars_to_cents("5.00") == 500 {
     if company.parse_dollars_to_cents("5") == 500 {
@@ -1405,7 +1560,7 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {

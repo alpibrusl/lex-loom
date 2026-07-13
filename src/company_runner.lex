@@ -68,7 +68,8 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let notes := company.pending_board_notes(db, ccfg.id)
   let operate := company.operate_section(db, ccfg.id)
   let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, current_goal, ctx)
-  let reply := runner.step(db, agent, prompt)
+  let reply := runner.step(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx))
+  let __sc := company.record_strategist_cost(db, ccfg.id, ctx.idx)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))
   let __mc := if should_consume_notes(notes, decision) {

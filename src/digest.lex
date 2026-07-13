@@ -254,7 +254,7 @@ fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: conn.
     Some(a) => cast.pool_agent_to_config(a, default_scribe, model),
   }
   let prompt := scribe_prompt(sprint_id, trail_text, next_sprint_id)
-  let output := runner.step(db, agent_cfg, prompt)
+  let output := runner.step(db, agent_cfg, prompt, sprint_id)
   let __to := io.print(str.join(["[loom/digest] scribe output_len=", int.to_str(str.len(output))], ""))
   let __tt := trace.record(db, sprint_id, sprint_id, "digest_produced", str.join(["{\"output_len\":", int.to_str(str.len(output)), "}"], ""))
   let artifacts := match jv.parse(output) {

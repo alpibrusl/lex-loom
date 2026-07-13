@@ -207,7 +207,7 @@ fn cents_per_1k_tokens() -> Int {
   30
 }
 
-fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
+fn char_estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
   let q := ormq.for_dialect({ sql: "SELECT COALESCE(SUM(LENGTH(content)), 0) AS c FROM artifacts WHERE sprint_id=?", params: [PStr(sprint_id)] }, db.dialect)
   let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -219,6 +219,74 @@ fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] I
         tokens * cents_per_1k_tokens() / 1000
       },
     },
+  }
+}
+
+type UsageRow = { data_json :: Str }
+
+fn tokens_to_cents(tokens :: Int) -> Int {
+  tokens * cents_per_1k_tokens() / 1000
+}
+
+# Real per-owner token usage (#94) -- sums every runner.step call's reported
+# UsageDelta tagged under `owner_id` (a sprint_id, or a strategist_cost_owner
+# id -- see below), via the same traces table op_grant/node_started already
+# use with agent_id-as-owner. 0 iff no LLM call under this owner ever reported
+# usage (either none ran yet, or every provider involved doesn't report it).
+fn real_usage_tokens(db :: conn.ConnDb, owner_id :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT data_json FROM traces WHERE agent_id=? AND event_kind='llm_usage'", params: [PStr(owner_id)] }, db.dialect)
+  let rows :: Result[List[UsageRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => list.fold(rs, 0, fn (acc :: Int, r :: UsageRow) -> Int {
+      match jv.parse(r.data_json) {
+        Err(_) => acc,
+        Ok(j) => acc + json_int_field(j, "total_tokens"),
+      }
+    }),
+  }
+}
+
+fn json_int_field(j :: jv.Json, key :: Str) -> Int {
+  match jv.get_field(j, key) {
+    Some(JInt(v)) => v,
+    _ => 0,
+  }
+}
+
+# Prefers real token usage (real_usage_tokens) when any runner.step call under
+# this sprint reported it; falls back to the old char-count proxy for
+# providers that don't report usage, so cost tracking never silently drops to
+# zero just because one call in the chain used a non-reporting provider.
+fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
+  let real_tokens := real_usage_tokens(db, sprint_id)
+  if real_tokens > 0 {
+    tokens_to_cents(real_tokens)
+  } else {
+    char_estimate_iteration_cost_cents(db, sprint_id)
+  }
+}
+
+# The strategist runs between iterations, outside any sprint -- tag its
+# usage under a per-iteration id (not the bare company_id) so summing it is
+# idempotent: calling this once per iteration never re-counts a prior
+# iteration's strategist usage, the way reusing company_id directly would.
+fn strategist_cost_owner(company_id :: Str, idx :: Int) -> Str {
+  str.join([company_id, "-strategist-", int.to_str(idx)], "")
+}
+
+# Adds this iteration's strategist call's real cost to the company's running
+# total (a no-op if the provider didn't report usage). Call exactly once per
+# iteration, alongside record_iteration_cost.
+fn record_strategist_cost(db :: conn.ConnDb, company_id :: Str, idx :: Int) -> [sql] Result[Int, Str] {
+  let tokens := real_usage_tokens(db, strategist_cost_owner(company_id, idx))
+  if tokens == 0 {
+    Ok(get_company_cost_cents(db, company_id))
+  } else {
+    match add_company_cost_cents(db, company_id, tokens_to_cents(tokens)) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(get_company_cost_cents(db, company_id)),
+    }
   }
 }
 

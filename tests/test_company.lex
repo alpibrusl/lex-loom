@@ -979,6 +979,120 @@ fn test_operate_signal_roundtrip() -> [sql, fs_write, time, crypto, random] Resu
   }
 }
 
+# check_remote_errors must never attempt an ssh call for a target that isn't
+# actually a production Hetzner deploy -- no host configured, or no
+# container name resolved, both mean "nothing to check", not "clean" by luck
+# of a failed ssh call succeeding to produce empty output.
+fn test_check_remote_errors_no_host_is_clean() -> [proc] Result[Unit, Str] {
+  if company.check_remote_errors("", "root", "~/.ssh/id_rsa", "myapp") == "clean" {
+    Ok(())
+  } else {
+    Err("expected 'clean' when no HETZNER_HOST is configured")
+  }
+}
+
+fn test_check_remote_errors_no_service_name_is_clean() -> [proc] Result[Unit, Str] {
+  if company.check_remote_errors("1.2.3.4", "root", "~/.ssh/id_rsa", "") == "clean" {
+    Ok(())
+  } else {
+    Err("expected 'clean' when no service_name is resolved")
+  }
+}
+
+fn test_find_deploy_service_name_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-svc-name")
+        match insert_test_artifact(db, sprint_id, "loom-deploy", "{\"ok\":true,\"url\":\"http://1.2.3.4:8080\",\"service_name\":\"widget-factory\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_deploy_service_name(db, sprint_id) {
+            None => Err("expected a service_name, got None"),
+            Some(name) => if name == "widget-factory" {
+              Ok(())
+            } else {
+              Err(str.concat("wrong service_name extracted: ", name))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_find_deploy_service_name_none_when_absent() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-svc-none")
+        match insert_test_artifact(db, sprint_id, "loom-deploy", "{\"ok\":true,\"url\":\"http://1.2.3.4:8080\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_deploy_service_name(db, sprint_id) {
+            None => Ok(()),
+            Some(name) => Err(str.concat("expected no service_name in an artifact without one, got ", name)),
+          },
+        }
+      },
+    },
+  }
+}
+
+# The Strategist should see a real error-log excerpt when one was recorded,
+# on top of the liveness line -- distinguishing "up but throwing" from
+# "up and clean" is the whole point of this signal (#102 bug-fixing follow-up).
+fn test_operate_section_includes_errors_when_present() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-err-section")
+        match company.record_operate_signal(db, id, 1, "liveness", "up (production: http://1.2.3.4:8080)") {
+          Err(e) => Err(e),
+          Ok(_) => match company.record_operate_signal(db, id, 1, "errors", "Traceback: NullPointerException at line 42") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let section := company.operate_section(db, id)
+              if str.contains(section, "NullPointerException") {
+                Ok(())
+              } else {
+                Err(str.concat("expected the error excerpt in operate_section, got: ", section))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_operate_section_omits_errors_section_when_none_recorded() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-err-section-none")
+        match company.record_operate_signal(db, id, 1, "liveness", "up (production: http://1.2.3.4:8080)") {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let section := company.operate_section(db, id)
+            if str.contains(section, "error log scans") {
+              Err(str.concat("expected no error-log section when nothing was recorded, got: ", section))
+            } else {
+              Ok(())
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
 fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
@@ -1290,11 +1404,11 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
   }
 }
 
-fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
+fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
 }
 
-fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {
+fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {
   let results := suite()
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {

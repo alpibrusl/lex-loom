@@ -143,6 +143,46 @@ fn flush_op_calls(db :: conn.ConnDb, run_id :: Str, agent_id :: Str) -> [io, sql
   ()
 }
 
+# Sum every UsageDelta a turn's provider reported this step (a tool-calling
+# agent may take several turns; each turn reports its own usage). Providers
+# that never report usage (most non-OpenAI-compatible ones today) contribute
+# nothing, so the sum stays (0,0,0) rather than a wrong estimate.
+fn sum_usage_tokens(steps :: List[d.Step]) -> (Int, Int, Int) {
+  list.fold(steps, (0, 0, 0), fn (acc :: (Int, Int, Int), st :: d.Step) -> (Int, Int, Int) {
+    match st {
+      StepDelta(UsageDelta(p, c, t)) => match acc {
+        (ap, ac, at) => (ap + p, ac + c, at + t),
+      },
+      _ => acc,
+    }
+  })
+}
+
+fn usage_json(p :: Int, c :: Int, t :: Int) -> Str {
+  str.join(["{\"prompt_tokens\":", int.to_str(p), ",\"completion_tokens\":", int.to_str(c), ",\"total_tokens\":", int.to_str(t), "}"], "")
+}
+
+# Records this call's real token usage against `cost_owner` (a sprint_id for
+# an in-sprint node, or a company_id for a between-iteration call like the
+# strategist) using the SAME agent_id-as-owner convention `op_grant`/
+# `node_started` already rely on, so company.lex's cost ledger can query it
+# straightforwardly by that owner id (#94). A no-op when cost_owner is empty
+# (proc_cmd/a2a_url paths never reach this branch anyway) or no provider in
+# this turn ever reported usage.
+fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
+  if str.is_empty(cost_owner) {
+    ()
+  } else {
+    match sum_usage_tokens(steps) {
+      (p, c, t) => if t == 0 {
+        ()
+      } else {
+        trace.record(db, run_id, cost_owner, "llm_usage", usage_json(p, c, t))
+      },
+    }
+  }
+}
+
 fn extract_answer(steps :: List[d.Step]) -> Str {
   list.fold(steps, "", fn (acc :: Str, st :: d.Step) -> Str {
     match st {
@@ -543,7 +583,12 @@ fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
 }
 
 # ── main step ─────────────────────────────────────────────────────────────────
-fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
+# `cost_owner` scopes this call's real token usage (#94) for the cost ledger:
+# pass a sprint_id for an in-sprint node call, or a company_id for a
+# between-iteration call (e.g. the strategist) that has no sprint of its own.
+# Empty string means "don't record" (e.g. proc_cmd/a2a_url paths never touch
+# an LLM directly, so there is no usage to attribute).
+fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
   let run_id := trace.new_run_id()
   let _t1 := trace.record(db, run_id, def.id, "received", msg_json)
   let answer := if str.len(def.a2a_url) > 0 {
@@ -577,6 +622,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str) -> [io, time, sql, 
       }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
+      let __usage := record_usage(db, run_id, cost_owner, steps)
       let __ops := flush_op_calls(db, run_id, def.id)
       let out0 := extract_answer(steps)
       let out := if is_build_kind(def.kind) {

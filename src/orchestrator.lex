@@ -279,7 +279,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         } else {
           ()
         }
-        let output := runner.step(cfg.db, agent_cfg, prompt)
+        let output := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
         if str.is_empty(output) {
           if attempt > max_node_retries() {
             { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
@@ -291,7 +291,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
           if gates.is_llm_judge(n.gate) {
             let criteria := gates.judge_criteria(n.gate)
             let judge_cfg := roles.judge_agent(cfg.model, criteria)
-            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""))
+            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), cfg.id)
             let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
               true
             } else {
@@ -484,7 +484,7 @@ fn parse_assessment(resp :: Str) -> Assessment {
 fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Assessment {
   match roles.assessor_agent(n.role, cfg.model) {
     assessor => {
-      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""))
+      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""), cfg.id)
       parse_assessment(resp)
     },
   }
@@ -743,7 +743,7 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
       design_retry_prompt(prd, request, errors)
     }
     let agent_cfg := roles.architect_agent(cfg.model)
-    let direct := runner.step(cfg.db, agent_cfg, prompt)
+    let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
     let tmp_path := roles.graph_tmp_path(cfg.id)
     let output := match io.read(tmp_path) {
       Ok(file_content) => {
@@ -948,7 +948,7 @@ fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_re
     } else {
       let agent_cfg := roles.architect_agent(cfg.model)
       let prompt := extension_prompt(cfg.request, resolve_input(cfg.db, impl_ref), graph.to_json_str(base))
-      let direct := runner.step(cfg.db, agent_cfg, prompt)
+      let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
       let tmp_path := roles.graph_tmp_path(cfg.id)
       let output := match io.read(tmp_path) {
         Ok(file_content) => {

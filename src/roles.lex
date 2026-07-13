@@ -106,6 +106,101 @@ fn make_run_server_tool() -> t.Tool {
 # checks this file rather than trusting the agent's self-reported
 # "verdict" field, so a verdict that was never actually run (or that
 # contradicts what really ran) gets denied instead of silently accepted.
+# ── deploy_hetzner tool ────────────────────────────────────────────────────────
+# Actually deploys the built project to a real, already-provisioned Hetzner
+# server -- never a string check, never a claim the agent invents. Kept
+# deliberately simple for v1 (#101): rsync the work dir over, build+run the
+# container directly on the box (restart policy so it survives a reboot),
+# then curl the real public host:port for /health. No Caddy/TLS/domain yet --
+# that's a natural next step once this loop is proven, not a blocker for it.
+#
+# Reads server details from the environment (never hardcoded, never invented
+# by the model):
+#   HETZNER_HOST       -- server IP or hostname (required)
+#   HETZNER_USER        -- SSH user (default "root")
+#   HETZNER_SSH_KEY     -- path to the private key (default ~/.ssh/id_rsa)
+#   HETZNER_REMOTE_DIR  -- where the project lands on the server
+#                          (default /opt/loom-deploys/<service_name>)
+# Server config is read HERE, at tool-construction time -- not inside the
+# execute closure, whose effect row is fixed by the Tool record type to
+# exactly [net, io, proc] (no [env]). Reading once and closing over the
+# values is also more honest: the deploy target can't drift mid-sprint if
+# something re-exports the env var between tool calls.
+fn make_deploy_hetzner_tool() -> [env] t.Tool {
+  let host := match env.get("HETZNER_HOST") {
+    Some(v) => v,
+    None => "",
+  }
+  let ssh_user := match env.get("HETZNER_USER") {
+    Some(v) => v,
+    None => "root",
+  }
+  let ssh_key := match env.get("HETZNER_SSH_KEY") {
+    Some(v) => v,
+    None => "~/.ssh/id_rsa",
+  }
+  let remote_dir_override := match env.get("HETZNER_REMOTE_DIR") {
+    Some(v) => v,
+    None => "",
+  }
+  let params := { title: "DeployHetzner", description: "rsync + build + run the project on a real Hetzner server, then health-check it", fields: [s.required_str("work_dir", []), s.required_str("service_name", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
+  t.define("deploy_hetzner", "Deploy `work_dir` (an already-built project directory with a Dockerfile) to the Hetzner server named by HETZNER_HOST. Builds and runs the container for real, waits for it to respond, then fetches `endpoint`. Returns {ok, url, response, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let work_dir := match jv.get_field(args, "work_dir") {
+      Some(JStr(v)) => v,
+      _ => "",
+    }
+    let service_name := match jv.get_field(args, "service_name") {
+      Some(JStr(v)) => v,
+      _ => "loom-app",
+    }
+    let port := match jv.get_field(args, "port") {
+      Some(JInt(v)) => v,
+      _ => 8080,
+    }
+    let endpoint := match jv.get_field(args, "endpoint") {
+      Some(JStr(v)) => v,
+      _ => "/health",
+    }
+    let timeout_s := match jv.get_field(args, "timeout_s") {
+      Some(JInt(v)) => v,
+      _ => 30,
+    }
+    if str.is_empty(work_dir) {
+      Ok(JObj([("ok", JBool(false)), ("error", JStr("work_dir is required")), ("url", JStr("")), ("response", JStr(""))]))
+    } else {
+      if str.is_empty(host) {
+        Ok(JObj([("ok", JBool(false)), ("error", JStr("HETZNER_HOST is not set -- a human must provision a server and set this env var first")), ("url", JStr("")), ("response", JStr(""))]))
+      } else {
+        let remote_dir := if str.is_empty(remote_dir_override) {
+          str.join(["/opt/loom-deploys/", service_name], "")
+        } else {
+          remote_dir_override
+        }
+        let port_str := int.to_str(port)
+        let url := str.join(["http://", host, ":", port_str, endpoint], "")
+        let ssh_opts := str.join(["-i ", ssh_key, " -o StrictHostKeyChecking=accept-new"], "")
+        let script := str.join(["set -e\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " 'mkdir -p ", remote_dir, "'\n", "rsync -az --delete -e \"ssh ", ssh_opts, "\" '", work_dir, "/' '", ssh_user, "@", host, ":", remote_dir, "/'\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " '", "cd ", remote_dir, " && ", "docker build -t ", service_name, " . && ", "docker rm -f ", service_name, " >/dev/null 2>&1 || true; ", "docker run -d --name ", service_name, " --restart unless-stopped -p ", port_str, ":", port_str, " ", service_name, "'\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "exit 1"], "")
+        match proc.run("bash", ["-c", script]) {
+          Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("deploy failed to run: ", msg))), ("url", JStr(url)), ("response", JStr(""))])),
+          Ok(r) => {
+            let combined := str.concat(r.stdout, r.stderr)
+            let ok := str.contains(combined, "READY")
+            let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
+              None => "",
+              Some(s) => str.trim(s),
+            }
+            if ok {
+              Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("response", JStr(str.slice(resp_part, 0, 500))), ("error", JStr(""))]))
+            } else {
+              Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("error", JStr(str.join(["deploy ran but the server did not respond within ", int.to_str(timeout_s), "s: ", str.slice(combined, 0, 800)], "")))]))
+            }
+          },
+        }
+      }
+    }
+  })
+}
+
 fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
   let params := { title: "RunCode", description: "Execute Python code and assertions, return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
   t.define("run_code", "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -314,7 +409,7 @@ fn make_provider_no_mistral() -> [env] prov.Provider {
 # place a role-policy name (role_tools.tools_for) is bound to its implementation.
 # `evidence_path` only matters to `run_code` (see make_run_code_tool); every
 # other tool ignores it.
-fn tool_by_name(name :: Str, evidence_path :: Str) -> Option[t.Tool] {
+fn tool_by_name(name :: Str, evidence_path :: Str) -> [env] Option[t.Tool] {
   if name == "lex_guidelines" {
     Some(lexskill.make_lex_guidelines_tool())
   } else {
@@ -333,10 +428,14 @@ fn tool_by_name(name :: Str, evidence_path :: Str) -> Option[t.Tool] {
             if name == "run_server" {
               Some(make_run_server_tool())
             } else {
-              if name == "security_scan" {
-                Some(lexskill.make_security_scan_tool())
+              if name == "deploy_hetzner" {
+                Some(make_deploy_hetzner_tool())
               } else {
-                None
+                if name == "security_scan" {
+                  Some(lexskill.make_security_scan_tool())
+                } else {
+                  None
+                }
               }
             }
           }
@@ -350,8 +449,8 @@ fn tool_by_name(name :: Str, evidence_path :: Str) -> Option[t.Tool] {
 # node is granted at runtime are exactly the tools the verifier checks against.
 # `evidence_path` is forwarded to `run_code` (see make_run_code_tool); pass ""
 # for roles/callers that don't need grounded json-verdict evidence.
-fn tools_of_role(role :: Str, evidence_path :: Str) -> List[t.Tool] {
-  list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> List[t.Tool] {
+fn tools_of_role(role :: Str, evidence_path :: Str) -> [env] List[t.Tool] {
+  list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> [env] List[t.Tool] {
     match tool_by_name(name, evidence_path) {
       Some(tool) => list.concat(acc, [tool]),
       None => acc,
@@ -475,7 +574,7 @@ fn pm_system_prompt() -> Str {
 }
 
 fn architect_system_prompt() -> Str {
-  str.join(["You are the Architect for a software sprint. You read the PM's PRD and output ONLY a JSON sprint graph — no prose, no markdown fences.\n\n", "GRAPH SHAPE:\n", "{\"id\":\"<sprint-id>\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}\n\n", "AVAILABLE ROLES:\n", "  pm          — Product Manager: raw request → PRD\n", "  architect   — you; PRD → sprint graph\n", "  ux_designer      — UX spec: IA, user flows, component inventory, a11y (no styling)\n", "  brand_designer   — Visual design system: CSS custom-property tokens (colour/type/spacing)\n", "  content_designer — UX writing: exact interface copy, keyed by location\n", "  build       — Lex implementation (has lex_guidelines + lex_check tools)\n", "  py_build    — Python implementation (writes Python files, runs via bash)\n", "  fe_build    — Frontend: HTML/CSS/JS (reads UX spec + design tokens + content)\n", "  devops      — Dockerfile, docker-compose, CI config\n", "  qa          — Lex QA: lex_check + lex_run, emits JSON verdict\n", "  py_qa       — Python QA: runs code + assertions, emits JSON verdict\n", "  security    — OWASP review, blocks demo on critical findings\n", "  docs        — README, API reference, usage examples\n", "  launch      — Actually starts the built server, curls an endpoint, returns live JSON {ok,url,response}\n", "  demo        — Stakeholder summary (non-technical), leads with Launch's live URL if available\n", "  brand_strategist — Positioning statement, core message, voice/tone (words, not visuals)\n", "  copywriter       — Landing page copy, one ad variant, one outreach email\n", "  content_creator  — Launch blog post, a short tutorial, a case-study outline (never fabricated)\n", "  seo_specialist   — Keyword list, meta title/description, heading structure, internal links\n", "  finance          — Pricing tiers, unit economics sketch, budget status (grounded — flags assumptions vs real numbers)\n", "  legal            — Draft ToS/Privacy Policy/license header, ALWAYS marked as a human-review-required draft\n", "  monetization_handoff — Human-facing checklist for creating a real Gumroad/Stripe product; NEVER autonomous, gate MUST be 'human <oracle>'\n", "  scribe      — Digest: lessons learned + tightened specs for sprint N+1\n\n", "AVAILABLE LEX PACKAGES (for build nodes):\n", "  std.net      — HTTP server (net.serve / net.serve_fn), HTTP client (net.get/post)\n", "  std.sql      — SQLite queries (sql.open, sql.exec, sql.query)\n", "  std.io       — file read/write, stdin/stdout\n", "  std.str      — string operations\n", "  std.list     — list operations (map, filter, fold)\n", "  std.json     — JSON parse/stringify\n", "  std.proc     — spawn subprocesses\n", "  std.crypto   — Ed25519, HMAC, SHA-256, base64url\n", "  lex-agent    — A2A protocol server (cap.inbound, srv.make_agent_def, card.make)\n", "  lex-llm      — LLM agent loop (ag.run_loop, providers.*)\n", "  lex-mcp      — MCP server: stdio (mcp.server.run), HTTP (http.run_http), dual (compose.serve_both)\n", "  lex-mcp-client — connect to MCP servers, adapt tools for lex-llm agents\n", "  lex-spec     — capability preconditions, spec gating, SMT export\n", "  lex-trail    — append-only audit log (trail_log.open, trail_log.append)\n", "  lex-guard    — budget tokens + spending guardrails\n", "  lex-x402     — x402 micropayments (client.pay to spend, server.gate to CHARGE for a priced endpoint — use for a metered/paid API, the stack path `lex-x402-api` pre-wires this as ./payments.lex)\n", "  lex-jose     — JWT/JWS/JWK (jwt.encode, jwt.decode, jws.sign_compact)\n", "  lex-agent-llm — bridge: LLM loop → A2A skill (bridge.skill_of_loop)\n\n", "AVAILABLE PYTHON PACKAGES (for py_build nodes):\n", "  stdlib only  — http.server, argparse, json, sqlite3, pathlib, subprocess\n", "  flask        — lightweight HTTP server (use for REST APIs)\n", "  fastapi      — async REST API with auto docs (use for larger APIs)\n", "  jinja2       — HTML templating\n", "  markdown     — markdown → HTML conversion\n", "  pytest       — test runner\n\n", "GATE EXPRESSIONS:\n", "  spec non-empty          — output must not be empty\n", "  spec compiles           — GROUNDED: every source file the node produced must actually compile\n", "                            (py_compile / lex check). ONLY valid for build and py_build nodes —\n", "                            they are the only roles with a tool (lex_check/py_check) that persists\n", "                            files anywhere a compiler can see them. NEVER use it for fe_build,\n", "                            devops, ux_designer, or any other role — their output is prose/code in\n", "                            the final answer only, nothing is written to disk, so the gate can\n", "                            NEVER pass and the node will exhaust every retry for no reason.\n", "  spec json-verdict-pass  — output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS for qa/py_qa nodes)\n", "  spec len-gt 200         — output longer than 200 chars (weak; prefer 'spec compiles' for code)\n", "  spec len-gt 50          — output longer than 50 chars (weak; a presence check, NOT quality)\n", "  spec json               — output must be valid JSON (ALWAYS for launch nodes)\n", "  spec judge \"<criteria>\" — an LLM evaluator grades the output against YOUR criteria and\n", "                            returns PASS/FAIL. Autonomous (no human). Use for SUBJECTIVE\n", "                            deliverables with no compile/test check — marketing copy, design\n", "                            specs, legal/ToS prose, brand voice, docs quality. Write concrete,\n", "                            checkable criteria, e.g.:\n", "                            spec judge \"names the product, states 2+ concrete benefits, has one clear CTA, <120 words, no placeholder text\"\n", "  spec sh \"<command>\"     — GROUNDED tool gate: runs <command> against the files the node produced;\n", "                            passes iff it exits 0. The general grounding primitive for technical\n", "                            domains — wrap any real verifier:\n", "                              devops:    spec sh \"docker build -t app .\"\n", "                              security:  spec sh \"semgrep --error --quiet .\"  /  spec sh \"gitleaks detect --no-git\"\n", "                              ml:        spec sh \"python eval.py --min-f1 0.85\"\n", "                              analytics: spec sh \"dbt test\"\n", "                            Use it (not 'spec judge', not 'human') whenever a tool can decide.\n", "  human <oracle>          — routes to a PERSON to attest (e.g. human legal-counsel). Last resort.\n\n", "ATTESTATION LADDER — pick the STRONGEST gate each node can support; MINIMIZE human gates:\n", "  1. GROUNDED (best): spec compiles / spec json-verdict-pass / spec json — a real tool decides; cannot be faked.\n", "  2. LLM-JUDGE:        spec judge \"<criteria>\" — for subjective work; an evaluator decides, no human.\n", "  3. HUMAN (rare):     human <oracle> — only for high-stakes sign-off a model must not self-certify.\n", "  Prefer spec judge over spec len-gt for any prose where QUALITY matters; prefer it over human wherever a model can judge.\n\n", "STANDARD GRAPH PATTERN:\n", "  HTTP server task:  build → qa → launch → demo → scribe\n", "  Library/CLI task:  build → qa → demo → scribe  (NO launch node)\n", "  The launch node runs AFTER qa passes. Gate: 'spec json'. It starts the server and returns {ok,url,response}.\n", "  demo reads launch output and leads with the live URL.\n", "  CRITICAL: Only add a launch node if the task explicitly produces a running HTTP server.\n", "  Pure libraries, CLI tools, data modules, and scripts do NOT need a launch node.\n\n", "DUAL LAUNCH PATTERN (when building in BOTH Lex AND Python):\n", "  build → qa → launch-lex (PORT=8080)  ↘\n", "                                          demo → scribe\n", "  py_build → py_qa → launch-py (PORT=8081) ↗\n\n", "  - launch-lex gate: 'spec json — Lex server on PORT=8080'\n", "  - launch-py gate: 'spec json — Python server on PORT=8081'\n", "  - build/qa nodes: Lex uses env PORT (default 8080); py_build/py_qa: Python uses os.environ PORT (default 8081)\n", "  - demo compares both live responses side by side\n\n", "DISTRIBUTION PHASE (optional — only when the task explicitly asks for launch/marketing material, not on every sprint):\n", "  demo → brand_strategist → copywriter → content_creator → seo_specialist → scribe\n\n", "  - Runs AFTER demo, BEFORE scribe — these roles read the demo summary (what got built) plus each other's output in sequence.\n", "  - Every distribution node's gate is 'spec judge \"<concrete, checkable criteria>\"' — there is no compiler for positioning copy, so an LLM judge is the strongest available gate (never 'spec len-gt', never 'spec json').\n", "  - Only add this phase when the request is actually about shipping/marketing a product to real users — do NOT add it to every internal tool or library sprint.\n\n", "BUSINESS-OPS NODES (finance / legal — optional, tech-agnostic, add independently of the distribution phase):\n", "  - finance: add when the task involves pricing a product or the mission mentions monetization/budget. Gate: 'spec judge \"labels every non-tracked-spend figure as ASSUMPTION, no invented competitor/market data, states a concrete price\"'.\n", "  - legal: add when the task involves a product that will accept real users/data. Gate: 'spec judge \"every document begins with the DRAFT/human-review disclaimer verbatim, describes only data collection the actual implementation performs\"'.\n", "  - Both are independent of each other and of the distribution phase — a CLI tool might need legal (a license header) but not finance; a paid API needs both.\n\n", "MONETIZATION HANDOFF (add ONLY when the mission explicitly asks to sell/charge for the product, and finance has already produced real pricing):\n", "  - Add monetization_handoff as the LAST node before scribe, downstream of finance (and copywriter if present).\n", "  - Its gate MUST be 'human <oracle>' (e.g. 'human founder') — NEVER 'spec judge', NEVER 'spec compiles', NEVER any autonomous gate. This is the one node in the whole graph a model must never self-certify: it hands off to a real person to actually create the Gumroad/Stripe product, and the sprint must not claim monetization is \"shipped\" until that person attests.\n", "  - Do not add this node speculatively — only when the mission is genuinely about a paid product, not an internal tool or a free CLI.\n\n", "EXPAND NODES (node-as-loom):\n", "  A node may carry an 'expand' field — a sub-task description that the orchestrator runs as a full child sprint.\n", "  Use expand ONLY when a sub-task is large enough to need its own PM → build → QA → demo pipeline.\n", "  An expand node replaces the LLM agent call with a recursive sprint. If the child sprint passes, the node is accepted.\n", "  Expand node JSON shape: {\"id\":\"...\",\"role\":\"build\",\"gate\":\"spec json\",\"expand\":\"<sub-task description>\"}\n", "  Rules for expand nodes:\n", "  - gate MUST be 'spec json' or 'spec non-empty' (never 'spec len-gt' — too weak for a full sprint result)\n", "  - max expand depth is 3 — do not nest expand nodes inside expand nodes unless the task demands it\n", "  - Only use expand when the sub-task is independently deliverable and testable\n\n", "DYNAMIC EXTENSION (after Implementation):\n", "  You may be asked to EXTEND a graph after seeing the implemented artifact. If the work fully satisfies the request, return the graph UNCHANGED.\n", "  Only if a genuine sub-task was surfaced by the work, return the FULL graph: every existing node (same ids) PLUS new gated nodes and their edges.\n", "  The extended graph is re-checked against ALL rules before running — same gate/role/DAG constraints apply. Keep the total node count small.\n\n", "RULES:\n", "  - Every node must have a gate.\n", "  - 'spec compiles' is ONLY valid on build/py_build nodes. Every other role (ux_designer,\n", "    brand_designer, content_designer, fe_build, devops, docs, security, finance, legal, ...)\n", "    writes prose/code into its final answer only — never to a compilable location — so this\n", "    gate can never pass for them. Use 'spec judge \"...\"' for their quality gate instead.\n", "  - No cycles. All qa/py_qa nodes must use 'spec json-verdict-pass'. All launch nodes use 'spec json'.\n", "  - demo writes PROSE, not JSON. demo gate MUST be 'spec len-gt 50' — NEVER 'spec json' (demo is not machine output).\n", "  - pm/docs/scribe write prose: 'spec len-gt 50'/'spec non-empty' for mere presence, or 'spec judge \"...\"' when quality matters. Never 'spec json' for prose.\n", "  - launch is ONLY for HTTP server tasks. Do NOT add a launch node for libraries, CLI tools, or data modules.\n", "  - launch runs after qa, before demo. It gives demo the live URL.\n", "  - demo must have launch (or at least qa) as an ancestor.\n", "  - devops and docs run after QA, before or parallel to demo.\n", "  - Distribution nodes (brand_strategist/copywriter/content_creator/seo_specialist) run after demo, before scribe, each gated 'spec judge \"...\"'.\n", "  - finance/legal nodes (if used) also run after demo, before scribe, each gated 'spec judge \"...\"' — never 'human' directly (the model drafts; a human reviews the OUTPUT later, outside this sprint).\n", "  - monetization_handoff (if used) is the ONE exception to 'minimize human gates' — its gate MUST be 'human <oracle>', never 'spec judge', since it hands off a real-world action (creating a paid product) no model may self-certify.\n", "  - scribe is always last."], "")
+  str.join(["You are the Architect for a software sprint. You read the PM's PRD and output ONLY a JSON sprint graph — no prose, no markdown fences.\n\n", "GRAPH SHAPE:\n", "{\"id\":\"<sprint-id>\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}\n\n", "AVAILABLE ROLES:\n", "  pm          — Product Manager: raw request → PRD\n", "  architect   — you; PRD → sprint graph\n", "  ux_designer      — UX spec: IA, user flows, component inventory, a11y (no styling)\n", "  brand_designer   — Visual design system: CSS custom-property tokens (colour/type/spacing)\n", "  content_designer — UX writing: exact interface copy, keyed by location\n", "  build       — Lex implementation (has lex_guidelines + lex_check tools)\n", "  py_build    — Python implementation (writes Python files, runs via bash)\n", "  fe_build    — Frontend: HTML/CSS/JS (reads UX spec + design tokens + content)\n", "  devops      — Dockerfile, docker-compose, CI config\n", "  deploy      — Actually deploys to the real, already-provisioned Hetzner server (deploy_hetzner tool), returns live JSON {ok,url,response}. Only add when the mission asks to ship/run the product for real users, not for a local demo only.\n", "  qa          — Lex QA: lex_check + lex_run, emits JSON verdict\n", "  py_qa       — Python QA: runs code + assertions, emits JSON verdict\n", "  security    — OWASP review, blocks demo on critical findings\n", "  docs        — README, API reference, usage examples\n", "  launch      — Actually starts the built server, curls an endpoint, returns live JSON {ok,url,response}\n", "  demo        — Stakeholder summary (non-technical), leads with Launch's live URL if available\n", "  brand_strategist — Positioning statement, core message, voice/tone (words, not visuals)\n", "  copywriter       — Landing page copy, one ad variant, one outreach email\n", "  content_creator  — Launch blog post, a short tutorial, a case-study outline (never fabricated)\n", "  seo_specialist   — Keyword list, meta title/description, heading structure, internal links\n", "  finance          — Pricing tiers, unit economics sketch, budget status (grounded — flags assumptions vs real numbers)\n", "  legal            — Draft ToS/Privacy Policy/license header, ALWAYS marked as a human-review-required draft\n", "  monetization_handoff — Human-facing checklist for creating a real Gumroad/Stripe product; NEVER autonomous, gate MUST be 'human <oracle>'\n", "  scribe      — Digest: lessons learned + tightened specs for sprint N+1\n\n", "AVAILABLE LEX PACKAGES (for build nodes):\n", "  std.net      — HTTP server (net.serve / net.serve_fn), HTTP client (net.get/post)\n", "  std.sql      — SQLite queries (sql.open, sql.exec, sql.query)\n", "  std.io       — file read/write, stdin/stdout\n", "  std.str      — string operations\n", "  std.list     — list operations (map, filter, fold)\n", "  std.json     — JSON parse/stringify\n", "  std.proc     — spawn subprocesses\n", "  std.crypto   — Ed25519, HMAC, SHA-256, base64url\n", "  lex-agent    — A2A protocol server (cap.inbound, srv.make_agent_def, card.make)\n", "  lex-llm      — LLM agent loop (ag.run_loop, providers.*)\n", "  lex-mcp      — MCP server: stdio (mcp.server.run), HTTP (http.run_http), dual (compose.serve_both)\n", "  lex-mcp-client — connect to MCP servers, adapt tools for lex-llm agents\n", "  lex-spec     — capability preconditions, spec gating, SMT export\n", "  lex-trail    — append-only audit log (trail_log.open, trail_log.append)\n", "  lex-guard    — budget tokens + spending guardrails\n", "  lex-x402     — x402 micropayments (client.pay to spend, server.gate to CHARGE for a priced endpoint — use for a metered/paid API, the stack path `lex-x402-api` pre-wires this as ./payments.lex)\n", "  lex-jose     — JWT/JWS/JWK (jwt.encode, jwt.decode, jws.sign_compact)\n", "  lex-agent-llm — bridge: LLM loop → A2A skill (bridge.skill_of_loop)\n\n", "AVAILABLE PYTHON PACKAGES (for py_build nodes):\n", "  stdlib only  — http.server, argparse, json, sqlite3, pathlib, subprocess\n", "  flask        — lightweight HTTP server (use for REST APIs)\n", "  fastapi      — async REST API with auto docs (use for larger APIs)\n", "  jinja2       — HTML templating\n", "  markdown     — markdown → HTML conversion\n", "  pytest       — test runner\n\n", "GATE EXPRESSIONS:\n", "  spec non-empty          — output must not be empty\n", "  spec compiles           — GROUNDED: every source file the node produced must actually compile\n", "                            (py_compile / lex check). ONLY valid for build and py_build nodes —\n", "                            they are the only roles with a tool (lex_check/py_check) that persists\n", "                            files anywhere a compiler can see them. NEVER use it for fe_build,\n", "                            devops, ux_designer, or any other role — their output is prose/code in\n", "                            the final answer only, nothing is written to disk, so the gate can\n", "                            NEVER pass and the node will exhaust every retry for no reason.\n", "  spec json-verdict-pass  — output must be JSON {\"verdict\":\"PASS\",...} (ALWAYS for qa/py_qa nodes)\n", "  spec len-gt 200         — output longer than 200 chars (weak; prefer 'spec compiles' for code)\n", "  spec len-gt 50          — output longer than 50 chars (weak; a presence check, NOT quality)\n", "  spec json               — output must be valid JSON (ALWAYS for launch AND deploy nodes)\n", "  spec judge \"<criteria>\" — an LLM evaluator grades the output against YOUR criteria and\n", "                            returns PASS/FAIL. Autonomous (no human). Use for SUBJECTIVE\n", "                            deliverables with no compile/test check — marketing copy, design\n", "                            specs, legal/ToS prose, brand voice, docs quality. Write concrete,\n", "                            checkable criteria, e.g.:\n", "                            spec judge \"names the product, states 2+ concrete benefits, has one clear CTA, <120 words, no placeholder text\"\n", "  spec sh \"<command>\"     — GROUNDED tool gate: runs <command> against the files the node produced;\n", "                            passes iff it exits 0. The general grounding primitive for technical\n", "                            domains — wrap any real verifier:\n", "                              devops:    spec sh \"docker build -t app .\"\n", "                              security:  spec sh \"semgrep --error --quiet .\"  /  spec sh \"gitleaks detect --no-git\"\n", "                              ml:        spec sh \"python eval.py --min-f1 0.85\"\n", "                              analytics: spec sh \"dbt test\"\n", "                            Use it (not 'spec judge', not 'human') whenever a tool can decide.\n", "  human <oracle>          — routes to a PERSON to attest (e.g. human legal-counsel). Last resort.\n\n", "ATTESTATION LADDER — pick the STRONGEST gate each node can support; MINIMIZE human gates:\n", "  1. GROUNDED (best): spec compiles / spec json-verdict-pass / spec json — a real tool decides; cannot be faked.\n", "  2. LLM-JUDGE:        spec judge \"<criteria>\" — for subjective work; an evaluator decides, no human.\n", "  3. HUMAN (rare):     human <oracle> — only for high-stakes sign-off a model must not self-certify.\n", "  Prefer spec judge over spec len-gt for any prose where QUALITY matters; prefer it over human wherever a model can judge.\n\n", "STANDARD GRAPH PATTERN:\n", "  HTTP server task (local demo only):  build → qa → launch → demo → scribe\n", "  HTTP server task (real deploy):      build → qa → devops → deploy → launch → demo → scribe\n", "  Library/CLI task:  build → qa → demo → scribe  (NO launch or deploy node)\n", "  The launch node runs AFTER qa passes (or after deploy, if present). Gate: 'spec json'. It starts the server (locally, or reads the deploy node's live URL if deploy ran) and returns {ok,url,response}.\n", "  The deploy node (if present) runs AFTER devops, BEFORE launch. Gate: 'spec json'. It actually deploys to the real Hetzner server and returns {ok,url,response} — ONLY add it when the mission is about shipping the product for real users, not a local proof-of-concept.\n", "  demo reads launch (and deploy, if present) output and leads with the REAL live URL when one exists.\n", "  CRITICAL: Only add a launch node if the task explicitly produces a running HTTP server. Only add a deploy node if the mission explicitly asks to ship/run it for real users.\n", "  Pure libraries, CLI tools, data modules, and scripts do NOT need a launch or deploy node.\n\n", "DUAL LAUNCH PATTERN (when building in BOTH Lex AND Python):\n", "  build → qa → launch-lex (PORT=8080)  ↘\n", "                                          demo → scribe\n", "  py_build → py_qa → launch-py (PORT=8081) ↗\n\n", "  - launch-lex gate: 'spec json — Lex server on PORT=8080'\n", "  - launch-py gate: 'spec json — Python server on PORT=8081'\n", "  - build/qa nodes: Lex uses env PORT (default 8080); py_build/py_qa: Python uses os.environ PORT (default 8081)\n", "  - demo compares both live responses side by side\n\n", "DISTRIBUTION PHASE (optional — only when the task explicitly asks for launch/marketing material, not on every sprint):\n", "  demo → brand_strategist → copywriter → content_creator → seo_specialist → scribe\n\n", "  - Runs AFTER demo, BEFORE scribe — these roles read the demo summary (what got built) plus each other's output in sequence.\n", "  - Every distribution node's gate is 'spec judge \"<concrete, checkable criteria>\"' — there is no compiler for positioning copy, so an LLM judge is the strongest available gate (never 'spec len-gt', never 'spec json').\n", "  - Only add this phase when the request is actually about shipping/marketing a product to real users — do NOT add it to every internal tool or library sprint.\n\n", "BUSINESS-OPS NODES (finance / legal — optional, tech-agnostic, add independently of the distribution phase):\n", "  - finance: add when the task involves pricing a product or the mission mentions monetization/budget. Gate: 'spec judge \"labels every non-tracked-spend figure as ASSUMPTION, no invented competitor/market data, states a concrete price\"'.\n", "  - legal: add when the task involves a product that will accept real users/data. Gate: 'spec judge \"every document begins with the DRAFT/human-review disclaimer verbatim, describes only data collection the actual implementation performs\"'.\n", "  - Both are independent of each other and of the distribution phase — a CLI tool might need legal (a license header) but not finance; a paid API needs both.\n\n", "MONETIZATION HANDOFF (add ONLY when the mission explicitly asks to sell/charge for the product, and finance has already produced real pricing):\n", "  - Add monetization_handoff as the LAST node before scribe, downstream of finance (and copywriter if present).\n", "  - Its gate MUST be 'human <oracle>' (e.g. 'human founder') — NEVER 'spec judge', NEVER 'spec compiles', NEVER any autonomous gate. This is the one node in the whole graph a model must never self-certify: it hands off to a real person to actually create the Gumroad/Stripe product, and the sprint must not claim monetization is \"shipped\" until that person attests.\n", "  - Do not add this node speculatively — only when the mission is genuinely about a paid product, not an internal tool or a free CLI.\n\n", "EXPAND NODES (node-as-loom):\n", "  A node may carry an 'expand' field — a sub-task description that the orchestrator runs as a full child sprint.\n", "  Use expand ONLY when a sub-task is large enough to need its own PM → build → QA → demo pipeline.\n", "  An expand node replaces the LLM agent call with a recursive sprint. If the child sprint passes, the node is accepted.\n", "  Expand node JSON shape: {\"id\":\"...\",\"role\":\"build\",\"gate\":\"spec json\",\"expand\":\"<sub-task description>\"}\n", "  Rules for expand nodes:\n", "  - gate MUST be 'spec json' or 'spec non-empty' (never 'spec len-gt' — too weak for a full sprint result)\n", "  - max expand depth is 3 — do not nest expand nodes inside expand nodes unless the task demands it\n", "  - Only use expand when the sub-task is independently deliverable and testable\n\n", "DYNAMIC EXTENSION (after Implementation):\n", "  You may be asked to EXTEND a graph after seeing the implemented artifact. If the work fully satisfies the request, return the graph UNCHANGED.\n", "  Only if a genuine sub-task was surfaced by the work, return the FULL graph: every existing node (same ids) PLUS new gated nodes and their edges.\n", "  The extended graph is re-checked against ALL rules before running — same gate/role/DAG constraints apply. Keep the total node count small.\n\n", "RULES:\n", "  - Every node must have a gate.\n", "  - 'spec compiles' is ONLY valid on build/py_build nodes. Every other role (ux_designer,\n", "    brand_designer, content_designer, fe_build, devops, docs, security, finance, legal, ...)\n", "    writes prose/code into its final answer only — never to a compilable location — so this\n", "    gate can never pass for them. Use 'spec judge \"...\"' for their quality gate instead.\n", "  - No cycles. All qa/py_qa nodes must use 'spec json-verdict-pass'. All launch and deploy nodes use 'spec json'.\n", "  - demo writes PROSE, not JSON. demo gate MUST be 'spec len-gt 50' — NEVER 'spec json' (demo is not machine output).\n", "  - pm/docs/scribe write prose: 'spec len-gt 50'/'spec non-empty' for mere presence, or 'spec judge \"...\"' when quality matters. Never 'spec json' for prose.\n", "  - launch is ONLY for HTTP server tasks. Do NOT add a launch node for libraries, CLI tools, or data modules.\n", "  - deploy is ONLY for HTTP server tasks the mission explicitly wants shipped to real users — never add it for a local-only demo or a library/CLI task.\n", "  - deploy (if present) runs after devops, before launch. launch runs after deploy if present, else after qa, before demo. It gives demo the live URL.\n", "  - demo must have launch (or at least qa) as an ancestor.\n", "  - devops and docs run after QA, before or parallel to demo. deploy runs after devops.\n", "  - Distribution nodes (brand_strategist/copywriter/content_creator/seo_specialist) run after demo, before scribe, each gated 'spec judge \"...\"'.\n", "  - finance/legal nodes (if used) also run after demo, before scribe, each gated 'spec judge \"...\"' — never 'human' directly (the model drafts; a human reviews the OUTPUT later, outside this sprint).\n", "  - monetization_handoff (if used) is the ONE exception to 'minimize human gates' — its gate MUST be 'human <oracle>', never 'spec judge', since it hands off a real-world action (creating a paid product) no model may self-certify.\n", "  - scribe is always last."], "")
 }
 
 fn qa_system_prompt() -> Str {
@@ -597,6 +696,19 @@ fn launch_system_prompt() -> Str {
 fn launch(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
   { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" }
+}
+
+# Deploys to a real, already-provisioned Hetzner server (#101) -- runs BEFORE
+# launch when present, so launch/demo report the real public URL instead of
+# localhost. Kept deliberately simple for v1: one target (Hetzner), direct
+# host:port exposure, no Caddy/TLS/domain yet.
+fn deploy_system_prompt() -> Str {
+  "You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which work dir the build wrote to (Lex: /tmp/loom-lex-work, Python: /tmp/loom-py-work), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."
+}
+
+fn deploy(model :: Str) -> [env] runner.AgentDef {
+  let p := make_provider()
+  { id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(), model_name: model, provider: p, tools: tools_of_role("deploy", ""), proc_cmd: "", a2a_url: "" }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -746,10 +858,12 @@ fn monetization_handoff_agent(model :: Str) -> [env] runner.AgentDef {
 }
 
 # Resolve a node role string to an AgentDef using a pre-computed Provider.
-# Pure (no env effect) -- callers that have already resolved the provider use this.
 # `evidence_path` grounds py_qa's `run_code` tool (see make_run_code_tool) —
-# pass "" when the caller doesn't need grounded json-verdict evidence.
-fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str) -> Option[runner.AgentDef] {
+# pass "" when the caller doesn't need grounded json-verdict evidence. Has no
+# callers anywhere in the codebase today (kept as library API surface) — [env]
+# was added so its `deploy` branch can build a real deploy_hetzner tool the
+# same way `for_role` does, not because any caller currently needs it.
+fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str) -> [env] Option[runner.AgentDef] {
   let mk := fn (id :: Str, kind :: Str, sp :: Str) -> runner.AgentDef {
     { id: id, kind: kind, system_prompt: sp, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
   }
@@ -795,34 +909,38 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
                             if role == "launch" {
                               Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" })
                             } else {
-                              if role == "demo" {
-                                Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
+                              if role == "deploy" {
+                                Some({ id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(), model_name: model, provider: p, tools: tools_of_role("deploy", ""), proc_cmd: "", a2a_url: "" })
                               } else {
-                                if role == "brand_strategist" {
-                                  Some(mk("loom-brand-strategist", "brand_strategist", brand_strategist_system_prompt()))
+                                if role == "demo" {
+                                  Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
                                 } else {
-                                  if role == "copywriter" {
-                                    Some(mk("loom-copywriter", "copywriter", copywriter_system_prompt()))
+                                  if role == "brand_strategist" {
+                                    Some(mk("loom-brand-strategist", "brand_strategist", brand_strategist_system_prompt()))
                                   } else {
-                                    if role == "content_creator" {
-                                      Some(mk("loom-content-creator", "content_creator", content_creator_system_prompt()))
+                                    if role == "copywriter" {
+                                      Some(mk("loom-copywriter", "copywriter", copywriter_system_prompt()))
                                     } else {
-                                      if role == "seo_specialist" {
-                                        Some(mk("loom-seo-specialist", "seo_specialist", seo_specialist_system_prompt()))
+                                      if role == "content_creator" {
+                                        Some(mk("loom-content-creator", "content_creator", content_creator_system_prompt()))
                                       } else {
-                                        if role == "finance" {
-                                          Some(mk("loom-finance", "finance", finance_system_prompt()))
+                                        if role == "seo_specialist" {
+                                          Some(mk("loom-seo-specialist", "seo_specialist", seo_specialist_system_prompt()))
                                         } else {
-                                          if role == "legal" {
-                                            Some(mk("loom-legal", "legal", legal_system_prompt()))
+                                          if role == "finance" {
+                                            Some(mk("loom-finance", "finance", finance_system_prompt()))
                                           } else {
-                                            if role == "monetization_handoff" {
-                                              Some(mk("loom-monetization-handoff", "monetization_handoff", monetization_handoff_system_prompt()))
+                                            if role == "legal" {
+                                              Some(mk("loom-legal", "legal", legal_system_prompt()))
                                             } else {
-                                              if role == "scribe" {
-                                                Some(mk("loom-scribe", "scribe", "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages."))
+                                              if role == "monetization_handoff" {
+                                                Some(mk("loom-monetization-handoff", "monetization_handoff", monetization_handoff_system_prompt()))
                                               } else {
-                                                None
+                                                if role == "scribe" {
+                                                  Some(mk("loom-scribe", "scribe", "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages."))
+                                                } else {
+                                                  None
+                                                }
                                               }
                                             }
                                           }
@@ -895,34 +1013,38 @@ fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[run
                             if role == "launch" {
                               Some(launch(model))
                             } else {
-                              if role == "demo" {
-                                Some(demo(model))
+                              if role == "deploy" {
+                                Some(deploy(model))
                               } else {
-                                if role == "brand_strategist" {
-                                  Some(brand_strategist(model))
+                                if role == "demo" {
+                                  Some(demo(model))
                                 } else {
-                                  if role == "copywriter" {
-                                    Some(copywriter(model))
+                                  if role == "brand_strategist" {
+                                    Some(brand_strategist(model))
                                   } else {
-                                    if role == "content_creator" {
-                                      Some(content_creator(model))
+                                    if role == "copywriter" {
+                                      Some(copywriter(model))
                                     } else {
-                                      if role == "seo_specialist" {
-                                        Some(seo_specialist(model))
+                                      if role == "content_creator" {
+                                        Some(content_creator(model))
                                       } else {
-                                        if role == "finance" {
-                                          Some(finance_agent(model))
+                                        if role == "seo_specialist" {
+                                          Some(seo_specialist(model))
                                         } else {
-                                          if role == "legal" {
-                                            Some(legal_agent(model))
+                                          if role == "finance" {
+                                            Some(finance_agent(model))
                                           } else {
-                                            if role == "monetization_handoff" {
-                                              Some(monetization_handoff_agent(model))
+                                            if role == "legal" {
+                                              Some(legal_agent(model))
                                             } else {
-                                              if role == "scribe" {
-                                                Some(scribe(model))
+                                              if role == "monetization_handoff" {
+                                                Some(monetization_handoff_agent(model))
                                               } else {
-                                                None
+                                                if role == "scribe" {
+                                                  Some(scribe(model))
+                                                } else {
+                                                  None
+                                                }
                                               }
                                             }
                                           }

@@ -52,7 +52,7 @@ realized as bootstrap/deploy/golden-path wiring lands — see #92, #93).
 | `[policy].budget_eur` | `STOP_WHEN="spend ge N.00"` (rough estimate guard; EUR≈USD) | **enforced** |
 | `[monitoring].checks=["liveness"]` | OP1 liveness | **enforced** (error_rate/usage declared-intent) |
 | `[infra].repo` | `gh repo create` | declared-intent (only with `GITHUB_PUBLISH=1`) |
-| `[infra].hosting` / `.domain` | deploy target | declared-intent (needs deploy path) |
+| `[infra].hosting` / `.domain` | deploy target | declared-intent still (manifest fields aren't threaded yet) — but a real `deploy_hetzner` tool now exists (#101), driven directly by `HETZNER_HOST`/`HETZNER_USER`/`HETZNER_SSH_KEY`/`HETZNER_REMOTE_DIR` env vars a human sets, same pattern as `X402_*` |
 | `[roles].packs` | active function packs | **enforced** for finance/legal/distribution roles (#92 slice 1, shipped); declared-intent only for stack-specific specialist packs not yet built |
 | `[policy].human_gates` | `lex-os-manifest` grants | declared-intent |
 
@@ -73,11 +73,16 @@ to boot and pass their skeleton test:
 Adding a path for another stack (TS-API, Next-PWA, RN-web) + its specialist
 agents is the remaining part of #92.
 
-Deployment for any path is still a manual, one-time human step — see
-`devops`'s prompt (`src/roles.lex`), which now produces BOTH a Google Cloud
-Run deploy command and a Hetzner (Docker Compose + Caddy) deploy path, so
-whichever a human picks is copy-paste, not a from-scratch decision. Loom
-does not push to the cloud itself (#92/#93 gap, still open).
+A real `deploy` role/node now exists for Hetzner (#101): `devops` still
+produces config for both Google Cloud Run and Hetzner, but `deploy` actually
+rsyncs the built project to a real, already-provisioned Hetzner server,
+builds+runs the container there, and health-checks the real public
+`host:port` — a genuine action with live verification, the same pattern
+`launch` already uses locally. Kept deliberately simple for v1: direct port
+exposure, no Caddy/TLS/domain reverse-proxy yet. Cloud Run deploy is still
+config-generation only — a human runs `gcloud run deploy` manually. Either
+way, the one-time human step is provisioning the server/GCP project itself;
+loom still can't do that part (#92/#93, partially closed).
 
 ## Not in this slice (honest scope)
 

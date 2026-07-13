@@ -34,10 +34,14 @@ fn tools_for(role :: Str) -> List[Str] {
           if role == "launch" {
             ["run_server"]
           } else {
-            if role == "security" {
-              ["security_scan"]
+            if role == "deploy" {
+              ["deploy_hetzner"]
             } else {
-              []
+              if role == "security" {
+                ["security_scan"]
+              } else {
+                []
+              }
             }
           }
         }

@@ -166,8 +166,8 @@ fn role_tools_csv(tools :: List[tl.Tool]) -> Str {
 # must equal the canonical policy the verifier checks (role_tools.tools_for). This
 # is what makes the independent re-derivation trustworthy — fails CI the moment
 # the two diverge.
-fn test_runtime_matches_policy() -> Result[Unit, Str] {
-  list.fold(["build", "py_build", "qa", "py_qa", "launch"], Ok(()), fn (acc :: Result[Unit, Str], r :: Str) -> Result[Unit, Str] {
+fn test_runtime_matches_policy() -> [env] Result[Unit, Str] {
+  list.fold(["build", "py_build", "qa", "py_qa", "launch", "deploy"], Ok(()), fn (acc :: Result[Unit, Str], r :: Str) -> [env] Result[Unit, Str] {
     match acc {
       Err(e) => Err(e),
       Ok(_) => {
@@ -183,11 +183,11 @@ fn test_runtime_matches_policy() -> Result[Unit, Str] {
   })
 }
 
-fn suite() -> List[Result[Unit, Str]] {
+fn suite() -> [env] List[Result[Unit, Str]] {
   [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy()]
 }
 
-fn run_all() -> Unit {
+fn run_all() -> [env] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
     match r {
       Ok(_) => n,

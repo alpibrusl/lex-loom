@@ -27,6 +27,8 @@ import "std.crypto" as crypto
 
 import "std.time" as time
 
+import "std.env" as env
+
 import "lex-orm/src/connection" as conn
 
 import "lex-orm/src/query" as ormq
@@ -1182,6 +1184,17 @@ fn find_deploy_url(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
 }
 
 fn find_url_from_node(db :: conn.ConnDb, sprint_id :: Str, node_id_pattern :: Str) -> [sql] Option[Str] {
+  find_field_from_node(db, sprint_id, node_id_pattern, "url")
+}
+
+# The deploy node's own container name (#101's deploy_hetzner echoes it back
+# on success) -- needed to SSH in and tail THAT container's logs specifically,
+# since a Hetzner host may run more than one company's deploy at once.
+fn find_deploy_service_name(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  find_field_from_node(db, sprint_id, "%deploy%", "service_name")
+}
+
+fn find_field_from_node(db :: conn.ConnDb, sprint_id :: Str, node_id_pattern :: Str, field :: Str) -> [sql] Option[Str] {
   let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE ? ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id), PStr(node_id_pattern)] }, db.dialect)
   let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -1191,11 +1204,11 @@ fn find_url_from_node(db :: conn.ConnDb, sprint_id :: Str, node_id_pattern :: St
       Some(r) => match jv.parse(r.content) {
         Err(_) => None,
         Ok(j) => {
-          let url := json_str_field(j, "url")
-          if str.is_empty(url) {
+          let v := json_str_field(j, field)
+          if str.is_empty(v) {
             None
           } else {
-            Some(url)
+            Some(v)
           }
         },
       },
@@ -1219,6 +1232,32 @@ fn check_liveness(url :: Str) -> [proc] Str {
         "up"
       }
     },
+  }
+}
+
+# SSH into the Hetzner host and grep the deployed container's last 5 minutes
+# of docker logs for error-shaped lines -- a real bug often still answers
+# HTTP requests (so `check_liveness`'s any-response-counts-as-up misses it
+# entirely), but it does log the exception. "clean" is the honest default
+# for anything that isn't actually deployed there or has nothing to say.
+fn check_remote_errors(host :: Str, ssh_user :: Str, ssh_key :: Str, service_name :: Str) -> [proc] Str {
+  if str.is_empty(host) {
+    "clean"
+  } else {
+    if str.is_empty(service_name) {
+      "clean"
+    } else {
+      let ssh_opts := str.join(["-i ", ssh_key, " -o StrictHostKeyChecking=accept-new"], "")
+      let script := str.join(["ssh ", ssh_opts, " ", ssh_user, "@", host, " \"docker logs --since 5m ", service_name, " 2>&1 | grep -iE 'error|exception|traceback' | tail -5\" 2>/dev/null || true"], "")
+      match proc.run("bash", ["-c", script]) {
+        Err(_) => "clean",
+        Ok(r) => if str.is_empty(str.trim(r.stdout)) {
+          "clean"
+        } else {
+          str.slice(str.trim(r.stdout), 0, 500)
+        },
+      }
+    }
   }
 }
 
@@ -1250,13 +1289,45 @@ fn liveness_target(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[{ url ::
   }
 }
 
-fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [sql, time, proc] Result[Unit, Str] {
+fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [env, sql, time, proc] Result[Unit, Str] {
   match liveness_target(db, sprint_id) {
     None => Ok(()),
     Some(target) => {
       let status := check_liveness(target.url)
-      record_operate_signal(db, company_id, idx, "liveness", str.join([status, " (", target.source, ": ", target.url, ")"], ""))
+      match record_operate_signal(db, company_id, idx, "liveness", str.join([status, " (", target.source, ": ", target.url, ")"], "")) {
+        Err(e) => Err(e),
+        Ok(_) => check_and_record_errors(db, company_id, idx, sprint_id, target.source),
+      }
     },
+  }
+}
+
+# Only production (real Hetzner deploy) targets have a container to log-tail
+# -- local demo processes run via `nohup`, not docker, so there is nothing to
+# `docker logs` for them.
+fn check_and_record_errors(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str, source :: Str) -> [env, sql, time, proc] Result[Unit, Str] {
+  if source != "production" {
+    Ok(())
+  } else {
+    match find_deploy_service_name(db, sprint_id) {
+      None => Ok(()),
+      Some(service_name) => {
+        let host := match env.get("HETZNER_HOST") {
+          Some(v) => v,
+          None => "",
+        }
+        let ssh_user := match env.get("HETZNER_USER") {
+          Some(v) => v,
+          None => "root",
+        }
+        let ssh_key := match env.get("HETZNER_SSH_KEY") {
+          Some(v) => v,
+          None => "~/.ssh/id_rsa",
+        }
+        let errors := check_remote_errors(host, ssh_user, ssh_key, service_name)
+        record_operate_signal(db, company_id, idx, "errors", errors)
+      },
+    }
   }
 }
 
@@ -1275,10 +1346,16 @@ fn recent_operate_signals(db :: conn.ConnDb, company_id :: Str, kind :: Str, lim
 
 fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   let signals := recent_operate_signals(db, company_id, "liveness", 5)
-  if list.is_empty(signals) {
+  let liveness_str := if list.is_empty(signals) {
     "(no launched server for this company, or no liveness checks yet)"
   } else {
     str.join(signals, "\n")
+  }
+  let errors := recent_operate_signals(db, company_id, "errors", 5)
+  if list.is_empty(errors) {
+    liveness_str
+  } else {
+    str.join([liveness_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
   }
 }
 

@@ -842,6 +842,107 @@ fn test_find_launch_url_none_for_cli() -> [sql, fs_write, time, crypto, random] 
   }
 }
 
+fn test_find_deploy_url_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-deploy")
+        match insert_test_artifact(db, sprint_id, "loom-deploy", "{\"ok\":true,\"url\":\"http://1.2.3.4:8080\",\"response\":\"hi\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.find_deploy_url(db, sprint_id) {
+            None => Err("expected a deploy url, got None"),
+            Some(url) => if url == "http://1.2.3.4:8080" {
+              Ok(())
+            } else {
+              Err(str.concat("wrong url extracted: ", url))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# The Strategist should see the real production URL, not a stale localhost
+# demo, once a company has actually deployed (#101/#102).
+fn test_liveness_target_prefers_deploy_over_launch() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-both")
+        match insert_test_artifact(db, sprint_id, "loom-launch", "{\"ok\":true,\"url\":\"http://localhost:9999\",\"response\":\"hi\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match insert_test_artifact(db, sprint_id, "loom-deploy", "{\"ok\":true,\"url\":\"http://1.2.3.4:8080\",\"response\":\"hi\"}") {
+            Err(e) => Err(e),
+            Ok(_) => match company.liveness_target(db, sprint_id) {
+              None => Err("expected a liveness target"),
+              Some(t) => if t.url == "http://1.2.3.4:8080" {
+                if t.source == "production" {
+                  Ok(())
+                } else {
+                  Err(str.concat("expected source=production, got ", t.source))
+                }
+              } else {
+                Err(str.concat("expected the deploy url to win, got ", t.url))
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_liveness_target_falls_back_to_launch() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-launch-only")
+        match insert_test_artifact(db, sprint_id, "loom-launch", "{\"ok\":true,\"url\":\"http://localhost:9999\",\"response\":\"hi\"}") {
+          Err(e) => Err(e),
+          Ok(_) => match company.liveness_target(db, sprint_id) {
+            None => Err("expected a liveness target"),
+            Some(t) => if t.url == "http://localhost:9999" {
+              if t.source == "local demo" {
+                Ok(())
+              } else {
+                Err(str.concat("expected source='local demo', got ", t.source))
+              }
+            } else {
+              Err(str.concat("expected the launch url as fallback, got ", t.url))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_liveness_target_none_for_cli() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sprint_id := rand_id("op-none")
+        match insert_test_artifact(db, sprint_id, "loom-py-build", "print('hello')") {
+          Err(e) => Err(e),
+          Ok(_) => match company.liveness_target(db, sprint_id) {
+            None => Ok(()),
+            Some(t) => Err(str.concat("expected no liveness target for a CLI-only sprint, got ", t.url)),
+          },
+        }
+      },
+    },
+  }
+}
+
 fn test_operate_signal_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
@@ -1190,7 +1291,7 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io] Unit {

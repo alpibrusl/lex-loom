@@ -1170,7 +1170,19 @@ fn sync_project_dir(company_id :: Str, sprint_id :: Str, content :: Str) -> [io,
 # it persists across iterations independent of any sprint currently running —
 # this is a real external fact, not a re-run of the build.
 fn find_launch_url(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
-  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE '%launch%' ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  find_url_from_node(db, sprint_id, "%launch%")
+}
+
+# The deploy node's own {"ok":true,"url":...} artifact (#101) points at the
+# real public host:port on the Hetzner server -- a genuinely meaningful
+# production signal, unlike launch's localhost URL which only lives as long
+# as this machine's `run_company` process does.
+fn find_deploy_url(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  find_url_from_node(db, sprint_id, "%deploy%")
+}
+
+fn find_url_from_node(db :: conn.ConnDb, sprint_id :: Str, node_id_pattern :: Str) -> [sql] Option[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND node_id LIKE ? ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id), PStr(node_id_pattern)] }, db.dialect)
   let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
@@ -1220,15 +1232,30 @@ fn record_operate_signal(db :: conn.ConnDb, company_id :: Str, idx :: Int, kind 
   }
 }
 
-# After a successful iteration whose sprint launched a real server, check it's
-# still live and record the observation. A no-op (Ok(())) for companies with
-# no launch node — e.g. a CLI tool like dataforge has nothing to check.
+# After a successful iteration whose sprint launched a real server, check
+# it's still live and record the observation. Prefers the deploy node's real
+# public URL over launch's localhost one (#101) -- localhost only proves the
+# demo process on THIS machine is alive, not that the product is actually
+# reachable by real users. Falls back to launch's URL for companies that
+# haven't deployed yet (still a genuine, if weaker, signal). A no-op
+# (Ok(())) for companies with neither node — e.g. a CLI tool like dataforge
+# has nothing to check.
+fn liveness_target(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[{ url :: Str, source :: Str }] {
+  match find_deploy_url(db, sprint_id) {
+    Some(url) => Some({ url: url, source: "production" }),
+    None => match find_launch_url(db, sprint_id) {
+      Some(url) => Some({ url: url, source: "local demo" }),
+      None => None,
+    },
+  }
+}
+
 fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [sql, time, proc] Result[Unit, Str] {
-  match find_launch_url(db, sprint_id) {
+  match liveness_target(db, sprint_id) {
     None => Ok(()),
-    Some(url) => {
-      let status := check_liveness(url)
-      record_operate_signal(db, company_id, idx, "liveness", status)
+    Some(target) => {
+      let status := check_liveness(target.url)
+      record_operate_signal(db, company_id, idx, "liveness", str.join([status, " (", target.source, ": ", target.url, ")"], ""))
     },
   }
 }

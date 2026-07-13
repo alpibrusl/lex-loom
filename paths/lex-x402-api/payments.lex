@@ -46,7 +46,10 @@ fn signature_header() -> Str {
 #                           6 decimals: "10000" = $0.01)
 #   X402_PAY_TO         -- your Solana receiving address
 #   X402_ASSET          -- the SPL token mint (e.g. USDC's mint address)
-#   X402_NETWORK        -- CAIP-2 id, default Solana mainnet
+#   X402_NETWORK        -- default "solana-devnet" (safe -- can't receive
+#                           real money); set to a mainnet CAIP-2 id
+#                           (e.g. "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+#                           to go live
 #   X402_FACILITATOR    -- base URL of the facilitator that verifies/settles
 #                           (e.g. https://x402.org/facilitator)
 #   X402_DESCRIPTION    -- human-readable line shown in the 402 challenge
@@ -65,7 +68,7 @@ fn requirement_env(resource_url :: Str) -> [env] types.Requirements {
   }
   let network := match env.get("X402_NETWORK") {
     Some(v) => v,
-    None => "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    None => "solana-devnet",
   }
   let description := match env.get("X402_DESCRIPTION") {
     Some(v) => v,

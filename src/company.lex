@@ -1134,12 +1134,89 @@ fn backlog_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
 # A human-readable, read-only board update: mission, stage, what's shipped,
 # what's queued, and the company's own recent reasoning — all derived from
 # the trail, not a separate claim the company makes about itself.
-# Find the largest artifact from this sprint whose node_id looks like a build
-# node (py_build/build, including improver-renamed variants like
-# "py_build-improved-<sprint>-next"). The largest one is picked because a
-# dynamic-extension round re-runs build multiple times within one sprint, and
-# later/bigger outputs supersede earlier ones.
+# Find the largest artifact from this sprint's real build node(s) (role
+# build/py_build) so it can be synced to the company's workspace directory.
+# The largest one is picked because a dynamic-extension round re-runs build
+# multiple times within one sprint, and later/bigger outputs supersede
+# earlier ones.
+#
+# Node ids are NOT a fixed convention -- the Architect names them freely per
+# sprint (e.g. "py-impl" instead of "build"), so matching by substring on the
+# node_id text (the original approach) is unreliable: a real sprint (#pdfx
+# iter-9, found live) silently failed to sync anything because its build
+# node happened to be named "py-impl", which contains neither "build" nor
+# "py_build". The graph itself (sprint_graphs.graph_json) records each
+# node's actual `role`, which is the ground truth -- match against that
+# first, and fall back to the old substring heuristic only if the graph
+# lookup finds nothing (e.g. a malformed/missing graph row).
 fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
+  let ids := build_role_node_ids(db, sprint_id)
+  if list.is_empty(ids) {
+    find_build_artifact_by_name_heuristic(db, sprint_id)
+  } else {
+    find_build_artifact_by_ids(db, sprint_id, ids)
+  }
+}
+
+type GraphRow = { graph_json :: Str }
+
+# node_ids from the sprint's most recent recorded graph whose role is
+# "build" or "py_build" -- the real build node(s), by ground truth, not a
+# guess from the node_id string.
+fn build_role_node_ids(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => match list.head(rs) {
+      None => [],
+      Some(r) => match jv.parse(r.graph_json) {
+        Err(_) => [],
+        Ok(j) => match jv.get_field(j, "nodes") {
+          Some(JList(nodes)) => list.fold(nodes, [], fn (acc :: List[Str], n :: jv.Json) -> List[Str] {
+            let role := json_str_field(n, "role")
+            if role == "build" {
+              list.concat(acc, [json_str_field(n, "id")])
+            } else {
+              if role == "py_build" {
+                list.concat(acc, [json_str_field(n, "id")])
+              } else {
+                acc
+              }
+            }
+          }),
+          _ => [],
+        },
+      },
+    },
+  }
+}
+
+fn placeholders(n :: Int) -> Str {
+  str.join(list.map(list.range(0, n), fn (_i :: Int) -> Str {
+    "?"
+  }), ",")
+}
+
+fn find_build_artifact_by_ids(db :: conn.ConnDb, sprint_id :: Str, ids :: List[Str]) -> [sql] Option[Str] {
+  let sql_text := str.join(["SELECT content FROM artifacts WHERE sprint_id=? AND node_id IN (", placeholders(list.len(ids)), ") ORDER BY length(content) DESC LIMIT 1"], "")
+  let params := list.concat([PStr(sprint_id)], list.map(ids, fn (id :: Str) -> SqlParam {
+    PStr(id)
+  }))
+  let q := ormq.for_dialect({ sql: sql_text, params: params }, db.dialect)
+  let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => find_build_artifact_by_name_heuristic(db, sprint_id),
+    Ok(rs) => match list.head(rs) {
+      None => find_build_artifact_by_name_heuristic(db, sprint_id),
+      Some(r) => Some(r.content),
+    },
+  }
+}
+
+# Fallback for a missing/malformed graph row: the original substring guess.
+# Kept as a safety net, not the primary path -- see find_build_artifact.
+fn find_build_artifact_by_name_heuristic(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
   let q := ormq.for_dialect({ sql: "SELECT content FROM artifacts WHERE sprint_id=? AND (node_id LIKE '%py_build%' OR node_id LIKE '%build%') ORDER BY length(content) DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
   let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {

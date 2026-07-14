@@ -1,0 +1,35 @@
+# pdfx: metered PDF-to-structured-data extraction API for AI agents, priced
+# per call via x402 (no subscription, no API key signup) (#93/OP5 follow-up —
+# the first product built on loom's now-live, verified real Solana x402
+# payment path).
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "pdfx"                                               # [enforced] → COMPANY_ID + workspace dir
+name    = "pdfx"
+mission = "Build pdfx: a metered PDF-to-structured-data extraction API for AI agents, priced per call via x402 (no subscription, no API key signup). Lex HTTP server (lex-x402-api golden path): GET /health is free. POST /extract is behind the x402 payment gate -- accepts a PDF (base64-encoded in the JSON body), shells out to a bundled Python helper script (pdfplumber) via std.proc to extract plain text and any detected tables per page, returns JSON {page_count, pages: [{text, tables}]}. Digital-text PDFs only for v1: a scanned/image-only PDF (no extractable text layer) returns a clear 422 {\"error\":\"not_text_based\"} rather than attempting OCR -- keep the Docker image lean and every call fast and cheap. Stateless: no uploaded PDF content or extracted output is persisted anywhere after the request completes -- state this explicitly in a short privacy note the /health response links to. Tests: the free health route; the Python extraction helper directly (a real multi-page text PDF, a PDF containing a table, a corrupted/non-PDF input, and a scanned-image-only PDF each producing the expected shape or the 422 case); the x402 gate's unpaid-402/paid-200 behavior (reuse payments.lex's existing test pattern, never hand-roll the handshake)."   # [enforced] → GOAL
+
+[stack]
+path  = "lex-x402-api"        # [enforced] → the only vetted path with a real, tested x402 payment gate (lex-x402/lex-guard are Lex-only, so the priced route must be a Lex server); PDF parsing itself shells out to a bundled Python helper via std.proc, not a second HTTP server
+model = "kimi-k2.7-code"      # [enforced] → MODEL -- glm-5.2 tried first, reliably blew its whole 8192-token budget on chain-of-thought reasoning before ever emitting a tool call on py_build's prompt (finish_reason="length", confirmed live via direct API repro); deepseek-v4-pro worked but was very token-heavy (329k tokens for one iteration); kimi-k2.7-code (coding-specialized) confirmed live to complete real tool calls on the identical prompt at comparable token cost -- flat OpenCode Go subscription, so real financial risk is bounded (worst case is 429 rate-limiting, not open-ended billing)
+storage = "none"              # [declared-intent] stateless by design -- no PDF content or output is retained after a request
+
+[infra]
+# repo/hosting/domain intentionally left unset for v1: no GitHub repo requested
+# yet, and no Hetzner server is provisioned -- this run builds, QA's, and
+# launches LOCALLY only (no deploy node in the sprint graph). Provisioning a
+# real Hetzner server (HETZNER_HOST/HETZNER_USER/HETZNER_SSH_KEY) and adding
+# the deploy node is the deliberate next step once the product proves out
+# locally, not something to do speculatively now.
+
+[roles]
+packs = ["engineering", "legal"]   # [enforced] engineering builds it; legal drafts the short "we don't store your PDFs" privacy note /health links to (a real, human-review-required draft, not a final policy) -- no distribution/finance packs yet: an agent-consumed API has no human marketing funnel, and pricing is fixed directly via the x402 gate's env config, not a finance workstream
+
+[monitoring]
+checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent] but real for production deploys (#101/#102) once this is actually deployed
+
+[policy]
+max_iterations = 12           # [enforced] → MAX_ITERATIONS
+budget_eur     = 300          # [enforced] → STOP_WHEN="spend ge 300.00" -- raised from 25 after the first run's real token-ledger total already reached ~$164 (mostly wasted glm-5.2 retries, fixed by the model swap above); flat OpenCode Go subscription bounds real financial risk to rate-limiting (429), not open-ended billing, so this cap is now a sanity ceiling rather than a hard cost budget
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants -- unchanged defaults; go-public covers actually listing on Agent.market, a real human step regardless of how the product is built

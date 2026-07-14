@@ -143,7 +143,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   })
   let __sync := if result.success {
     match company.find_build_artifact(db, sprint_id) {
-      None => (),
+      None => io.print(str.join(["[company] WARNING: no build artifact found for ", sprint_id, " -- nothing synced to $LOOM_WORKSPACE/", ccfg.id, "/ despite a passing sprint (found live: this used to fail silently)"], "")),
       Some(content) => match company.sync_project_dir(ccfg.id, sprint_id, content) {
         Ok(_) => io.print(str.join(["[company] synced build output to $LOOM_WORKSPACE/", ccfg.id, "/"], "")),
         Err(m) => io.print(str.join(["[company] project sync failed: ", m], "")),

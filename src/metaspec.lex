@@ -242,6 +242,49 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
   })
 }
 
+# ── Rule 12: build/py_build MUST use 'spec compiles' (#pdfx2 follow-up) ──────
+# The inverse of rule_compiles_gate_matches_role (rule 10): that rule stops
+# OTHER roles from using 'spec compiles'; nothing stopped build/py_build from
+# using something else. Found live: a real Architect run (kimi-k2.7-code)
+# scoped a "build" node with gate 'spec sh "npm ci && npm run build"' —
+# hallucinating an entire Node/TypeScript stack for a role whose only real
+# tool is lex_check against Lex source, on a manifest whose stack.path is
+# lex-x402-api. The gate ran for real, failed with a real npm error (no
+# package-lock.json — there was never an npm project to begin with), and
+# burned a full iteration's spend before the Strategist could react. build
+# and py_build are the ONLY roles with a tool that persists files a real
+# compiler can check (lex_check/py_check) — no other gate is meaningful for
+# them, so require it structurally rather than trusting the model to notice.
+# Expand nodes are exempt: they recurse into a whole child sprint instead of
+# persisting a file a compiler can check, and rule 9 (expand-gate) already
+# governs their gate ('spec json' or stronger).
+fn rule_build_role_requires_compiles_gate(g :: graph.SprintGraph) -> List[Violation] {
+  list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+    let is_build_role := if n.role == "build" {
+      true
+    } else {
+      n.role == "py_build"
+    }
+    let applies := if is_build_role {
+      match n.expand {
+        None => true,
+        Some(_) => false,
+      }
+    } else {
+      false
+    }
+    if applies {
+      if str.trim(n.gate) == "spec compiles" {
+        acc
+      } else {
+        list.concat(acc, [{ rule: "build-role-requires-compiles-gate", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate '", n.gate, "', but build/py_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written."], "") }])
+      }
+    } else {
+      acc
+    }
+  })
+}
+
 # ── Rule 11: monetization_handoff must never be self-certified (#89) ─────────
 # The one node in the whole graph a model must never attest itself: it hands
 # off creating a real payment/product integration to a human. A `spec judge`
@@ -267,18 +310,19 @@ fn rule_monetization_handoff_is_human_gated(g :: graph.SprintGraph) -> List[Viol
 # ── Public API ────────────────────────────────────────────────────────────────
 fn check(g :: graph.SprintGraph) -> MetaspecResult
   examples {
-    check({ id: "g0", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Valid,
+    check({ id: "g0", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Valid,
     check({ id: "g1", phase: graph.Intake, nodes: [], edges: [] }) => Invalid([{ rule: "non-empty", message: "SprintGraph has no nodes" }]),
     check({ id: "g2", phase: graph.QA, nodes: [{ id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "qa-dominates-demo", message: "demo node d has no qa node ancestor (cannot demo unverified work)" }]),
     check({ id: "g3", phase: graph.QA, nodes: [{ id: "q", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
-    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
+    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
     check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
-    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
+    check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
     check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
-    check({ id: "g8", phase: graph.Intake, nodes: [{ id: "n1", role: "monetization_handoff", gate: "spec judge \"looks good\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "monetization-handoff-human-gated", message: "node n1 (role 'monetization_handoff') uses gate 'spec judge \"looks good\"', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')." }])
+    check({ id: "g8", phase: graph.Intake, nodes: [{ id: "n1", role: "monetization_handoff", gate: "spec judge \"looks good\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "monetization-handoff-human-gated", message: "node n1 (role 'monetization_handoff') uses gate 'spec judge \"looks good\"', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')." }]),
+    check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_monetization_handoff_is_human_gated(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

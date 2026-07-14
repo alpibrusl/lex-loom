@@ -48,8 +48,8 @@ fn board_notes_section(notes :: List[Str]) -> Str {
 
 # Pure prompt construction, split out from decide_next so it's testable
 # without a real LLM call or a live DB (#86).
-fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
-  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, build_status :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
+  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
 }
 
 # Pure, testable: whether pending notes should be marked consumed given the
@@ -67,7 +67,8 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let shipped := company.shipped_summary(db, ccfg.id)
   let notes := company.pending_board_notes(db, ccfg.id)
   let operate := company.operate_section(db, ccfg.id)
-  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, current_goal, ctx)
+  let build_status := company.build_status_section(db, ccfg.id)
+  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, build_status, current_goal, ctx)
   let reply := runner.step(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx))
   let __sc := company.record_strategist_cost(db, ccfg.id, ctx.idx)
   let decision := company.parse_strategist_decision(reply)

@@ -183,8 +183,41 @@ fn test_runtime_matches_policy() -> [env] Result[Unit, Str] {
   })
 }
 
+# Found live (pdfx company run this session): a real ModuleNotFoundError from
+# an unavailable third-party package (the sandbox has no pip/install step)
+# left zero trace in any artifact or scribe note -- py_build silently
+# rewrote around it. annotate_missing_dependency gives the retry loop an
+# explicit, unmissable marker instead.
+fn test_annotate_missing_dependency_flags_module_not_found() -> Result[Unit, Str] {
+  let out := roles.annotate_missing_dependency("Traceback (most recent call last):\nModuleNotFoundError: No module named 'pdfplumber'\n##EXIT:1")
+  if str.contains(out, "[MISSING_DEPENDENCY]") {
+    Ok(())
+  } else {
+    Err(str.concat("expected the missing-dependency marker: ", out))
+  }
+}
+
+fn test_annotate_missing_dependency_flags_import_error() -> Result[Unit, Str] {
+  let out := roles.annotate_missing_dependency("ImportError: cannot import name 'foo' from 'bar'\n##EXIT:1")
+  if str.contains(out, "[MISSING_DEPENDENCY]") {
+    Ok(())
+  } else {
+    Err(str.concat("expected the missing-dependency marker: ", out))
+  }
+}
+
+fn test_annotate_missing_dependency_leaves_unrelated_failures_alone() -> Result[Unit, Str] {
+  let raw := "AssertionError: expected 2 got 3\n##EXIT:1"
+  let out := roles.annotate_missing_dependency(raw)
+  if out == raw {
+    Ok(())
+  } else {
+    Err(str.concat("an unrelated failure should be passed through unchanged: ", out))
+  }
+}
+
 fn suite() -> [env] List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy(), test_annotate_missing_dependency_flags_module_not_found(), test_annotate_missing_dependency_flags_import_error(), test_annotate_missing_dependency_leaves_unrelated_failures_alone()]
 }
 
 fn run_all() -> [env] Unit {

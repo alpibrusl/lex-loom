@@ -48,7 +48,7 @@ fn hello() -> [io] Unit {
   let __h := io.print("lex-loom hello world")
   let __s := sep()
   let __p1 := io.print("1. Graph validation")
-  let sprint_graph := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
+  let sprint_graph := { id: "hello-sprint", phase: graph.Design, nodes: [{ id: "architect", role: "architect", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "qa", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "architect", to: "build", handoff: "schema {}" }, { from: "build", to: "qa", handoff: "schema {}" }, { from: "qa", to: "demo", handoff: "schema {}" }] }
   let __v1 := check("valid graph passes graph.validate", graph.validate(sprint_graph))
   let __v2 := check("valid graph passes metaspec.check", match meta.check(sprint_graph) {
     Valid => Ok(()),

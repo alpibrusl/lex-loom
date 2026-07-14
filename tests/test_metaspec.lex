@@ -10,7 +10,16 @@ import "../src/metaspec" as meta
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
-  { id: id, role: role, gate: "spec non-empty", expand: None, activate_when: "" }
+  let gate := if role == "build" {
+    "spec compiles"
+  } else {
+    if role == "py_build" {
+      "spec compiles"
+    } else {
+      "spec non-empty"
+    }
+  }
+  { id: id, role: role, gate: gate, expand: None, activate_when: "" }
 }
 
 fn edge(from :: Str, to :: Str) -> graph.Edge {
@@ -158,9 +167,36 @@ fn test_expand_non_empty_gate_valid() -> Result[Unit, Str] {
   assert_valid("expand node with non-empty gate", g("m14", [expand_node], []))
 }
 
+# Found live (pdfx2 company run): a real Architect (kimi-k2.7-code) scoped a
+# "build" node with gate 'spec sh "npm ci && npm run build"' -- hallucinating
+# an entire Node/TypeScript stack for a role whose only real tool is
+# lex_check against Lex source. The gate ran for real and burned a full
+# iteration's spend on a real npm error, since there was never an npm
+# project to begin with. build/py_build MUST use 'spec compiles'.
+fn test_build_role_with_shell_gate_fails() -> Result[Unit, Str] {
+  let n := { id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }
+  assert_has_rule("build role with a shell gate", "build-role-requires-compiles-gate", g("m16", [n], []))
+}
+
+fn test_py_build_role_with_judge_gate_fails() -> Result[Unit, Str] {
+  let n := { id: "n1", role: "py_build", gate: "spec judge \"looks reasonable\"", expand: None, activate_when: "" }
+  assert_has_rule("py_build role with a judge gate", "build-role-requires-compiles-gate", g("m17", [n], []))
+}
+
+fn test_build_role_with_compiles_gate_passes() -> Result[Unit, Str] {
+  assert_valid("build role with the correct compiles gate", g("m18", [node("n1", "build")], []))
+}
+
+# Expand nodes recurse into a whole child sprint (rule 9 governs their gate,
+# not rule 12) -- a shell gate on an expand node is NOT the same real bug.
+fn test_expand_build_node_with_shell_gate_is_exempt() -> Result[Unit, Str] {
+  let n := { id: "e1", role: "build", gate: "spec sh \"some real verifier\"", expand: Some("sub-task"), activate_when: "" }
+  assert_valid("expand build node with a shell gate is exempt from rule 12", g("m19", [n], []))
+}
+
 # ── Suite ─────────────────────────────────────────────────────────────────────
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt()]
 }
 
 fn run_all() -> Unit {

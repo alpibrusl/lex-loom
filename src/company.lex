@@ -1228,6 +1228,94 @@ fn find_build_artifact_by_name_heuristic(db :: conn.ConnDb, sprint_id :: Str) ->
   }
 }
 
+# ── Lex-build mission-coverage signal (found live in the pdfx company run) ────
+# The pdfx mission text explicitly called for a Lex HTTP server behind an
+# x402 payment gate (main.lex/payments.lex, the lex-x402-api stack path's
+# pre-wired scaffold), with a Python helper shelled out to via std.proc. The
+# Strategist reads that mission text every single iteration, yet across all
+# 9 iterations the Architect only ever scoped py_build/py_qa/demo/scribe
+# nodes for the standalone Python script -- no sprint graph, ever, contained
+# a "build" (Lex) role node, and main.lex's priced endpoint stayed the
+# original placeholder stub the whole time. The Strategist still declared
+# "stop -- mission fully achieved". This is a real, ground-truth-checkable
+# fact (unlike "did the LLM read the mission carefully") -- so give the
+# Strategist an explicit, unavoidable signal instead of relying on it to
+# notice this itself.
+type NodeResultRow = { accepted :: Int }
+
+fn graph_node_ids_with_exact_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => match list.head(rs) {
+      None => [],
+      Some(r) => match jv.parse(r.graph_json) {
+        Err(_) => [],
+        Ok(j) => match jv.get_field(j, "nodes") {
+          Some(JList(nodes)) => list.fold(nodes, [], fn (acc :: List[Str], n :: jv.Json) -> List[Str] {
+            if json_str_field(n, "role") == role {
+              list.concat(acc, [json_str_field(n, "id")])
+            } else {
+              acc
+            }
+          }),
+          _ => [],
+        },
+      },
+    },
+  }
+}
+
+fn node_accepted(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str) -> [sql] Bool {
+  let q := ormq.for_dialect({ sql: "SELECT accepted FROM node_results WHERE sprint_id=? AND node_id=? AND accepted=1 LIMIT 1", params: [PStr(sprint_id), PStr(node_id)] }, db.dialect)
+  let rows :: Result[List[NodeResultRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => false,
+    Ok(rs) => if list.is_empty(rs) {
+      false
+    } else {
+      true
+    },
+  }
+}
+
+# Has a Lex ("build" role, NOT py_build) node ever been accepted across ANY
+# sprint this company has ever run? A ground-truth fact from sprint_graphs +
+# node_results, not an LLM's self-report.
+fn has_shipped_build_node(db :: conn.ConnDb, company_id :: Str) -> [sql] Bool {
+  let sprint_ids := list.map(load_iterations(db, company_id), fn (it :: CompanyIteration) -> Str {
+    it.sprint_id
+  })
+  list.fold(sprint_ids, false, fn (acc :: Bool, sid :: Str) -> [sql] Bool {
+    if acc {
+      true
+    } else {
+      let ids := graph_node_ids_with_exact_role(db, sid, "build")
+      list.fold(ids, false, fn (acc2 :: Bool, nid :: Str) -> [sql] Bool {
+        if acc2 {
+          true
+        } else {
+          node_accepted(db, sid, nid)
+        }
+      })
+    }
+  })
+}
+
+# One line, fed into the strategist prompt every iteration alongside OPERATE
+# SIGNALS -- inert for companies whose mission never mentions a Lex/x402
+# integration (the strategist rule that reacts to this is conditioned on the
+# mission text itself), but a hard, checkable fact for companies (like the
+# lex-x402-api stack path) where it does.
+fn build_status_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  if has_shipped_build_node(db, company_id) {
+    "A Lex ('build' role) node HAS shipped (been accepted) at least once for this company."
+  } else {
+    "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far."
+  }
+}
+
 # ── Company-level brand persistence (#20) ─────────────────────────────────────
 # Brand identity (visual tokens + positioning/voice) drifted every iteration:
 # each sprint's brand_designer/brand_strategist started from nothing, so a

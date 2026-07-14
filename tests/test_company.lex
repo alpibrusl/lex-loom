@@ -800,6 +800,16 @@ fn insert_test_artifact(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, con
   }
 }
 
+fn insert_test_node_result(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, accepted :: Int) -> [sql, time, crypto, random] Result[Unit, Str] {
+  let now := time.now_str()
+  let id := rand_id("nr")
+  let q := ormq.for_dialect({ sql: "INSERT INTO node_results (id, sprint_id, node_id, phase, accepted, artifact, reason, created_at) VALUES (?, ?, ?, 'Implementation', ?, '', '', ?)", params: [PStr(id), PStr(sprint_id), PStr(node_id), PInt(accepted), PStr(now)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
 fn insert_test_graph(db :: conn.ConnDb, sprint_id :: Str, graph_json :: Str) -> [sql, time, crypto, random] Result[Unit, Str] {
   let now := time.now_str()
   let id := rand_id("graph")
@@ -881,6 +891,118 @@ fn test_find_build_artifact_none_when_neither_matches() -> [sql, fs_write, time,
             None => Ok(()),
             Some(content) => Err(str.concat("expected no build artifact to be found, got: ", content)),
           },
+        }
+      },
+    },
+  }
+}
+
+# Found live (pdfx company run this session): every one of 9 iterations
+# only ever accepted py_build nodes; no "build" (Lex) role node was ever
+# scoped or accepted, yet the Strategist declared the mission complete. This
+# is the ground-truth signal that should have stopped that from happening.
+fn test_has_shipped_build_node_false_when_only_py_build_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let company_id := rand_id("op-nolex")
+        let sprint_id := str.concat(company_id, "/iter-1")
+        match company.record_iteration(db, { company_id: company_id, idx: 1, sprint_id: sprint_id, parent_sprint_id: "", status: "success", goal: "extraction helper" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let graph := "{\"id\":\"g\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"py-impl\",\"role\":\"py_build\",\"gate\":\"spec compiles\"}],\"edges\":[]}"
+            match insert_test_graph(db, sprint_id, graph) {
+              Err(e) => Err(e),
+              Ok(_) => match insert_test_node_result(db, sprint_id, "py-impl", 1) {
+                Err(e) => Err(e),
+                Ok(_) => if company.has_shipped_build_node(db, company_id) {
+                  Err("expected no Lex build node to have shipped -- only a py_build node was ever accepted")
+                } else {
+                  Ok(())
+                },
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_has_shipped_build_node_true_when_a_build_node_was_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let company_id := rand_id("op-lex")
+        let sprint_id := str.concat(company_id, "/iter-1")
+        match company.record_iteration(db, { company_id: company_id, idx: 1, sprint_id: sprint_id, parent_sprint_id: "", status: "success", goal: "priced endpoint" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let graph := "{\"id\":\"g\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"lex-impl\",\"role\":\"build\",\"gate\":\"spec compiles\"}],\"edges\":[]}"
+            match insert_test_graph(db, sprint_id, graph) {
+              Err(e) => Err(e),
+              Ok(_) => match insert_test_node_result(db, sprint_id, "lex-impl", 1) {
+                Err(e) => Err(e),
+                Ok(_) => if company.has_shipped_build_node(db, company_id) {
+                  Ok(())
+                } else {
+                  Err("expected the accepted 'build' role node to be found")
+                },
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_has_shipped_build_node_false_when_build_node_was_never_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let company_id := rand_id("op-lex-bounced")
+        let sprint_id := str.concat(company_id, "/iter-1")
+        match company.record_iteration(db, { company_id: company_id, idx: 1, sprint_id: sprint_id, parent_sprint_id: "", status: "failed", goal: "priced endpoint" }) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let graph := "{\"id\":\"g\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"lex-impl\",\"role\":\"build\",\"gate\":\"spec compiles\"}],\"edges\":[]}"
+            match insert_test_graph(db, sprint_id, graph) {
+              Err(e) => Err(e),
+              Ok(_) => match insert_test_node_result(db, sprint_id, "lex-impl", 0) {
+                Err(e) => Err(e),
+                Ok(_) => if company.has_shipped_build_node(db, company_id) {
+                  Err("a bounced (not accepted) build node should not count as shipped")
+                } else {
+                  Ok(())
+                },
+              },
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_build_status_section_wording_matches_shipped_state() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let company_id := rand_id("op-status")
+        let section := company.build_status_section(db, company_id)
+        if str.contains(section, "NO Lex") {
+          Ok(())
+        } else {
+          Err(str.concat("expected the never-shipped wording for a company with no iterations at all: ", section))
         }
       },
     },
@@ -1210,7 +1332,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, ra
 # ── OP2 (#86): Strategist actually sees Operate signals ─────────────────────
 fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
   let iter_ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "Add widget v2", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Add widget v2", iter_ctx)
   if str.contains(prompt, "OPERATE SIGNALS") {
     if str.contains(prompt, "down") {
       Ok(())
@@ -1224,7 +1346,7 @@ fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
 
 fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
   let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "Ship v1", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Ship v1", iter_ctx)
   if str.contains(prompt, "no launched server") {
     Ok(())
   } else {
@@ -1647,7 +1769,7 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {

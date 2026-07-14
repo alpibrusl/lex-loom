@@ -61,6 +61,47 @@ for k, v in out.items():
 PY
 )"
 
+# ── Warn if the mission names a Python package py_build can't actually use.
+# Found live (pdfx company run, #107): a manifest's mission named
+# `pdfplumber`, which was never on the Architect's own "AVAILABLE PYTHON
+# PACKAGES" whitelist (roles.lex: stdlib/flask/fastapi/jinja2/markdown/pytest
+# only — no pip/install step exists anywhere in the sandbox). py_build wrote
+# code importing it for 4+ real, billed iterations before a real execution
+# gate (not just py_compile, which never resolves imports) caught the
+# ModuleNotFoundError. A heuristic word-boundary check here catches the
+# exact real mistake for $0, before any spend happens. Warns, does not
+# hard-fail -- a plain-English word match can false-positive on a valid
+# manifest, and this should never block a real one.
+python3 - "$CGOAL" <<'PY'
+import re, sys
+mission = sys.argv[1]
+# Keep this curated list in sync with roles.lex's architect_system_prompt
+# "AVAILABLE PYTHON PACKAGES" section if that list ever changes.
+AVAILABLE = {"flask", "fastapi", "jinja2", "markdown", "pytest"}
+COMMONLY_UNAVAILABLE = [
+    "pdfplumber", "pandas", "numpy", "scipy", "pypdf2", "pypdf", "pillow",
+    "opencv", "cv2", "torch", "tensorflow", "scikit-learn", "sklearn",
+    "beautifulsoup4", "bs4", "lxml", "selenium", "requests",
+]
+hits = []
+low = mission.lower()
+for pkg in COMMONLY_UNAVAILABLE:
+    if pkg in AVAILABLE:
+        continue
+    if re.search(r"\b" + re.escape(pkg) + r"\b", low):
+        hits.append(pkg)
+if hits:
+    sys.stderr.write(
+        "[bootstrap] WARNING: mission text mentions "
+        + ", ".join(sorted(set(hits)))
+        + " -- py_build's sandbox has NO pip/install step and can only use: "
+        + ", ".join(sorted(AVAILABLE))
+        + " (plus stdlib). If the mission needs one of these, either drop it "
+        "for a stdlib-only approach or plan a Lex-side implementation instead. "
+        "This is a heuristic word match, not a hard stop -- proceeding.\n"
+    )
+PY
+
 # ── Validate the path is a vetted golden path (a skeleton must exist).
 SKELETON="$LOOM_ROOT/paths/$CPATH"
 if [ ! -d "$SKELETON" ]; then

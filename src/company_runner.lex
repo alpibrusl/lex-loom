@@ -62,6 +62,30 @@ fn should_consume_notes(notes :: List[Str], decision :: company.StrategistDecisi
   }
 }
 
+# Every other role in this codebase gets a bounded retry on empty/malformed
+# output (Architect: max_design_retries; build/qa/etc: max_node_retries) --
+# the Strategist alone got zero, so a single transient glitch (found live,
+# pdfx2 iter-19) permanently ended the company. This gives it the same
+# bounded chance to recover; parse_strategist_decision's "stop" fallback is
+# unchanged once retries are exhausted.
+fn max_strategist_retries() -> Int {
+  2
+}
+
+fn strategist_reply_with_retry(db :: conn.ConnDb, agent :: runner.AgentDef, prompt :: Str, cost_owner :: Str, attempt :: Int) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Str {
+  let reply := runner.step(db, agent, prompt, cost_owner)
+  if company.strategist_reply_is_parseable(reply) {
+    reply
+  } else {
+    if attempt >= max_strategist_retries() {
+      reply
+    } else {
+      let retry_prompt := str.join([prompt, "\n\nYour previous reply was not valid JSON. Output ONLY the JSON object described above — no prose, no markdown fences, nothing else."], "")
+      strategist_reply_with_retry(db, agent, retry_prompt, cost_owner, attempt + 1)
+    }
+  }
+}
+
 fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
   let shipped := company.shipped_summary(db, ccfg.id)
@@ -69,7 +93,7 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let operate := company.operate_section(db, ccfg.id)
   let build_status := company.build_status_section(db, ccfg.id)
   let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, build_status, current_goal, ctx)
-  let reply := runner.step(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx))
+  let reply := strategist_reply_with_retry(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx), 0)
   let __sc := company.record_strategist_cost(db, ccfg.id, ctx.idx)
   let decision := company.parse_strategist_decision(reply)
   let __t := tr.trail(db, ccfg.id, "goal_decision", str.join(["{\"iter\":", int.to_str(ctx.idx), ",\"decision\":\"", decision.decision, "\",\"reason\":\"", company.json_escape(decision.reason), "\"}"], ""))

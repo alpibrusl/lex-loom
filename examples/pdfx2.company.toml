@@ -45,5 +45,5 @@ checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/us
 
 [policy]
 max_iterations = 12           # [enforced] → MAX_ITERATIONS
-budget_eur     = 50            # [enforced] → STOP_WHEN="spend ge 50.00" -- deliberately tight this run (vs the first run's $300 ceiling) so we check in early rather than letting a bad run go far; flat OpenCode Go subscription bounds real risk to rate-limiting regardless
+budget_eur     = 120           # [enforced] → STOP_WHEN="spend ge 120.00" -- raised from 50 after the first 3 iterations already spent $69.23 diagnosing real bugs (now fixed: #109); gives room for a few more iterations post-fix without letting it run unbounded
 human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants -- unchanged defaults; go-public covers actually listing on Agent.market, a real human step regardless of how the product is built

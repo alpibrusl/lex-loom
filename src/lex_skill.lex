@@ -171,9 +171,78 @@ fn lex_error_hints(output :: Str) -> Str {
   str.join([h_let, h_param, h_import, h_id, h_tok, h_arity], "")
 }
 
+# ── QA evidence grounding (found live: qa's verdict was structurally
+# ungroundable) ───────────────────────────────────────────────────────────────
+# `spec json-verdict-pass` (mandated by the Architect's own rules for every
+# qa/py_qa node) is only trusted when a real evidence file agrees with the
+# claimed verdict (runner.verify_json_verdict_evidence). py_qa's run_code
+# writes that file; lex_check/lex_run never did -- meaning every Lex `qa`
+# node in every company this project has ever run was DENIED unconditionally,
+# regardless of what the model did (confirmed live: 100% denial rate across
+# both a real company run and a standalone smoke test). This merges each
+# lex_check/lex_run call's real result into the same evidence file py_qa
+# uses, so qa's grounding can actually succeed on real success.
+fn json_bool_field(j :: jv.Json, key :: Str) -> Bool {
+  match jv.get_field(j, key) {
+    Some(JBool(v)) => v,
+    _ => false,
+  }
+}
+
+fn read_evidence_state(evidence_path :: Str) -> [io] { check_ok :: Bool, run_called :: Bool, run_ok :: Bool } {
+  match io.read(evidence_path) {
+    Err(_) => { check_ok: true, run_called: false, run_ok: true },
+    Ok(raw) => match jv.parse(raw) {
+      Err(_) => { check_ok: true, run_called: false, run_ok: true },
+      Ok(j) => { check_ok: json_bool_field(j, "lex_check_ok"), run_called: json_bool_field(j, "lex_run_called"), run_ok: json_bool_field(j, "lex_run_ok") },
+    },
+  }
+}
+
+fn bool_json_str(b :: Bool) -> Str {
+  if b {
+    "true"
+  } else {
+    "false"
+  }
+}
+
+fn write_evidence_state(evidence_path :: Str, check_ok :: Bool, run_called :: Bool, run_ok :: Bool) -> [io] Unit {
+  let passed := if check_ok {
+    if run_called {
+      run_ok
+    } else {
+      true
+    }
+  } else {
+    false
+  }
+  let json := str.join(["{\"ran\":true,\"lex_check_ok\":", bool_json_str(check_ok), ",\"lex_run_called\":", bool_json_str(run_called), ",\"lex_run_ok\":", bool_json_str(run_ok), ",\"passed\":", bool_json_str(passed), "}"], "")
+  let __w := io.write(evidence_path, json)
+  ()
+}
+
+# Called after a real lex_check result: AND this call's ok into the running
+# "did every check so far pass" state, preserving any lex_run result already recorded.
+fn record_lex_check_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
+  let s := read_evidence_state(evidence_path)
+  write_evidence_state(evidence_path, if s.check_ok {
+    this_ok
+  } else {
+    false
+  }, s.run_called, s.run_ok)
+}
+
+# Called after a real lex_run result: records it, preserving the accumulated
+# lex_check state.
+fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
+  let s := read_evidence_state(evidence_path)
+  write_evidence_state(evidence_path, s.check_ok, true, this_ok)
+}
+
 # Writes `code` to work_dir/<filename> and type-checks it. Returns structured
 # errors so the model can repair. Files accumulate so imports resolve.
-fn make_lex_check_tool() -> t.Tool {
+fn make_lex_check_tool(evidence_path :: Str) -> t.Tool {
   let dir := work_dir()
   let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
   t.define("lex_check", "Write `code` to <filename> and run `lex check`. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. ALWAYS call this after writing each .lex file and repair until ok='true' before finishing. Never claim code compiles without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -200,6 +269,11 @@ fn make_lex_check_tool() -> t.Tool {
               combined
             } else {
               str.concat(combined, lex_error_hints(combined))
+            }
+            let __ev := if str.is_empty(evidence_path) {
+              ()
+            } else {
+              record_lex_check_evidence(evidence_path, ok)
             }
             Ok(JObj([("ok", JStr(if ok {
               "true"
@@ -310,7 +384,7 @@ fn make_security_scan_tool() -> t.Tool {
 # Executes a function in a previously-checked file. For tests, use
 # fn_name='run_all'. The file must already exist in the work dir (write it
 # with lex_check first).
-fn make_lex_run_tool() -> t.Tool {
+fn make_lex_run_tool(evidence_path :: Str) -> t.Tool {
   let dir := work_dir()
   let params := { title: "LexRun", description: "Run a function in a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("fn_name", []), s.required_str("args", [])] }
   t.define("lex_run", "Run `lex run <filename> <fn_name> <args>` on a file already written via lex_check. For tests use fn_name='run_all' and args=''. args are space-separated JSON values. Returns {ok, output}. Base your verdict on this output — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -333,6 +407,11 @@ fn make_lex_run_tool() -> t.Tool {
       Ok(r) => {
         let combined := str.concat(r.stdout, r.stderr)
         let ok := str.contains(combined, "##EXIT:0")
+        let __ev := if str.is_empty(evidence_path) {
+          ()
+        } else {
+          record_lex_run_evidence(evidence_path, ok)
+        }
         Ok(JObj([("ok", JStr(if ok {
           "true"
         } else {

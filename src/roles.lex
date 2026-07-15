@@ -690,9 +690,13 @@ fn py_build(model :: Str) -> [env] runner.AgentDef {
   { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" }
 }
 
-fn qa(model :: Str) -> [env] runner.AgentDef {
+# evidence_path grounds `spec json-verdict-pass` for this role the same way
+# py_qa's does (#110) -- found live: this used to hardcode "" here, silently
+# defeating the lex_check/lex_run evidence fix even after it was wired
+# through tool_by_name, because THIS constructor never passed the real path.
+fn qa(model :: Str, evidence_path :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path), proc_cmd: "", a2a_url: "" }
 }
 
 # `evidence_path` grounds `spec json-verdict-pass` (see make_run_code_tool) —
@@ -910,7 +914,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
           Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" })
         } else {
           if role == "qa" {
-            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", ""), proc_cmd: "", a2a_url: "" })
+            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path), proc_cmd: "", a2a_url: "" })
           } else {
             if role == "py_qa" {
               Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path), proc_cmd: "", a2a_url: "" })
@@ -1014,7 +1018,7 @@ fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[run
           Some(py_build(model))
         } else {
           if role == "qa" {
-            Some(qa(model))
+            Some(qa(model, evidence_path))
           } else {
             if role == "py_qa" {
               Some(py_qa(model, evidence_path))

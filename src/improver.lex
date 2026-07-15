@@ -33,6 +33,8 @@ import "./digest" as dg
 
 import "./roles" as roles
 
+import "./role_tools" as rt
+
 import "lex-orm/src/query" as ormq
 
 # ── Types ─────────────────────────────────────────────────────────────────────
@@ -71,11 +73,30 @@ fn improver_system_prompt() -> Str {
   "You are an expert LLM agent prompt engineer. You rewrite agent system prompts to be more precise and effective based on sprint feedback. Output only the improved system prompt text — no labels, no commentary, no markdown fences."
 }
 
+# Found live (pdfx2 company run): the improver rewrote the `qa` role's
+# system prompt to demand things qa's real tools (lex_check, lex_run only)
+# cannot do -- "start the binary and confirm it accepts connections",
+# "persist the actual smoke-test result to artifacts/smoke/...". qa has no
+# way to start a server or make an HTTP request; that's the `launch` role's
+# job. The improver had zero visibility into what tools the role it was
+# rewriting actually has, so nothing stopped it from inventing requirements
+# beyond that role's real capabilities -- the agent then failed forever
+# trying to satisfy an unsatisfiable prompt, and every subsequent
+# "improvement" made the prompt more elaborate and further from reality.
+fn tool_capability_note(role :: Str) -> Str {
+  let tools := rt.tools_for(role)
+  if list.is_empty(tools) {
+    "This role has NO tools at all -- it can only reason over the text it's given. Do not instruct it to run commands, call any tool, start a server, or verify anything beyond its own reasoning over the input text."
+  } else {
+    str.join(["This role's ONLY available tools are: ", str.join(tools, ", "), ". Do not instruct it to do anything beyond what these specific tools can do -- for example, do not ask it to start a server, make an HTTP request, persist files outside what these tools write, or verify runtime behavior no available tool can produce. If the lesson learned seems to call for a capability outside this list, the fix belongs in a DIFFERENT role (e.g. `launch` starts servers, `run_code`/`py_qa` execute Python) -- do not paper over a missing capability by demanding this role pretend to have it."], "")
+  }
+}
+
 fn improvement_prompt(role :: Str, current_prompt :: Str, lesson :: Str, specs :: List[dg.TightenedSpec]) -> Str {
   let spec_lines := list.fold(specs, "", fn (acc :: Str, ts :: dg.TightenedSpec) -> Str {
     str.join([acc, "  - Must satisfy: ", ts.spec_src, " (reason: ", ts.reason, ")\n"], "")
   })
-  str.join(["Improve the system prompt below for the '", role, "' agent role.\n\n", "CURRENT SYSTEM PROMPT:\n", current_prompt, "\n\n", "WHAT LAST SPRINT TAUGHT US:\n", lesson, "\n\n", "TIGHTENED SPECS this agent must now reliably satisfy:\n", spec_lines, "\nWrite an improved system prompt that:\n", "1. Directly addresses the lesson learned\n", "2. Will reliably produce output satisfying all specs above\n", "3. Retains what worked in the original\n\n", "Output ONLY the new prompt text — nothing else."], "")
+  str.join(["Improve the system prompt below for the '", role, "' agent role.\n\n", "CURRENT SYSTEM PROMPT:\n", current_prompt, "\n\n", "WHAT LAST SPRINT TAUGHT US:\n", lesson, "\n\n", "TIGHTENED SPECS this agent must now reliably satisfy:\n", spec_lines, "\n", tool_capability_note(role), "\n\nWrite an improved system prompt that:\n", "1. Directly addresses the lesson learned, WITHOUT exceeding this role's real tool capabilities\n", "2. Will reliably produce output satisfying all specs above, using only the tools this role actually has\n", "3. Retains what worked in the original\n\n", "Output ONLY the new prompt text — nothing else."], "")
 }
 
 # ── Role deduplication ────────────────────────────────────────────────────────

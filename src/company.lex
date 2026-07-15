@@ -724,6 +724,23 @@ fn decision_needs_goal(decision :: Str) -> Bool {
 # repeated failures until max_iterations — observed live on linksnap iters 11-12,
 # ~$5 of wasted spend. "stop" is safe: it graduates the next backlog item if one
 # is queued, else halts cleanly, instead of burning iterations on garbage.
+# Found live (pdfx2 company run, iter-19): the Strategist returned an
+# unparseable reply twice in a row late in a long run and the company
+# stopped immediately -- with zero retry, unlike every other role in this
+# codebase (Architect gets max_design_retries, build/qa/etc. get
+# max_node_retries). A single transient glitch (the same kind the Architect
+# recovered from via retry multiple times in this very run) permanently
+# ended the company. This does NOT change the "stop" fallback itself (see
+# the rationale above, backed by real evidence from linksnap) -- it only
+# gives the model a bounded chance to recover first, exactly like every
+# other role already gets.
+fn strategist_reply_is_parseable(reply :: Str) -> Bool {
+  match jv.parse(reply) {
+    Err(_) => false,
+    Ok(_) => true,
+  }
+}
+
 fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
   match jv.parse(reply) {
     Err(_) => { decision: "stop", goal: "", reason: "unparseable strategist reply — stopping to avoid thrashing the current goal" },

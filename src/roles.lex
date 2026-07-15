@@ -444,10 +444,10 @@ fn tool_by_name(name :: Str, evidence_path :: Str) -> [env] Option[t.Tool] {
     Some(lexskill.make_lex_guidelines_tool())
   } else {
     if name == "lex_check" {
-      Some(lexskill.make_lex_check_tool())
+      Some(lexskill.make_lex_check_tool(evidence_path))
     } else {
       if name == "lex_run" {
-        Some(lexskill.make_lex_run_tool())
+        Some(lexskill.make_lex_run_tool(evidence_path))
       } else {
         if name == "py_check" {
           Some(lexskill.make_py_check_tool())

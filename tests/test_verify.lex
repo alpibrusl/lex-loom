@@ -216,8 +216,29 @@ fn test_annotate_missing_dependency_leaves_unrelated_failures_alone() -> Result[
   }
 }
 
+# Found live (pdfx2 company run): a single build/py_build node asked to add
+# a route + wire a payment gate + integrate a subprocess call all at once
+# reliably returned EMPTY output across repeated real attempts (iters 10,
+# 15, 16, 18) -- a genuine model complexity ceiling, not a wiring bug. The
+# Architect already has an "expand node" mechanism built for exactly this
+# (delegating a large sub-task to its own recursive PM->build->QA pipeline)
+# but nothing told it to reach for that -- or for sequential build nodes --
+# when a single build task gets overloaded.
+fn test_architect_prompt_warns_against_oversized_build_tasks() -> Result[Unit, Str] {
+  let prompt := roles.architect_system_prompt()
+  if str.contains(prompt, "EMPTY output") {
+    if str.contains(prompt, "split it") {
+      Ok(())
+    } else {
+      Err("expected the architect prompt to instruct splitting an oversized build task")
+    }
+  } else {
+    Err("expected the architect prompt to warn about oversized build tasks returning empty output")
+  }
+}
+
 fn suite() -> [env] List[Result[Unit, Str]] {
-  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy(), test_annotate_missing_dependency_flags_module_not_found(), test_annotate_missing_dependency_flags_import_error(), test_annotate_missing_dependency_leaves_unrelated_failures_alone()]
+  [test_extracts_artifact_hash(), test_missing_artifact_field(), test_bad_json(), test_report_verified(), test_report_failed(), test_node_gates_and_lookup(), test_is_grounded_gate(), test_grant_within_policy(), test_grant_violation(), test_authreport_json(), test_opreport_json(), test_launch_authority_regression(), test_runtime_matches_policy(), test_annotate_missing_dependency_flags_module_not_found(), test_annotate_missing_dependency_flags_import_error(), test_annotate_missing_dependency_leaves_unrelated_failures_alone(), test_architect_prompt_warns_against_oversized_build_tasks()]
 }
 
 fn run_all() -> [env] Unit {

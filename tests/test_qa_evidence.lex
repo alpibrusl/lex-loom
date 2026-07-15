@@ -20,9 +20,13 @@ import "std.process" as proc
 
 import "lex-schema/json_value" as jv
 
+import "lex-llm/src/tool" as t
+
 import "../src/agent/runner" as runner
 
 import "../src/gates" as gates
+
+import "../src/roles" as roles
 
 import "../src/lex_skill" as lexskill
 
@@ -137,6 +141,41 @@ fn test_lex_check_then_failing_lex_run_merges_to_overall_fail() -> [net, io, pro
   }
 }
 
+# Found live (second smoke-test run, AFTER #110 merged): the qa role STILL
+# denied every verdict, because `fn qa(model)` -- the actual agent
+# constructor `for_role` calls -- hardcoded tools_of_role("qa", "") instead
+# of threading through the real evidence_path it was given. #110 fixed
+# lex_check/lex_run and tool_by_name in isolation, and unit-tested them in
+# isolation, but never exercised the real construction path an orchestrator
+# node actually uses -- so the fix never engaged in a live run. This test
+# goes through roles.for_role (the same call the orchestrator makes) end to
+# end, so a regression here can't hide behind a lower-level test passing.
+fn test_for_role_qa_threads_evidence_path_to_its_tools() -> [env, net, io, proc] Result[Unit, Str] {
+  let path := "/tmp/loom-qa-evidence-test-for-role-wiring.json"
+  let __c := runner.clear_qa_evidence(path)
+  match roles.for_role("qa", "test-model", path) {
+    None => Err("expected for_role(\"qa\", ...) to resolve to an agent"),
+    Some(agent) => {
+      let lex_check_tools := list.filter(agent.tools, fn (tl :: t.Tool) -> Bool {
+        tl.name == "lex_check"
+      })
+      match list.head(lex_check_tools) {
+        None => Err("expected the qa agent to have a lex_check tool"),
+        Some(tool) => {
+          let args := JObj([("filename", JStr("evidence_test_for_role.lex")), ("code", JStr("fn main() -> Unit { () }"))])
+          match tool.execute(args) {
+            Err(_) => Err("lex_check tool call itself failed"),
+            Ok(_) => match runner.verify_json_verdict_evidence(path, true) {
+              Ok(_) => Ok(()),
+              Err(e) => Err(str.concat("expected the qa agent's real lex_check tool (constructed via roles.for_role, the same path the orchestrator uses) to ground a claimed PASS, got: ", e)),
+            },
+          }
+        },
+      }
+    },
+  }
+}
+
 fn test_gates_classifies_json_verdict_pass() -> Result[Unit, Str] {
   if gates.is_json_verdict_pass("spec json-verdict-pass") and not gates.is_json_verdict_pass("spec compiles") {
     Ok(())
@@ -145,11 +184,11 @@ fn test_gates_classifies_json_verdict_pass() -> Result[Unit, Str] {
   }
 }
 
-fn suite() -> [net, io, proc] List[Result[Unit, Str]] {
-  [test_evidence_path_is_stable_per_sprint_node(), test_evidence_path_sanitizes_slashes(), test_no_evidence_file_denies(), test_evidence_agreeing_with_claim_allows(), test_evidence_contradicting_claim_denies(), test_gates_classifies_json_verdict_pass(), test_lex_check_records_passing_evidence(), test_lex_check_records_failing_evidence(), test_lex_check_then_failing_lex_run_merges_to_overall_fail()]
+fn suite() -> [env, net, io, proc] List[Result[Unit, Str]] {
+  [test_evidence_path_is_stable_per_sprint_node(), test_evidence_path_sanitizes_slashes(), test_no_evidence_file_denies(), test_evidence_agreeing_with_claim_allows(), test_evidence_contradicting_claim_denies(), test_gates_classifies_json_verdict_pass(), test_lex_check_records_passing_evidence(), test_lex_check_records_failing_evidence(), test_lex_check_then_failing_lex_run_merges_to_overall_fail(), test_for_role_qa_threads_evidence_path_to_its_tools()]
 }
 
-fn run_all() -> [net, io, proc] Unit {
+fn run_all() -> [env, net, io, proc] Unit {
   let results := suite()
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {

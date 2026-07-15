@@ -1303,16 +1303,53 @@ fn has_shipped_build_node(db :: conn.ConnDb, company_id :: Str) -> [sql] Bool {
   })
 }
 
+# Found live (pdfx2 company run): a lifetime-ever check isn't enough. Iter-6
+# shipped a real Lex build node; iter-8's Architect then quietly dropped Lex
+# entirely and shipped a Flask/Python server instead (literally named
+# lex_server.py, but `from flask import Flask` inside) -- and because
+# has_shipped_build_node only asks "ever, across all of history", it stayed
+# true and gave the Strategist no signal that the CURRENT direction had
+# drifted away from Lex. The Strategist's own summary ("the minimal Lex
+# server is shipped") was simply wrong as a result. What matters for a
+# revise/stop decision is the MOST RECENT iteration, not lifetime history.
+fn most_recent_iteration(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyIteration] {
+  list.head(list.reverse(load_iterations(db, company_id)))
+}
+
+fn most_recent_iteration_has_build_node(db :: conn.ConnDb, company_id :: Str) -> [sql] Bool {
+  match most_recent_iteration(db, company_id) {
+    None => false,
+    Some(it) => {
+      let ids := graph_node_ids_with_exact_role(db, it.sprint_id, "build")
+      list.fold(ids, false, fn (acc :: Bool, nid :: Str) -> [sql] Bool {
+        if acc {
+          true
+        } else {
+          node_accepted(db, it.sprint_id, nid)
+        }
+      })
+    },
+  }
+}
+
 # One line, fed into the strategist prompt every iteration alongside OPERATE
 # SIGNALS -- inert for companies whose mission never mentions a Lex/x402
 # integration (the strategist rule that reacts to this is conditioned on the
 # mission text itself), but a hard, checkable fact for companies (like the
-# lex-x402-api stack path) where it does.
+# lex-x402-api stack path) where it does. Distinguishes "drifted away from
+# Lex after shipping it once" from "never shipped it at all" -- the two
+# call for different responses (bring it back vs. build it for the first
+# time), and conflating them (as the old lifetime-only check did) let a
+# real regression go unnoticed.
 fn build_status_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
-  if has_shipped_build_node(db, company_id) {
-    "A Lex ('build' role) node HAS shipped (been accepted) at least once for this company."
+  if most_recent_iteration_has_build_node(db, company_id) {
+    "A Lex ('build' role) node was accepted in the MOST RECENT iteration -- the current direction is actively using Lex."
   } else {
-    "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far."
+    if has_shipped_build_node(db, company_id) {
+      "NO Lex ('build' role) node was accepted in the MOST RECENT iteration, even though one shipped earlier in this company's history. That earlier success does NOT carry forward -- the current direction has drifted away from Lex."
+    } else {
+      "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far."
+    }
   }
 }
 

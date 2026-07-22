@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # Architecture-aware: Cloud Run/Hetzner are amd64, but a local build on
 # Apple Silicon (or an arm64 host) needs the aarch64 asset -- lex-lang
 # publishes both.
-ARG LEX_VERSION=0.10.5
+ARG LEX_VERSION=0.10.7
 RUN ARCH="$(dpkg --print-architecture)"; \
     if [ "$ARCH" = "arm64" ]; then LEX_TARGET=aarch64-unknown-linux-gnu; else LEX_TARGET=x86_64-unknown-linux-gnu; fi; \
     curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v${LEX_VERSION}/lex-v${LEX_VERSION}-${LEX_TARGET}.tar.gz" -o /tmp/lex.tgz \

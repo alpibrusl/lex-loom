@@ -520,6 +520,18 @@ src/
   improver.lex       Post-Digest prompt rewriter — saves improved agents back into pool at count=0
   digest.lex         Trail reading, Scribe invocation, tightened_spec storage
   tenant.lex         Sprint registration in agent registry
+  company.lex        The layer above a single sprint — a company runs a series of them
+  company_runner.lex Auto loop-back runner: finishes a sprint, seeds and starts the next
+  series.lex         Sprint-series statistics for the improvement chart
+  verify.lex         Independent re-derivation of a sprint's integrity from the trail
+  loom_trail.lex     Sprint trail backed by lex-trail (content-addressed, append-only)
+  manifests.lex      Sprint and per-phase trust manifests (lex-os integration)
+  identity.lex       did:lex portable agent reputation
+  role_tools.lex     Single source of truth for which tools each role may call
+  lex_skill.lex      Lex-language skill — ground-truth tools for the agents
+  dag_view.lex       Render a sprint graph (and expand-node sub-sprints) for the UI
+  cloud.lex          Cloud polling mode for the runner
+  debug_model.lex    Diagnose which Ollama models work with lex-llm's provider
   worker.lex         Durable-queue worker process (loom:node queue)
   hello.lex          Offline demo — no LLM, no DB
   main.lex           CLI entry point (init_db / run_sprint_cmd / sprint_status / sprint_trail / sprint_digest)
@@ -529,10 +541,14 @@ src/
     a2a.lex          A2A HTTP front door
     mcp.lex          MCP stdio front door — exposes skills as Claude Code tools
 
-tests/
-  test_graph.lex     13 tests: validation, topo sort, JSON round-trip
-  test_phase.lex     20 tests: legal transitions, wrong evidence, illegal moves
-  test_metaspec.lex  11 tests: rule acceptance/rejection, multiple violations
+tests/                20 suites, no LLM required. Core: graph (validation,
+                      topo sort, JSON round-trip), phase (legal transitions,
+                      wrong evidence, illegal moves), metaspec (rule
+                      acceptance/rejection). Plus cast, gates, company,
+                      identity, improver, verify + verify_shell_gate,
+                      dag_view, qa_evidence, qa_demo_reuse, bounce_stall,
+                      node_results_race, attention, dynamic, ops,
+                      security_scan, deploy_hetzner.
 ```
 
 ---
@@ -541,7 +557,7 @@ tests/
 
 ```bash
 lex test tests/
-# 3 passed, 0 failed  (graph · phase · metaspec — no LLM required)
+# 20 suites — no LLM, no API key required
 ```
 
 ---

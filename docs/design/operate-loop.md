@@ -96,6 +96,17 @@ controller entirely. In loom that already exists — the spend cap
 (`[policy].budget_eur` → `STOP_WHEN`). Everything else defers judgment to
 read time.
 
+*Shipped (CTL3): `src/sensing.lex` — EWMA mean + EWMA absolute-deviation
+baseline, standardised residual in milli-units, warmup guard, asymmetric
+enter/exit (default 3000/1000 milli), per-company firing collapse and
+calm-round resolution. The liveness probe now also records a `latency_ms`
+series (curl `%{time_total}`) and the error scan an `error_count` series —
+the numeric inputs the residuals score. Binary unhealthy readings hard-fire
+at 10000 milli, so recall ≥ the v0 check by construction. Runs in the
+between-iteration hook after each raw signal lands; the Strategist's
+operate view now shows grouped incidents + latest readings instead of raw
+check history.*
+
 ### 2.2 State — a mutable incident object, not a stream (CTL4, #122)
 
 The controller never re-reads the firehose. It reads and writes one

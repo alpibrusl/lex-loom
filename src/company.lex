@@ -35,6 +35,10 @@ import "lex-orm/src/query" as ormq
 
 import "lex-schema/json_value" as jv
 
+import "./operate_ledger" as oledger
+
+import "./sensing" as sensing
+
 import "lex-agent/src/memory" as mem
 
 # ── C1: types ─────────────────────────────────────────────────────────────────
@@ -1522,6 +1526,56 @@ fn check_liveness(url :: Str) -> [proc] Str {
   }
 }
 
+type LivenessReading = { status :: Str, ms :: Int }
+
+# Parse curl's %{time_total} ("0.123456", seconds) into integer millis.
+fn parse_curl_time_ms(out :: Str) -> Int
+  examples {
+    parse_curl_time_ms("0.123456") => 123,
+    parse_curl_time_ms("1.5") => 1500,
+    parse_curl_time_ms("2") => 2000,
+    parse_curl_time_ms("garbage") => 0
+  }
+{
+  let t := str.trim(out)
+  let parts := str.split(t, ".")
+  let sec := match list.head(parts) {
+    None => 0,
+    Some(whole) => match str.to_int(whole) {
+      None => 0,
+      Some(s) => s,
+    },
+  }
+  let frac_ms := match list.head(list.tail(parts)) {
+    None => 0,
+    Some(frac) => match str.to_int(str.slice(str.concat(frac, "000"), 0, 3)) {
+      None => 0,
+      Some(m) => m,
+    },
+  }
+  sec * 1000 + frac_ms
+}
+
+# Same up/down semantics as check_liveness, plus the wall-clock latency of
+# the probe in millis — the numeric series the CTL3 residual baseline
+# scores, which is what catches a degraded-but-still-responding server
+# that the binary check is structurally blind to.
+fn check_liveness_timed(url :: Str) -> [proc] LivenessReading {
+  let script := str.join(["curl -s -o /dev/null -w '%{time_total}' --max-time 5 '", url, "' 2>/dev/null || echo CURL_FAILED"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => { status: "down", ms: 0 },
+    Ok(r) => if str.contains(r.stdout, "CURL_FAILED") {
+      { status: "down", ms: 0 }
+    } else {
+      if str.is_empty(str.trim(r.stdout)) {
+        { status: "down", ms: 0 }
+      } else {
+        { status: "up", ms: parse_curl_time_ms(r.stdout) }
+      }
+    },
+  }
+}
+
 # SSH into the Hetzner host and grep the deployed container's last 5 minutes
 # of docker logs for error-shaped lines -- a real bug often still answers
 # HTTP requests (so `check_liveness`'s any-response-counts-as-up misses it
@@ -1580,10 +1634,23 @@ fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, s
   match liveness_target(db, sprint_id) {
     None => Ok(()),
     Some(target) => {
-      let status := check_liveness(target.url)
-      match record_operate_signal(db, company_id, idx, "liveness", str.join([status, " (", target.source, ": ", target.url, ")"], "")) {
+      let reading := check_liveness_timed(target.url)
+      match record_operate_signal(db, company_id, idx, "liveness", str.join([reading.status, " (", target.source, ": ", target.url, ")"], "")) {
         Err(e) => Err(e),
-        Ok(_) => check_and_record_errors(db, company_id, idx, sprint_id, target.source),
+        Ok(_) => {
+          let __lat := if reading.status == "up" {
+            record_operate_signal(db, company_id, idx, "latency_ms", int.to_str(reading.ms))
+          } else {
+            Ok(())
+          }
+          match check_and_record_errors(db, company_id, idx, sprint_id, target.source) {
+            Err(e) => Err(e),
+            Ok(_) => match sensing.sense_company(db, None, company_id, sensing.default_policy()) {
+              Err(e) => Err(e),
+              Ok(_) => Ok(()),
+            },
+          }
+        },
       }
     },
   }
@@ -1612,7 +1679,10 @@ fn check_and_record_errors(db :: conn.ConnDb, company_id :: Str, idx :: Int, spr
           None => "~/.ssh/id_rsa",
         }
         let errors := check_remote_errors(host, ssh_user, ssh_key, service_name)
-        record_operate_signal(db, company_id, idx, "errors", errors)
+        match record_operate_signal(db, company_id, idx, "errors", errors) {
+          Err(e) => Err(e),
+          Ok(_) => record_operate_signal(db, company_id, idx, "error_count", int.to_str(error_line_count(errors))),
+        }
       },
     }
   }
@@ -1631,18 +1701,73 @@ fn recent_operate_signals(db :: conn.ConnDb, company_id :: Str, kind :: Str, lim
   }
 }
 
+# Line count of an error-scan result; "clean" (or blank) counts zero.
+fn error_line_count(errors :: Str) -> Int
+  examples {
+    error_line_count("clean") => 0,
+    error_line_count("") => 0,
+    error_line_count("one error line") => 1,
+    error_line_count("line one\nline two") => 2
+  }
+{
+  let t := str.trim(errors)
+  if str.is_empty(t) or str.starts_with(t, "clean") {
+    0
+  } else {
+    list.len(str.split(t, "\n"))
+  }
+}
+
+fn format_incident(i :: oledger.IncidentRow) -> Str {
+  let state := if str.is_empty(i.closed_at) {
+    "OPEN since "
+  } else {
+    str.join([i.status, " ", i.opened_at, " -> "], "")
+  }
+  let until := if str.is_empty(i.closed_at) {
+    i.opened_at
+  } else {
+    i.closed_at
+  }
+  str.join(["- [", i.status, "] ", i.symptoms_json, " ", state, until], "")
+}
+
+# The Strategist's operate view, CTL3 shape (#121): grouped incidents from
+# the operate ledger plus the single latest reading per raw series —
+# volume goes DOWN versus dumping raw check history, while a live problem
+# is more visible, not less.
 fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
-  let signals := recent_operate_signals(db, company_id, "liveness", 5)
-  let liveness_str := if list.is_empty(signals) {
+  let latest := recent_operate_signals(db, company_id, "liveness", 1)
+  let liveness_str := if list.is_empty(latest) {
     "(no launched server for this company, or no liveness checks yet)"
   } else {
-    str.join(signals, "\n")
+    str.join(latest, "\n")
   }
-  let errors := recent_operate_signals(db, company_id, "errors", 5)
-  if list.is_empty(errors) {
+  let incidents := oledger.recent_incidents(db, company_id, 3)
+  let incidents_str := if list.is_empty(incidents) {
     liveness_str
   } else {
-    str.join([liveness_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
+    str.join([liveness_str, "\nIncidents (operate ledger, latest 3):\n", str.join(list.map(incidents, format_incident), "\n")], "")
+  }
+  let errors := recent_operate_signals(db, company_id, "errors", 1)
+  let noisy := list.fold(errors, false, fn (acc :: Bool, line :: Str) -> Bool {
+    acc or error_line_count(after_ts(line)) > 0
+  })
+  if noisy {
+    str.join([incidents_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
+  } else {
+    incidents_str
+  }
+}
+
+# recent_operate_signals prefixes each value with "<observed_at>: " — strip
+# it so error_line_count judges the recorded value, not the timestamp.
+fn after_ts(line :: Str) -> Str {
+  let parts := str.split(line, ": ")
+  if list.len(parts) <= 1 {
+    line
+  } else {
+    str.join(list.tail(parts), ": ")
   }
 }
 

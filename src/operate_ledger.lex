@@ -415,15 +415,27 @@ fn set_effect_window(db :: conn.ConnDb, effect :: Str, contracted_at_idx :: Int,
 }
 
 # Full row needed to reconstruct a lex-ctl EffectContract for judging.
-type EffectFullRow = { action_id :: Str, incident_id :: Str, company_id :: Str, class_key :: Str, subsystem :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at_idx :: Int, deadline_idx :: Int, confidence_pct :: Int, on_falsify :: Str, disposition :: Str }
+type EffectFullRow = { action_id :: Str, incident_id :: Str, company_id :: Str, class_key :: Str, subsystem :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at_idx :: Int, deadline_idx :: Int, confidence_pct :: Int, on_falsify :: Str, disposition :: Str, expected_state_hash :: Str }
 
 fn effect_full(db :: conn.ConnDb, effect :: Str) -> [sql] Option[EffectFullRow] {
-  let stmt := "SELECT a.id AS action_id, e.incident_id AS incident_id, a.company_id AS company_id, a.class_key AS class_key, a.subsystem AS subsystem, e.signal AS signal, e.cmp AS cmp, e.threshold_milli AS threshold_milli, e.contracted_at_idx AS contracted_at_idx, e.deadline_idx AS deadline_idx, e.confidence_pct AS confidence_pct, e.on_falsify AS on_falsify, e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE e.id=?"
+  let stmt := "SELECT a.id AS action_id, e.incident_id AS incident_id, a.company_id AS company_id, a.class_key AS class_key, a.subsystem AS subsystem, e.signal AS signal, e.cmp AS cmp, e.threshold_milli AS threshold_milli, e.contracted_at_idx AS contracted_at_idx, e.deadline_idx AS deadline_idx, e.confidence_pct AS confidence_pct, e.on_falsify AS on_falsify, e.disposition AS disposition, e.expected_state_hash AS expected_state_hash FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE e.id=?"
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(effect)] }, db.dialect)
   let rows :: Result[List[EffectFullRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => list.head(rs),
+  }
+}
+
+# The precondition hash captured at propose time (CTL6): a content hash
+# of whatever observed state motivated the action. Re-derived and
+# compared at decision time; a mismatch means the world moved since
+# proposal and the action must not execute.
+fn set_expected_state_hash(db :: conn.ConnDb, effect :: Str, hash :: Str) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE operate_effects SET expected_state_hash=? WHERE id=?", params: [PStr(hash), PStr(effect)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
   }
 }
 
@@ -463,6 +475,76 @@ fn concurrent_on_subsystem(db :: conn.ConnDb, subsystem :: Str, exclude_effect :
 fn class_sample_count(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
   let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending'"
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+  let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
+  }
+}
+
+# ── CTL6: real per-class history, dwell reconstruction, oscillation ──────────
+type DispositionRow = { disposition :: Str }
+
+# Every verified disposition for a class, in the order it was decided —
+# the real record `lex-ctl/tier.record` folds into ClassStats. Chronological
+# by disposed_at, so consecutive-miss tracking matches how the breaker
+# actually experienced the class.
+fn class_dispositions(db :: conn.ConnDb, class_key :: Str) -> [sql] List[Str] {
+  let stmt := "SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending' ORDER BY e.disposed_at ASC"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+  let rows :: Result[List[DispositionRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: DispositionRow) -> Str {
+      r.disposition
+    }),
+  }
+}
+
+type WindowRow = { subsystem :: Str, deadline_idx :: Int }
+
+# Every STILL-PENDING contract's window on a subsystem, shaped as
+# `lex-ctl/stability.DwellLock` rows (`held_until_ms` reused as the
+# absolute idx the window releases at) — reconstructed from the ledger
+# each call, since loom has no long-lived in-process lock table.
+fn active_dwell_windows(db :: conn.ConnDb, subsystem :: Str, exclude_effect :: Str) -> [sql] List[WindowRow] {
+  let stmt := "SELECT a.subsystem AS subsystem, e.deadline_idx AS deadline_idx FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.subsystem=? AND e.disposition='pending' AND e.id!=?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(subsystem), PStr(exclude_effect)] }, db.dialect)
+  let rows :: Result[List[WindowRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+# All OTHER pending contracts system-wide, excluding the one being
+# decided on — the global concurrency count the design's cap (1 during
+# CTL6) is measured against, independent of how many incidents happen
+# to be open. A contract's own (already-persisted) pending row must not
+# count against itself.
+fn pending_count(db :: conn.ConnDb, exclude_effect :: Str) -> [sql] Int {
+  let q := ormq.for_dialect({ sql: "SELECT COUNT(*) AS n FROM operate_effects WHERE disposition='pending' AND id!=?", params: [PStr(exclude_effect)] }, db.dialect)
+  let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
+  }
+}
+
+# Oscillation signal: pairs of same-class-key, same-subsystem contracts
+# whose starts are within `window_idx` of each other — exactly what the
+# dwell lock exists to prevent. Counted independent of whether either
+# side ever actually executed, so the metric is meaningful the moment
+# CTL5 starts proposing, not only once CTL6 has a live actuator.
+fn oscillation_pairs(db :: conn.ConnDb, class_key :: Str, window_idx :: Int) -> [sql] Int {
+  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e1 JOIN operate_actions a1 ON e1.action_id=a1.id JOIN operate_actions a2 ON a2.class_key=a1.class_key AND a2.subsystem=a1.subsystem JOIN operate_effects e2 ON e2.action_id=a2.id WHERE a1.class_key=? AND e1.id!=e2.id AND e2.contracted_at_idx>e1.contracted_at_idx AND e2.contracted_at_idx<=e1.contracted_at_idx+?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key), PInt(window_idx)] }, db.dialect)
   let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => 0,

@@ -296,12 +296,11 @@ fn run_tools(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str, ts :: 
         let probe := str.join([t.name, "=", outcome_str(positive)], "")
         match ledger.record_evidence(db, incident, probe, t.cost_milli, probe, at) {
           Err(_) => Ok({ hs: hs, gap: true }),
-          Ok(ev_id) => {
-            let __trail := match log {
-              None => Ok(""),
-              Some(l) => ledger.trail_evidence_recorded(l, ev_id, incident, None),
-            }
-            run_tools(db, log, incident, list.tail(ts), apply_evidence(hs, t.name, positive, ev_id), p_star_pct, at)
+          Ok(ev_id) => match ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+            ledger.trail_evidence_recorded(l, ev_id, incident, None)
+          }, ()) {
+            Err(e) => Err(e),
+            Ok(_) => run_tools(db, log, incident, list.tail(ts), apply_evidence(hs, t.name, positive, ev_id), p_star_pct, at),
           },
         }
       },
@@ -321,13 +320,9 @@ fn diagnose(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str, p_star_
       Err(e) => Err(e),
       Ok(r) => match persist(db, incident, r.hs, r.gap) {
         Err(e) => Err(e),
-        Ok(d) => match log {
-          None => Ok(d),
-          Some(l) => match trail_diagnosis(l, incident, d, None) {
-            Err(e) => Err(e),
-            Ok(_) => Ok(d),
-          },
-        },
+        Ok(d) => ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+          trail_diagnosis(l, incident, d, None)
+        }, d),
       },
     },
   }

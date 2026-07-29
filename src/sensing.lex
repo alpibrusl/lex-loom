@@ -284,13 +284,9 @@ fn sense_kind(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, kin
               Err(e) => Err(e),
               Ok(inc) => match ledger.link_signal(db, row.id, inc) {
                 Err(e) => Err(e),
-                Ok(_) => match log {
-                  None => Ok(score),
-                  Some(l) => match ledger.trail_incident_opened(l, inc, company_id, kind, None) {
-                    Err(e) => Err(e),
-                    Ok(_) => Ok(score),
-                  },
-                },
+                Ok(_) => ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+                  ledger.trail_incident_opened(l, inc, company_id, kind, None)
+                }, score),
               },
             },
           }
@@ -370,13 +366,9 @@ fn sense_company(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, 
         Some(inc) => if all_calm(db, company_id, sensed_kinds(), p) {
           match ledger.close_incident(db, inc, "resolved", r.last_at, "") {
             Err(e) => Err(e),
-            Ok(_) => match log {
-              None => Ok(0),
-              Some(l) => match ledger.trail_incident_closed(l, inc, "resolved", None) {
-                Err(e) => Err(e),
-                Ok(_) => Ok(0),
-              },
-            },
+            Ok(_) => ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+              ledger.trail_incident_closed(l, inc, "resolved", None)
+            }, 0),
           }
         } else {
           Ok(0)

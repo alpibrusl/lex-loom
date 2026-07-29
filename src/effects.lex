@@ -190,18 +190,13 @@ fn propose_contract(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str,
               Err(e) => Err(e),
               Ok(_) => match ledger.set_expected_state_hash(db, effect_id, state_hash(d.company_id, spec.signal_kind, sensing.latest_score(db, d.company_id, spec.signal_kind))) {
                 Err(e) => Err(e),
-                Ok(_) => {
-                  let __trail_a := match log {
-                    None => Ok(""),
-                    Some(l) => ledger.trail_action_executed(l, action_id, incident, spec.class_key, "propose", None),
-                  }
-                  match log {
-                    None => Ok(effect_id),
-                    Some(l) => match ledger.trail_effect_contracted(l, effect_id, action_id, None) {
-                      Err(e) => Err(e),
-                      Ok(_) => Ok(effect_id),
-                    },
-                  }
+                Ok(_) => match ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+                  ledger.trail_action_executed(l, action_id, incident, spec.class_key, "propose", None)
+                }, ()) {
+                  Err(e) => Err(e),
+                  Ok(_) => ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+                    ledger.trail_effect_contracted(l, effect_id, action_id, None)
+                  }, effect_id),
                 },
               },
             },
@@ -228,13 +223,9 @@ fn verify_contract(db :: conn.ConnDb, log :: Option[tlog.Log], effect :: Str, no
       if kverify.is_final(outcome) {
         match ledger.record_disposition(db, effect, str_of_outcome(outcome), at) {
           Err(e) => Err(e),
-          Ok(_) => match log {
-            None => Ok(outcome),
-            Some(l) => match ledger.trail_effect_disposed(l, effect, str_of_outcome(outcome), None) {
-              Err(e) => Err(e),
-              Ok(_) => Ok(outcome),
-            },
-          },
+          Ok(_) => ledger.emit_optional(log, fn (l :: tlog.Log) -> [sql, time] Result[Str, Str] {
+            ledger.trail_effect_disposed(l, effect, str_of_outcome(outcome), None)
+          }, outcome),
         }
       } else {
         Ok(outcome)

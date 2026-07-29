@@ -222,6 +222,22 @@ fn trail_evidence_recorded(log :: tlog.Log, evidence :: Str, incident :: Str, pa
   }
 }
 
+# Every trail log is `Option[tlog.Log]` at the call sites above — the
+# runner doesn't always carry one yet — and every caller (sensing.lex,
+# diagnosis.lex, effects.lex) repeated the same shape near-verbatim:
+# skip the emit entirely with no log, run it and propagate any error
+# with one, otherwise return the SAME success value either way (#140).
+# Named once here so those call sites collapse to a single expression.
+fn emit_optional[S](log :: Option[tlog.Log], emit :: (tlog.Log) -> [sql, time] Result[Str, Str], on_success :: S) -> [sql, time] Result[S, Str] {
+  match log {
+    None => Ok(on_success),
+    Some(l) => match emit(l) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(on_success),
+    },
+  }
+}
+
 # ── Backfill — the phase-0 replay corpus ──────────────────────────────────────
 #
 # Derives incident episodes from the raw signal history #85 has been
@@ -426,20 +442,6 @@ fn replay(db :: conn.ConnDb, incident :: Str) -> [sql] List[ReplayRow] {
   }
 }
 
-type CountRow = { n :: Int }
-
-fn corpus_size(db :: conn.ConnDb) -> [sql] Int {
-  let q := ormq.for_dialect({ sql: "SELECT COUNT(*) AS n FROM operate_incidents", params: [] }, db.dialect)
-  let rows :: Result[List[CountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
-  match rows {
-    Err(_) => 0,
-    Ok(rs) => match list.head(rs) {
-      None => 0,
-      Some(r) => r.n,
-    },
-  }
-}
-
 # Grant an evidence budget to an incident that has none (cap 0) — used
 # before shadow-diagnosing backfilled episodes, which predate budgets.
 # Never shrinks an existing cap.
@@ -499,11 +501,17 @@ fn set_effect_window(db :: conn.ConnDb, effect :: Str, contracted_at_idx :: Int,
   }
 }
 
+# The join every effect/action query below needs — named once so the
+# 8 call sites can't silently drift out of sync with each other (#140).
+fn join_effects_actions() -> Str {
+  "operate_effects e JOIN operate_actions a ON e.action_id=a.id"
+}
+
 # Full row needed to reconstruct a lex-ctl EffectContract for judging.
 type EffectFullRow = { action_id :: Str, incident_id :: Str, company_id :: Str, class_key :: Str, subsystem :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at_idx :: Int, deadline_idx :: Int, confidence_pct :: Int, on_falsify :: Str, disposition :: Str, expected_state_hash :: Str }
 
 fn effect_full(db :: conn.ConnDb, effect :: Str) -> [sql] Option[EffectFullRow] {
-  let stmt := "SELECT a.id AS action_id, e.incident_id AS incident_id, a.company_id AS company_id, a.class_key AS class_key, a.subsystem AS subsystem, e.signal AS signal, e.cmp AS cmp, e.threshold_milli AS threshold_milli, e.contracted_at_idx AS contracted_at_idx, e.deadline_idx AS deadline_idx, e.confidence_pct AS confidence_pct, e.on_falsify AS on_falsify, e.disposition AS disposition, e.expected_state_hash AS expected_state_hash FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE e.id=?"
+  let stmt := str.join(["SELECT a.id AS action_id, e.incident_id AS incident_id, a.company_id AS company_id, a.class_key AS class_key, a.subsystem AS subsystem, e.signal AS signal, e.cmp AS cmp, e.threshold_milli AS threshold_milli, e.contracted_at_idx AS contracted_at_idx, e.deadline_idx AS deadline_idx, e.confidence_pct AS confidence_pct, e.on_falsify AS on_falsify, e.disposition AS disposition, e.expected_state_hash AS expected_state_hash FROM ", join_effects_actions(), " WHERE e.id=?"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(effect)] }, db.dialect)
   let rows :: Result[List[EffectFullRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -541,7 +549,8 @@ fn pending_effects(db :: conn.ConnDb) -> [sql] List[Str] {
 # (#139) needs to know which of ITS OWN pending contracts to run
 # through `actuation.decide`, not every company's.
 fn pending_effects_for_company(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
-  let q := ormq.for_dialect({ sql: "SELECT e.id AS id FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition='pending' ORDER BY e.contracted_at_idx ASC", params: [PStr(company_id)] }, db.dialect)
+  let stmt := str.join(["SELECT e.id AS id FROM ", join_effects_actions(), " WHERE a.company_id=? AND e.disposition='pending' ORDER BY e.contracted_at_idx ASC"], "")
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[EffectIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
@@ -556,8 +565,17 @@ type CountRow2 = { n :: Int }
 # Other STILL-PENDING contracts on the same subsystem whose window
 # overlaps this one's — the ambiguity signal the verifier needs. A
 # contract's own row is excluded by id.
+#
+# Standard interval-overlap test (#140 — spelled out because the param
+# order below does NOT match the argument list above, which reads as a
+# bug until you check the SQL: `other.contracted_at_idx <= this
+# window's END` needs THIS row's `deadline_idx`, and `other.deadline_idx
+# >= this window's START` needs THIS row's `contracted_at_idx` — the
+# two params are correctly swapped relative to their own names, not
+# misordered. A "fix" that reorders them to match the argument list
+# would silently invert the overlap test.
 fn concurrent_on_subsystem(db :: conn.ConnDb, subsystem :: Str, exclude_effect :: Str, contracted_at_idx :: Int, deadline_idx :: Int) -> [sql] Int {
-  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.subsystem=? AND e.id!=? AND e.disposition='pending' AND e.contracted_at_idx<=? AND e.deadline_idx>=?"
+  let stmt := str.join(["SELECT COUNT(*) AS n FROM ", join_effects_actions(), " WHERE a.subsystem=? AND e.id!=? AND e.disposition='pending' AND e.contracted_at_idx<=? AND e.deadline_idx>=?"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(subsystem), PStr(exclude_effect), PInt(deadline_idx), PInt(contracted_at_idx)] }, db.dialect)
   let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -578,7 +596,7 @@ fn concurrent_on_subsystem(db :: conn.ConnDb, subsystem :: Str, exclude_effect :
 # boundary (#134 — was previously global-by-class, letting one
 # company's failures trip the breaker for every other company).
 fn class_sample_count(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Int {
-  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"
+  let stmt := str.join(["SELECT COUNT(*) AS n FROM ", join_effects_actions(), " WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -599,7 +617,7 @@ type DispositionRow = { disposition :: Str }
 # tracking matches how the breaker actually experienced the class.
 # Company-scoped for the same reason as class_sample_count (#134).
 fn class_dispositions(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] List[Str] {
-  let stmt := "SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending' ORDER BY e.disposed_at ASC"
+  let stmt := str.join(["SELECT e.disposition AS disposition FROM ", join_effects_actions(), " WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending' ORDER BY e.disposed_at ASC"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[DispositionRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -617,7 +635,7 @@ type WindowRow = { subsystem :: Str, deadline_idx :: Int }
 # absolute idx the window releases at) — reconstructed from the ledger
 # each call, since loom has no long-lived in-process lock table.
 fn active_dwell_windows(db :: conn.ConnDb, subsystem :: Str, exclude_effect :: Str) -> [sql] List[WindowRow] {
-  let stmt := "SELECT a.subsystem AS subsystem, e.deadline_idx AS deadline_idx FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.subsystem=? AND e.disposition='pending' AND e.id!=?"
+  let stmt := str.join(["SELECT a.subsystem AS subsystem, e.deadline_idx AS deadline_idx FROM ", join_effects_actions(), " WHERE a.subsystem=? AND e.disposition='pending' AND e.id!=?"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(subsystem), PStr(exclude_effect)] }, db.dialect)
   let rows :: Result[List[WindowRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -696,7 +714,7 @@ fn incidents_for(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
 type HitRateRow = { hits :: Int, total :: Int }
 
 fn class_hit_rate_pct(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Int {
-  let stmt := "SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"
+  let stmt := str.join(["SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM ", join_effects_actions(), " WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[HitRateRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -767,7 +785,7 @@ type WindowHitRow = { hits :: Int, total :: Int }
 # Company-wide hit rate over ALL verified (non-pending) effects — every
 # class this company has ever contracted, folded together.
 fn company_effect_stats(db :: conn.ConnDb, company_id :: Str) -> [sql] WindowHitRow {
-  let stmt := "SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition!='pending'"
+  let stmt := str.join(["SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM ", join_effects_actions(), " WHERE a.company_id=? AND e.disposition!='pending'"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[WindowHitRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
@@ -782,7 +800,7 @@ fn company_effect_stats(db :: conn.ConnDb, company_id :: Str) -> [sql] WindowHit
 # Hit rate over the `limit_n` most-recently-disposed effects, `offset_n`
 # back from the newest — the two windows a trend compares.
 fn company_hit_window(db :: conn.ConnDb, company_id :: Str, limit_n :: Int, offset_n :: Int) -> [sql] WindowHitRow {
-  let stmt := "SELECT COALESCE(SUM(CASE WHEN disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM (SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition!='pending' ORDER BY e.disposed_at DESC LIMIT ? OFFSET ?) w"
+  let stmt := str.join(["SELECT COALESCE(SUM(CASE WHEN disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM (SELECT e.disposition AS disposition FROM ", join_effects_actions(), " WHERE a.company_id=? AND e.disposition!='pending' ORDER BY e.disposed_at DESC LIMIT ? OFFSET ?) w"], "")
   let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PInt(limit_n), PInt(offset_n)] }, db.dialect)
   let rows :: Result[List[WindowHitRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {

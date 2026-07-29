@@ -355,6 +355,17 @@ fn corpus_size(db :: conn.ConnDb) -> [sql] Int {
   }
 }
 
+type IncidentRow = { id :: Str, status :: Str, symptoms_json :: Str, opened_at :: Str, closed_at :: Str }
+
+fn recent_incidents(db :: conn.ConnDb, company_id :: Str, limit :: Int) -> [sql] List[IncidentRow] {
+  let q := ormq.for_dialect({ sql: "SELECT id, status, symptoms_json, opened_at, closed_at FROM operate_incidents WHERE company_id=? ORDER BY opened_at DESC LIMIT ?", params: [PStr(company_id), PInt(limit)] }, db.dialect)
+  let rows :: Result[List[IncidentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
 type IncidentIdRow = { id :: Str }
 
 fn incidents_for(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {

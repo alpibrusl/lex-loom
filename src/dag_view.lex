@@ -52,7 +52,14 @@ fn load_latest_graph(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Opti
 }
 
 # ── Node status, from traces ──────────────────────────────────────────────────
-type NodeStatus = Pending | Running | Accepted | Denied
+# `NodeWaiting`, not the more obvious `Pending`: `main.lex` imports both this
+# module and `company.lex`, which (via `actuation.lex`) now also imports
+# `lex-ctl/src/verify.Outcome` — another bare-constructor sum type with its
+# own `Pending` variant. Lex resolves bare constructors in a flat namespace
+# across everything visible in a file's (transitive) import graph, so both
+# `Pending`s reaching `main.lex` at once collided — the same bug class fixed
+# in lex-ctl#2, this time between two otherwise-unrelated modules.
+type NodeStatus = NodeWaiting | Running | Accepted | Denied
 
 type TraceRow = { event_kind :: Str, data_json :: Str }
 
@@ -108,7 +115,7 @@ fn set_status(m :: List[(Str, NodeStatus)], nid :: Str, st :: NodeStatus) -> Lis
 }
 
 fn status_of(m :: List[(Str, NodeStatus)], nid :: Str) -> NodeStatus {
-  list.fold(m, Pending, fn (acc :: NodeStatus, p :: (Str, NodeStatus)) -> NodeStatus {
+  list.fold(m, NodeWaiting, fn (acc :: NodeStatus, p :: (Str, NodeStatus)) -> NodeStatus {
     match p {
       (k, v) => if k == nid {
         v
@@ -121,7 +128,7 @@ fn status_of(m :: List[(Str, NodeStatus)], nid :: Str) -> NodeStatus {
 
 fn status_class(st :: NodeStatus) -> Str {
   match st {
-    Pending => "pending",
+    NodeWaiting => "pending",
     Running => "running",
     Accepted => "accepted",
     Denied => "denied",
@@ -130,7 +137,7 @@ fn status_class(st :: NodeStatus) -> Str {
 
 fn status_label(st :: NodeStatus) -> Str {
   match st {
-    Pending => "pending",
+    NodeWaiting => "pending",
     Running => "running",
     Accepted => "done",
     Denied => "FAILED",

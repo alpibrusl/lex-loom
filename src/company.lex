@@ -41,6 +41,8 @@ import "./operate_ledger" as oledger
 
 import "./sensing" as sensing
 
+import "./actuation" as act
+
 import "lex-agent/src/memory" as mem
 
 # ── C1: types ─────────────────────────────────────────────────────────────────
@@ -1811,6 +1813,32 @@ fn after_ts(line :: Str) -> Str {
   }
 }
 
+# CTL6 (#124) built `actuation.dossier` — the escalation dossier a
+# human sees for an Escalate-tier decision — and tested it, but nothing
+# ever called it from the board report (#139). Runs every one of this
+# company's still-pending contracts through the SAME `actuation.decide`
+# gate CTL6 already uses, and renders a dossier for any that land on
+# Escalate — never re-deriving the decision, just surfacing it.
+fn escalation_dossiers(db :: conn.ConnDb, now_idx :: Int, effects :: List[Str]) -> [sql] List[Str] {
+  match list.head(effects) {
+    None => [],
+    Some(eff) => {
+      let rest := escalation_dossiers(db, now_idx, list.tail(effects))
+      match act.decide(db, eff, now_idx) {
+        Ok(Cleared(Escalate)) => match oledger.effect_full(db, eff) {
+          None => rest,
+          Some(r) => list.cons(act.dossier(db, r.incident_id), rest),
+        },
+        _ => rest,
+      }
+    },
+  }
+}
+
+fn escalation_dossiers_for_company(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
+  escalation_dossiers(db, latest_iteration_idx(db, company_id), oledger.pending_effects_for_company(db, company_id))
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
@@ -1819,7 +1847,8 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
       let its := load_iterations(db, company_id)
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      let dossiers := escalation_dossiers_for_company(db, company_id)
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

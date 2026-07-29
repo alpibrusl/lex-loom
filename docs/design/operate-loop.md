@@ -262,6 +262,24 @@ observation → hypothesis(+posterior) → authority invoked → action(+params)
             → predicted effect → observed effect → disposition
 ```
 
+Schema (CTL2, shipped — DDL in `src/migrate.lex`, recording/backfill/replay
+in `src/operate_ledger.lex`; row ids are SHA-256 over canonical fields):
+
+| Table | Row | Notes |
+|---|---|---|
+| `company_operate_signals` | raw reading (#85) + `incident_id`, `score_milli` | `score_milli` filled by CTL3 residual scoring |
+| `operate_incidents` | id, company, opened/closed, status, symptoms, budget spent/cap (milli), root_cause | terminal states only (`resolved`/`escalated`); live FSM is lex-ctl's |
+| `operate_actions` | id, incident, class_key, subsystem, params, tier, executed_at | class_key joins to hit-rate stats |
+| `operate_effects` | id (= contract hash), action, typed predicate, deadline, confidence, disposition | `disposition ∈ pending/materialised/falsified/ambiguous`, closed vocabulary |
+| `operate_evidence` | id, incident, query, cost (milli), result_ref | insert debits the incident budget; overrun refused |
+
+`operate_ledger.backfill_company` derives the historical corpus from the
+raw #85 signal history (consecutive unhealthy readings of one kind = one
+episode; the next healthy reading resolves it; re-runs are no-ops), and
+`operate_ledger.replay` reconstructs any incident's chain in time order.
+Trail kinds: `loom.operate.{incident.opened, incident.closed,
+action.executed, effect.contracted, effect.disposed, evidence.recorded}`.
+
 The human read path is the board report (#82), extended to render exactly
 this: what the controller did, under what authority, on what evidence, what
 it predicted, whether it was right, what it cost. A **verification surface**,

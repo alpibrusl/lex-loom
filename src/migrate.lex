@@ -180,6 +180,44 @@ fn ddl_company_operate_signals_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_operate_signals_company ON company_operate_signals(company_id, kind, idx)"
 }
 
+# Operate ledger (#118/#120) — the controller's record, CTL2. Row ids are
+# content-addressed (SHA-256 over canonical fields, computed in
+# operate_ledger.lex) so the same logical fact has the same id wherever it
+# is materialized; the authoritative tamper-evident record is the lex-trail
+# chain (loom.operate.* kinds), these tables are the queryable projection —
+# same dual-write pattern as sprint traces vs loom_trail.
+fn ddl_operate_incidents() -> Str {
+  "CREATE TABLE IF NOT EXISTS operate_incidents (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, symptoms_json TEXT NOT NULL, budget_spent_milli INTEGER NOT NULL DEFAULT 0, budget_cap_milli INTEGER NOT NULL DEFAULT 0, root_cause TEXT NOT NULL DEFAULT '')"
+}
+
+fn ddl_operate_incidents_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_op_inc_company ON operate_incidents(company_id, opened_at)"
+}
+
+fn ddl_operate_actions() -> Str {
+  "CREATE TABLE IF NOT EXISTS operate_actions (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, company_id TEXT NOT NULL, class_key TEXT NOT NULL, subsystem TEXT NOT NULL, params_json TEXT NOT NULL DEFAULT '{}', tier TEXT NOT NULL, executed_at TEXT NOT NULL)"
+}
+
+fn ddl_operate_actions_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_op_act_incident ON operate_actions(incident_id, executed_at)"
+}
+
+fn ddl_operate_effects() -> Str {
+  "CREATE TABLE IF NOT EXISTS operate_effects (id TEXT PRIMARY KEY, action_id TEXT NOT NULL, incident_id TEXT NOT NULL, signal TEXT NOT NULL, cmp TEXT NOT NULL, threshold_milli INTEGER NOT NULL, contracted_at TEXT NOT NULL, deadline_at TEXT NOT NULL, confidence_pct INTEGER NOT NULL, on_falsify TEXT NOT NULL, disposition TEXT NOT NULL DEFAULT 'pending', disposed_at TEXT NOT NULL DEFAULT '')"
+}
+
+fn ddl_operate_effects_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_op_eff_incident ON operate_effects(incident_id, contracted_at)"
+}
+
+fn ddl_operate_evidence() -> Str {
+  "CREATE TABLE IF NOT EXISTS operate_evidence (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, query_text TEXT NOT NULL, cost_milli INTEGER NOT NULL, result_ref TEXT NOT NULL DEFAULT '', observed_at TEXT NOT NULL)"
+}
+
+fn ddl_operate_evidence_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_op_ev_incident ON operate_evidence(incident_id, observed_at)"
+}
+
 # did:lex portable reputation (#52): signed attestation bundles. Reputation is
 # DERIVED (count of verified rows per did), never stored — nothing to forge.
 fn ddl_attestations() -> Str {
@@ -207,6 +245,8 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __9 := try_ddl(db, "ALTER TABLE companies ADD COLUMN wake_when TEXT NOT NULL DEFAULT ''")
   let __10 := try_ddl(db, "ALTER TABLE company_iterations ADD COLUMN goal TEXT NOT NULL DEFAULT ''")
   let __11 := try_ddl(db, "ALTER TABLE companies ADD COLUMN total_cost_cents INTEGER NOT NULL DEFAULT 0")
+  let __12 := try_ddl(db, "ALTER TABLE company_operate_signals ADD COLUMN incident_id TEXT NOT NULL DEFAULT ''")
+  let __13 := try_ddl(db, "ALTER TABLE company_operate_signals ADD COLUMN score_milli INTEGER NOT NULL DEFAULT 0")
   ()
 }
 
@@ -221,7 +261,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __jobs := jobs.init_schema(db)

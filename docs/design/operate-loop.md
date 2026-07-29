@@ -206,6 +206,36 @@ Two non-negotiables:
    auto-expires — never auto-escalates to execute; `Escalate` goes to a
    human with the dossier.
 
+*Shipped (CTL6): `src/actuation.lex` — the DECISION layer only; it never
+performs a remediation. `decide(db, effect, now_idx)` returns
+`Cleared(Auto|Propose|Escalate) | Blocked(reason)`, computed from:
+`real_tier` (structural ceiling from `eff.action_class_of` demoted by
+`ktier.effective` over a real `ktier.ClassStats` folded — with the kernel's
+own `record`, not a reimplementation — from every verified disposition for
+that class in chronological order, `operate_ledger.class_dispositions`);
+then, only for a class whose tier is `Auto`, `kstab.can_act` over a
+`DwellLock` list reconstructed from still-pending contracts on the
+subsystem plus the global in-flight count (both queries exclude the
+contract being decided — its own reservation must not count against
+itself); then the precondition hash captured at CTL5 proposal time
+re-derived and compared. `lex-agent` ships no reusable `cap.gate` primitive
+to call into, so the "capability token" reduces to this data-only decision
+— classification, measured record, and content hashes, never the
+incident's narrative — which already satisfies the design's actual safety
+property. `operate_ledger.oscillation_pairs` tracks same-class,
+same-subsystem contracts started within 2× dwell, independent of whether
+anything ever executed. loom has never had a real mutating executor (only
+read-only probes); wiring one is left as a deliberate, separately-approved
+follow-up — until then every class starts at zero verified samples,
+`real_tier` correctly stays at `Propose`/`Escalate`, and the gate is inert
+by construction.*
+
+*A collision self-check: `Decision` wraps the kernel's own `ktier.Tier`
+(`Cleared(ktier.Tier) | Blocked(Str)`) rather than redeclaring
+`Auto`/`Propose`/`Escalate` as its own variants, which would reintroduce
+the exact bare-constructor collision fixed in lex-ctl#2 (CTL5) — this time
+self-inflicted, caught by `lex check` the same way.*
+
 ### 2.5 Effect contracts — the core mechanism (CTL5, #123)
 
 Every action carries a falsifiable prediction — `lex-ctl/contract`:

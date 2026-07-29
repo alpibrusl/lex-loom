@@ -37,6 +37,8 @@ import "std.int" as int
 
 import "std.list" as list
 
+import "std.crypto" as crypto
+
 import "lex-orm/src/connection" as conn
 
 import "lex-trail/src/log" as tlog
@@ -138,6 +140,19 @@ fn str_of_outcome(o :: kverify.Outcome) -> Str
   }
 }
 
+# The precondition hash (CTL6): content-addresses whatever observed
+# state motivated the action, so a later re-check can tell whether the
+# world moved since proposal. None (no reading yet) hashes distinctly
+# from any real score, so "went from unobserved to observed" also
+# counts as a state change.
+fn state_hash(company_id :: Str, signal_kind :: Str, score :: Option[Int]) -> Str {
+  let score_str := match score {
+    None => "none",
+    Some(s) => int.to_str(s),
+  }
+  crypto.sha256_str(str.join(["operate.state", company_id, signal_kind, score_str], "|"))
+}
+
 fn first_symptom_kind(symptoms_json :: Str) -> Str {
   if str.contains(symptoms_json, "liveness") {
     "liveness"
@@ -173,18 +188,21 @@ fn propose_contract(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str,
             Err(e) => Err(e),
             Ok(effect_id) => match ledger.set_effect_window(db, effect_id, now_idx, now_idx + spec.deadline_delta_idx) {
               Err(e) => Err(e),
-              Ok(_) => {
-                let __trail_a := match log {
-                  None => Ok(""),
-                  Some(l) => ledger.trail_action_executed(l, action_id, incident, spec.class_key, "propose", None),
-                }
-                match log {
-                  None => Ok(effect_id),
-                  Some(l) => match ledger.trail_effect_contracted(l, effect_id, action_id, None) {
-                    Err(e) => Err(e),
-                    Ok(_) => Ok(effect_id),
-                  },
-                }
+              Ok(_) => match ledger.set_expected_state_hash(db, effect_id, state_hash(d.company_id, spec.signal_kind, sensing.latest_score(db, d.company_id, spec.signal_kind))) {
+                Err(e) => Err(e),
+                Ok(_) => {
+                  let __trail_a := match log {
+                    None => Ok(""),
+                    Some(l) => ledger.trail_action_executed(l, action_id, incident, spec.class_key, "propose", None),
+                  }
+                  match log {
+                    None => Ok(effect_id),
+                    Some(l) => match ledger.trail_effect_contracted(l, effect_id, action_id, None) {
+                      Err(e) => Err(e),
+                      Ok(_) => Ok(effect_id),
+                    },
+                  }
+                },
               },
             },
           },

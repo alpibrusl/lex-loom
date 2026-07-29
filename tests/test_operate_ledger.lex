@@ -222,8 +222,93 @@ fn test_effect_id_matches_content() -> Result[Unit, Str] {
   }
 }
 
+# ── CTL7 (#118/#125): controller metrics rollup ─────────────────────────────
+fn seed_closed_incident(db :: conn.ConnDb, cid :: Str, tag :: Str, status :: Str, disposition :: Str, evidence_milli :: Int, at :: Str) -> [sql] Result[Unit, Str] {
+  match ledger.open_incident(db, cid, "liveness", str.concat(at, tag), "[\"liveness\"]", 100000) {
+    Err(e) => Err(e),
+    Ok(inc) => match ledger.record_evidence(db, inc, "probe", evidence_milli, "", at) {
+      Err(e) => Err(e),
+      Ok(_) => match ledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
+        Err(e) => Err(e),
+        Ok(act_id) => match ledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+          Err(e) => Err(e),
+          Ok(eff_id) => match ledger.record_disposition(db, eff_id, disposition, at) {
+            Err(e) => Err(e),
+            Ok(_) => ledger.close_incident(db, inc, status, at, ""),
+          },
+        },
+      },
+    },
+  }
+}
+
+fn check_operate_metrics(m :: ledger.OperateMetrics) -> Result[Unit, Str] {
+  if m.open_incidents != 1 {
+    Err(str.concat("wrong open count: ", int.to_str(m.open_incidents)))
+  } else {
+    if m.resolved_count != 1 {
+      Err(str.concat("wrong resolved count: ", int.to_str(m.resolved_count)))
+    } else {
+      if m.escalated_count != 1 {
+        Err(str.concat("wrong escalated count: ", int.to_str(m.escalated_count)))
+      } else {
+        if m.verified_effects != 2 {
+          Err(str.concat("wrong verified count: ", int.to_str(m.verified_effects)))
+        } else {
+          if m.hit_rate_pct != 50 {
+            Err(str.concat("wrong hit rate: ", int.to_str(m.hit_rate_pct)))
+          } else {
+            if m.avg_evidence_cost_milli != 400 {
+              Err(str.concat("wrong avg evidence cost: ", int.to_str(m.avg_evidence_cost_milli)))
+            } else {
+              Ok(())
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# One resolved incident (materialised, cost 500), one escalated incident
+# (falsified, cost 300), one still-open incident with no effect yet —
+# operate_metrics must fold all three into the right shape.
+fn test_operate_metrics_aggregates_incidents_and_effects() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("metrics")
+      let t := time.now_str()
+      match seed_closed_incident(db, cid, "-r", "resolved", "materialised", 500, t) {
+        Err(e) => Err(e),
+        Ok(_) => match seed_closed_incident(db, cid, "-e", "escalated", "falsified", 300, t) {
+          Err(e) => Err(e),
+          Ok(_) => match ledger.open_incident(db, cid, "liveness", str.concat(t, "-open"), "[\"liveness\"]", 100000) {
+            Err(e) => Err(e),
+            Ok(_) => check_operate_metrics(ledger.operate_metrics(db, cid)),
+          },
+        },
+      }
+    },
+  }
+}
+
+fn test_operate_metrics_empty_for_untouched_company() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let m := ledger.operate_metrics(db, fresh_company("untouched"))
+      if m.open_incidents == 0 and m.resolved_count == 0 and m.escalated_count == 0 and m.verified_effects == 0 and m.avg_evidence_cost_milli == 0 {
+        Ok(())
+      } else {
+        Err("expected all-zero metrics for a company with no operate history")
+      }
+    },
+  }
+}
+
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content()]
+  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

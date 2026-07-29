@@ -602,3 +602,143 @@ fn class_hit_rate_pct(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
   }
 }
 
+# ── CTL7: company-scoped controller metrics for the Strategist ──────────────
+# The Strategist reads summarised numbers here, never incident narrative —
+# same trust boundary as diagnosis/actuation (#118 design invariant).
+fn pct_of(hits :: Int, total :: Int) -> Int
+  examples {
+    pct_of(7, 10) => 70,
+    pct_of(0, 0) => 0
+  }
+{
+  if total == 0 {
+    0
+  } else {
+    hits * 100 / total
+  }
+}
+
+type IncidentCountRow = { open_n :: Int, resolved_n :: Int, escalated_n :: Int }
+
+# Open vs. terminal-resolved vs. terminal-escalated incident counts for a
+# company — the "resolved (auto) vs. escalated" split CTL7 asks for.
+fn incident_counts(db :: conn.ConnDb, company_id :: Str) -> [sql] IncidentCountRow {
+  let stmt := "SELECT COALESCE(SUM(CASE WHEN closed_at='' THEN 1 ELSE 0 END), 0) AS open_n, COALESCE(SUM(CASE WHEN status='resolved' THEN 1 ELSE 0 END), 0) AS resolved_n, COALESCE(SUM(CASE WHEN status='escalated' THEN 1 ELSE 0 END), 0) AS escalated_n FROM operate_incidents WHERE company_id=?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[IncidentCountRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => { open_n: 0, resolved_n: 0, escalated_n: 0 },
+    Ok(rs) => match list.head(rs) {
+      None => { open_n: 0, resolved_n: 0, escalated_n: 0 },
+      Some(r) => r,
+    },
+  }
+}
+
+type EvidenceCostRow = { total_milli :: Int, closed_n :: Int }
+
+# Total evidence spend (the incident budget CTL4/#85 already meters) over
+# closed incidents — "evidence cost per incident resolved" is total/closed_n.
+fn evidence_cost_stats(db :: conn.ConnDb, company_id :: Str) -> [sql] EvidenceCostRow {
+  let stmt := "SELECT COALESCE(SUM(budget_spent_milli), 0) AS total_milli, COALESCE(SUM(CASE WHEN closed_at!='' THEN 1 ELSE 0 END), 0) AS closed_n FROM operate_incidents WHERE company_id=?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[EvidenceCostRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => { total_milli: 0, closed_n: 0 },
+    Ok(rs) => match list.head(rs) {
+      None => { total_milli: 0, closed_n: 0 },
+      Some(r) => r,
+    },
+  }
+}
+
+type WindowHitRow = { hits :: Int, total :: Int }
+
+# Company-wide hit rate over ALL verified (non-pending) effects — every
+# class this company has ever contracted, folded together.
+fn company_effect_stats(db :: conn.ConnDb, company_id :: Str) -> [sql] WindowHitRow {
+  let stmt := "SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition!='pending'"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[WindowHitRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => { hits: 0, total: 0 },
+    Ok(rs) => match list.head(rs) {
+      None => { hits: 0, total: 0 },
+      Some(r) => r,
+    },
+  }
+}
+
+# Hit rate over the `limit_n` most-recently-disposed effects, `offset_n`
+# back from the newest — the two windows a trend compares.
+fn company_hit_window(db :: conn.ConnDb, company_id :: Str, limit_n :: Int, offset_n :: Int) -> [sql] WindowHitRow {
+  let stmt := "SELECT COALESCE(SUM(CASE WHEN disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM (SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition!='pending' ORDER BY e.disposed_at DESC LIMIT ? OFFSET ?) w"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PInt(limit_n), PInt(offset_n)] }, db.dialect)
+  let rows :: Result[List[WindowHitRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => { hits: 0, total: 0 },
+    Ok(rs) => match list.head(rs) {
+      None => { hits: 0, total: 0 },
+      Some(r) => r,
+    },
+  }
+}
+
+fn trend_window_size() -> Int
+  examples {
+    trend_window_size() => 10
+  }
+{
+  10
+}
+
+# Pure comparison: recent window's hit rate against the one before it. A
+# window under 4 verified effects is too thin to call a direction on, so
+# both windows must clear that floor before "improving"/"declining" is said.
+fn hit_rate_trend_str(recent :: WindowHitRow, older :: WindowHitRow) -> Str
+  examples {
+    hit_rate_trend_str({ hits: 1, total: 2 }, { hits: 0, total: 1 }) => "insufficient data",
+    hit_rate_trend_str({ hits: 9, total: 10 }, { hits: 5, total: 10 }) => "improving (50% -> 90%)",
+    hit_rate_trend_str({ hits: 5, total: 10 }, { hits: 9, total: 10 }) => "declining (90% -> 50%)",
+    hit_rate_trend_str({ hits: 7, total: 10 }, { hits: 7, total: 10 }) => "steady (~70%)"
+  }
+{
+  if recent.total < 4 or older.total < 4 {
+    "insufficient data"
+  } else {
+    let r_pct := pct_of(recent.hits, recent.total)
+    let o_pct := pct_of(older.hits, older.total)
+    let diff := r_pct - o_pct
+    if diff > 5 {
+      str.join(["improving (", int.to_str(o_pct), "% -> ", int.to_str(r_pct), "%)"], "")
+    } else {
+      if diff < -5 {
+        str.join(["declining (", int.to_str(o_pct), "% -> ", int.to_str(r_pct), "%)"], "")
+      } else {
+        str.join(["steady (~", int.to_str(r_pct), "%)"], "")
+      }
+    }
+  }
+}
+
+fn company_hit_rate_trend(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let w := trend_window_size()
+  hit_rate_trend_str(company_hit_window(db, company_id, w, 0), company_hit_window(db, company_id, w, w))
+}
+
+# The Strategist-facing rollup: everything CTL7 asks for in one call —
+# open/resolved/escalated incidents, verified-action hit rate + trend,
+# average evidence cost per closed incident. No incident narrative.
+type OperateMetrics = { open_incidents :: Int, resolved_count :: Int, escalated_count :: Int, verified_effects :: Int, hit_rate_pct :: Int, hit_rate_trend :: Str, avg_evidence_cost_milli :: Int }
+
+fn operate_metrics(db :: conn.ConnDb, company_id :: Str) -> [sql] OperateMetrics {
+  let ic := incident_counts(db, company_id)
+  let overall := company_effect_stats(db, company_id)
+  let ec := evidence_cost_stats(db, company_id)
+  { open_incidents: ic.open_n, resolved_count: ic.resolved_n, escalated_count: ic.escalated_n, verified_effects: overall.total, hit_rate_pct: pct_of(overall.hits, overall.total), hit_rate_trend: company_hit_rate_trend(db, company_id), avg_evidence_cost_milli: if ec.closed_n == 0 {
+    0
+  } else {
+    ec.total_milli / ec.closed_n
+  } }
+}
+

@@ -1720,6 +1720,26 @@ fn error_line_count(errors :: Str) -> Int
   }
 }
 
+# CTL7 (#118/#125): the ledger-derived numbers the Strategist reads instead
+# of (or in addition to) raw incident narrative — same summarised-numbers
+# pattern as the cost ledger (#94) already used in board_report below.
+fn format_operate_metrics(m :: oledger.OperateMetrics, cost_cents :: Int) -> Str
+  examples {
+    format_operate_metrics({ open_incidents: 1, resolved_count: 2, escalated_count: 0, verified_effects: 10, hit_rate_pct: 80, hit_rate_trend: "steady (~80%)", avg_evidence_cost_milli: 500 }, 1234) => "Controller metrics — open incidents: 1, resolved: 2, escalated: 0, verified actions: 10, hit rate: 80% (steady (~80%)), avg evidence cost per closed incident: 500m, company spend so far: $12.34"
+  }
+{
+  str.join(["Controller metrics — open incidents: ", int.to_str(m.open_incidents), ", resolved: ", int.to_str(m.resolved_count), ", escalated: ", int.to_str(m.escalated_count), ", verified actions: ", int.to_str(m.verified_effects), ", hit rate: ", int.to_str(m.hit_rate_pct), "% (", m.hit_rate_trend, "), avg evidence cost per closed incident: ", int.to_str(m.avg_evidence_cost_milli), "m, company spend so far: ", format_cents(cost_cents)], "")
+}
+
+fn operate_metrics_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let m := oledger.operate_metrics(db, company_id)
+  if m.open_incidents == 0 and m.resolved_count == 0 and m.escalated_count == 0 and m.verified_effects == 0 {
+    "(no controller data yet for this company)"
+  } else {
+    format_operate_metrics(m, get_company_cost_cents(db, company_id))
+  }
+}
+
 fn format_incident(i :: oledger.IncidentRow) -> Str {
   let state := if str.is_empty(i.closed_at) {
     "OPEN since "
@@ -1751,14 +1771,15 @@ fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   } else {
     str.join([liveness_str, "\nIncidents (operate ledger, latest 3):\n", str.join(list.map(incidents, format_incident), "\n")], "")
   }
+  let metrics_str := str.join([incidents_str, "\n\n", operate_metrics_section(db, company_id)], "")
   let errors := recent_operate_signals(db, company_id, "errors", 1)
   let noisy := list.fold(errors, false, fn (acc :: Bool, line :: Str) -> Bool {
     acc or error_line_count(after_ts(line)) > 0
   })
   if noisy {
-    str.join([incidents_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
+    str.join([metrics_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
   } else {
-    incidents_str
+    metrics_str
   }
 }
 

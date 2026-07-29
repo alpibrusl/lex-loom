@@ -88,24 +88,33 @@ fn oscillation_window_idx(dwell_delta_idx :: Int) -> Int
 }
 
 # ── Real ClassStats — folding the kernel's own `record` over ledger history ──
-# The measured record for a class, built by replaying every verified
-# disposition through `lex-ctl/tier.record` in the order the breaker
-# actually experienced them. This is the kernel's own fold, not a
-# reimplementation — `record`'s consecutive-miss counting is exactly
-# what the circuit breaker consumes.
-fn real_stats(db :: conn.ConnDb, class_key :: Str) -> [sql] ktier.ClassStats {
-  list.fold(ledger.class_dispositions(db, class_key), ktier.empty_stats(), fn (s :: ktier.ClassStats, d :: Str) -> ktier.ClassStats {
+# The measured record for a class ON ONE COMPANY, built by replaying
+# every verified disposition through `lex-ctl/tier.record` in the order
+# the breaker actually experienced them. This is the kernel's own fold,
+# not a reimplementation — `record`'s consecutive-miss counting is
+# exactly what the circuit breaker consumes.
+#
+# Company-scoped (#134): a class key names a KIND of remediation
+# ("restart"), not a specific target — company A's servers being
+# reliably restartable says nothing about company B's, whose actual
+# infrastructure is entirely different. Scoring by class_key alone let
+# one company's failures trip the breaker (or dilute the hit rate) for
+# every other company, and let a clean company reach Auto by borrowing
+# another's record.
+fn real_stats(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] ktier.ClassStats {
+  list.fold(ledger.class_dispositions(db, company_id, class_key), ktier.empty_stats(), fn (s :: ktier.ClassStats, d :: Str) -> ktier.ClassStats {
     ktier.record(s, d == "materialised")
   })
 }
 
-# The tier a class actually operates at right now: structural ceiling
-# demoted by the measured record and the circuit breaker — never
-# promoted past its ceiling, never promoted on another class's record.
-fn real_tier(db :: conn.ConnDb, class_key :: Str) -> [sql] Option[ktier.Tier] {
+# The tier a class actually operates at right now FOR ONE COMPANY:
+# structural ceiling demoted by that company's own measured record and
+# circuit breaker — never promoted past its ceiling, never promoted on
+# another class's (or another company's) record.
+fn real_tier(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Option[ktier.Tier] {
   match eff.action_spec_by_class_key(class_key) {
     None => None,
-    Some(spec) => Some(ktier.effective(eff.action_class_of(spec), real_stats(db, class_key), policy())),
+    Some(spec) => Some(ktier.effective(eff.action_class_of(spec), real_stats(db, company_id, class_key), policy())),
   }
 }
 
@@ -167,7 +176,7 @@ fn str_concat_blocked(reason :: Str) -> Str {
 fn decide(db :: conn.ConnDb, effect :: Str, now_idx :: Int) -> [sql] Result[Decision, Str] {
   match ledger.effect_full(db, effect) {
     None => Err("no such effect"),
-    Some(r) => match real_tier(db, r.class_key) {
+    Some(r) => match real_tier(db, r.company_id, r.class_key) {
       None => Err("no action spec for class"),
       Some(Escalate) => Ok(Cleared(Escalate)),
       Some(Propose) => Ok(Cleared(Propose)),

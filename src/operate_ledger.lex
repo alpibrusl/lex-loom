@@ -355,6 +355,28 @@ fn corpus_size(db :: conn.ConnDb) -> [sql] Int {
   }
 }
 
+# Grant an evidence budget to an incident that has none (cap 0) — used
+# before shadow-diagnosing backfilled episodes, which predate budgets.
+# Never shrinks an existing cap.
+fn ensure_budget_cap(db :: conn.ConnDb, incident :: Str, cap_milli :: Int) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE operate_incidents SET budget_cap_milli=? WHERE id=? AND budget_cap_milli=0", params: [PInt(cap_milli), PStr(incident)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# Ground-truth label for corpus scoring (CTL4): a human (or a test) names
+# the incident's actual root cause; diagnosis accuracy is measured only
+# over labeled incidents.
+fn label_root_cause(db :: conn.ConnDb, incident :: Str, cause :: Str) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE operate_incidents SET root_cause=? WHERE id=?", params: [PStr(cause), PStr(incident)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
 type IncidentRow = { id :: Str, status :: Str, symptoms_json :: Str, opened_at :: Str, closed_at :: Str }
 
 fn recent_incidents(db :: conn.ConnDb, company_id :: Str, limit :: Int) -> [sql] List[IncidentRow] {

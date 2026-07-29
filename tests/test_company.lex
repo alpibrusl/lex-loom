@@ -24,6 +24,8 @@ import "../src/company" as company
 
 import "../src/company_runner" as company_runner
 
+import "../src/operate_ledger" as oledger
+
 import "lex-schema/json_value" as jv
 
 # ── C2: condition DSL (pure) ──────────────────────────────────────────────────
@@ -1460,6 +1462,89 @@ fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
   }
 }
 
+# ── CTL7 (#118/#125): Strategist consumes controller metrics ────────────────
+# Records one closed incident with an evidence cost, an action, an effect,
+# and its disposition — the minimum shape operate_metrics aggregates over.
+fn seed_metrics_incident(db :: conn.ConnDb, cid :: Str, tag :: Str, status :: Str, disposition :: Str, evidence_milli :: Int, at :: Str) -> [sql] Result[Unit, Str] {
+  match oledger.open_incident(db, cid, "liveness", str.concat(at, tag), "[\"liveness\"]", 100000) {
+    Err(e) => Err(e),
+    Ok(inc) => match oledger.record_evidence(db, inc, "probe", evidence_milli, "", at) {
+      Err(e) => Err(e),
+      Ok(_) => match oledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
+        Err(e) => Err(e),
+        Ok(act_id) => match oledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+          Err(e) => Err(e),
+          Ok(eff_id) => match oledger.record_disposition(db, eff_id, disposition, at) {
+            Err(e) => Err(e),
+            Ok(_) => oledger.close_incident(db, inc, status, at, ""),
+          },
+        },
+      },
+    },
+  }
+}
+
+fn test_operate_section_no_controller_data_yet() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("op-metrics-none")
+        let section := company.operate_section(db, id)
+        if str.contains(section, "no controller data yet") {
+          Ok(())
+        } else {
+          Err(str.concat("expected the no-data case to be stated gracefully, got: ", section))
+        }
+      },
+    },
+  }
+}
+
+# The acceptance criterion for #125: two companies with identical build-loop
+# state produce materially different Strategist prompts once their
+# operate-ledger profiles diverge — a heavy-escalation, low-hit-rate company
+# must not read the same as a clean one, independent of the last QA verdict.
+fn test_strategist_prompt_differs_by_controller_metrics() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let clean := rand_id("ctl7-clean")
+        let rocky := rand_id("ctl7-rocky")
+        match seed_metrics_incident(db, rocky, "-a", "escalated", "falsified", 100, "2026-01-01T00:00:00Z") {
+          Err(e) => Err(e),
+          Ok(_) => match seed_metrics_incident(db, rocky, "-b", "escalated", "falsified", 200, "2026-01-01T00:05:00Z") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
+              let clean_operate := company.operate_section(db, clean)
+              let rocky_operate := company.operate_section(db, rocky)
+              let clean_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], clean_operate, "build status n/a", "Add widget v2", iter_ctx)
+              let rocky_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], rocky_operate, "build status n/a", "Add widget v2", iter_ctx)
+              if clean_prompt == rocky_prompt {
+                Err("identical build-loop state produced identical prompts despite divergent controller metrics")
+              } else {
+                if str.contains(rocky_prompt, "escalated: 2") {
+                  if str.contains(clean_prompt, "no controller data yet") {
+                    Ok(())
+                  } else {
+                    Err(str.concat("clean company should read as no-data-yet: ", clean_prompt))
+                  }
+                } else {
+                  Err(str.concat("rocky company's escalation count missing from its prompt: ", rocky_prompt))
+                }
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 # ── OP3 (#87): cost ledger ────────────────────────────────────────────────────
 fn insert_test_usage(db :: conn.ConnDb, owner_id :: Str, total_tokens :: Int) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
@@ -1875,7 +1960,7 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {

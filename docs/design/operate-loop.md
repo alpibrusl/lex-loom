@@ -383,6 +383,42 @@ not a metrics surface — legible without reconstructing the reasoning.
 
 ---
 
+### 2.9 Strategist feed — ledger metrics into the board (CTL7, #125)
+
+The Strategist (C8, #62) is the one place in the build loop that already
+reads a summarised, non-narrative signal from the ledger — the OPERATE
+SIGNALS section wired by #86. Phases 0–4 gave the ledger real
+incident/effect/evidence history; CTL7 closes the loop by having the
+Strategist actually read it, per company/track:
+
+- open incident count
+- incidents resolved vs. escalated (the terminal-status split, #120)
+- verified-action hit rate, company-wide, plus a two-window trend
+  (most-recent vs. the window before it; under 4 samples in either window
+  reads as "insufficient data" rather than a false direction)
+- average evidence cost per closed incident, correlated with the existing
+  cost ledger (#94, `get_company_cost_cents`)
+
+Same trust boundary as diagnosis and actuation: the Strategist reads
+*summarised numbers*, never incident narrative (hypotheses text, symptom
+JSON). A sustained escalation/cost pattern on a shipped feature is now
+explicit evidence against `continue` in the Strategist's own system prompt,
+independent of the last QA verdict — QA proves the code once; the
+controller metrics show whether it keeps working in production.
+
+*Shipped (CTL7): `operate_ledger.operate_metrics` — one rollup query per
+company, folded from `incident_counts`/`evidence_cost_stats`/
+`company_effect_stats`/`company_hit_rate_trend`. Wired into
+`company.operate_section` (so it reaches the Strategist prompt with no
+signature change — `strategist_prompt`'s existing `operate :: Str`
+parameter already threads through `decide_next`), rendered by
+`company.format_operate_metrics`, with an explicit "(no controller data yet
+for this company)" case so a company with no operate history reads
+gracefully rather than as a blank or a zero. `roles.strategist_system_prompt`
+now explains the new metrics and states the sustained-load rule above.*
+
+---
+
 ## 3. Kernel / host split
 
 | Concern | `lex-ctl` (mechanism) | loom (policy + wiring) |

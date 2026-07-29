@@ -108,6 +108,41 @@ fn test_backfill_idempotent() -> [sql, fs_write, concurrent, crypto, fs_read, io
   }
 }
 
+# #137: liveness and errors are backfilled as independent per-kind
+# streams; if a company's history ends unhealthy on BOTH at once, each
+# kind's walk used to leave its own incident open. reconcile_open_
+# incidents must collapse that back down to exactly one, so a live
+# firing after backfill unambiguously attaches to the same incident
+# `sensing.open_incident_for` would pick.
+fn test_backfill_merges_concurrent_open_incidents() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => match tlog.open_memory() {
+      Err(e) => Err(e),
+      Ok(log) => {
+        let cid := fresh_company("dualopen")
+        let __1 := seed_signal(db, cid, 1, "liveness", "down (launch: http://x)", "2026-01-01T00:00:01")
+        let __2 := seed_signal(db, cid, 2, "errors", "Traceback boom", "2026-01-01T00:00:02")
+        match ledger.backfill_company(db, log, cid) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let opens := ledger.open_incidents_for(db, cid)
+            if list.len(opens) == 1 {
+              if list.len(ledger.incidents_for(db, cid)) == 2 {
+                Ok(())
+              } else {
+                Err("expected both episodes to still exist (one resolved, one open), not deleted")
+              }
+            } else {
+              Err(str.concat("expected exactly 1 open incident after backfill, got ", int.to_str(list.len(opens))))
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
 fn test_replay_orders_full_chain() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
   match open_db() {
     Err(e) => Err(e),
@@ -307,8 +342,63 @@ fn test_operate_metrics_empty_for_untouched_company() -> [sql, fs_write, concurr
   }
 }
 
+# #138: hit_rate_trend_str's own examples{} prove the pure comparison,
+# but nothing exercised company_hit_window's actual SQL windowing — an
+# off-by-one in its LIMIT/OFFSET or a wrong ORDER BY direction would
+# have gone undetected. Fixed literal, minute-apart timestamps (not
+# time.now_str()) so the two windows partition deterministically: an
+# all-falsified older window (0%) and an all-materialised recent one
+# (100%) must read as "improving".
+fn seed_disposition_at(db :: conn.ConnDb, cid :: Str, disposition :: Str, at :: Str) -> [sql] Result[Unit, Str] {
+  match ledger.open_incident(db, cid, "liveness", str.concat(at, "-trend"), "[\"liveness\"]", 0) {
+    Err(e) => Err(e),
+    Ok(inc) => match ledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
+      Err(e) => Err(e),
+      Ok(act) => match ledger.record_effect(db, act, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+        Err(e) => Err(e),
+        Ok(eff) => ledger.record_disposition(db, eff, disposition, at),
+      },
+    },
+  }
+}
+
+fn seed_disposition_list(db :: conn.ConnDb, cid :: Str, disposition :: Str, times :: List[Str]) -> [sql] Result[Unit, Str] {
+  match list.head(times) {
+    None => Ok(()),
+    Some(t) => match seed_disposition_at(db, cid, disposition, t) {
+      Err(e) => Err(e),
+      Ok(_) => seed_disposition_list(db, cid, disposition, list.tail(times)),
+    },
+  }
+}
+
+fn test_company_hit_rate_trend_reflects_actual_windowing() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("trend")
+      let older_times := ["2026-03-01T00:00:01", "2026-03-01T00:00:02", "2026-03-01T00:00:03", "2026-03-01T00:00:04", "2026-03-01T00:00:05", "2026-03-01T00:00:06", "2026-03-01T00:00:07", "2026-03-01T00:00:08", "2026-03-01T00:00:09", "2026-03-01T00:00:10"]
+      let recent_times := ["2026-03-01T00:01:01", "2026-03-01T00:01:02", "2026-03-01T00:01:03", "2026-03-01T00:01:04", "2026-03-01T00:01:05", "2026-03-01T00:01:06", "2026-03-01T00:01:07", "2026-03-01T00:01:08", "2026-03-01T00:01:09", "2026-03-01T00:01:10"]
+      match seed_disposition_list(db, cid, "falsified", older_times) {
+        Err(e) => Err(e),
+        Ok(_) => match seed_disposition_list(db, cid, "materialised", recent_times) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let trend := ledger.company_hit_rate_trend(db, cid)
+            if trend == "improving (0% -> 100%)" {
+              Ok(())
+            } else {
+              Err(str.concat("expected 'improving (0% -> 100%)', got ", trend))
+            }
+          },
+        },
+      }
+    },
+  }
+}
+
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company()]
+  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_backfill_merges_concurrent_open_incidents(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company(), test_company_hit_rate_trend_reflects_actual_windowing()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

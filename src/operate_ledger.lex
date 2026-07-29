@@ -301,12 +301,90 @@ fn backfill_kind(db :: conn.ConnDb, log :: tlog.Log, company_id :: Str, kind :: 
   }
 }
 
+type OpenIncidentRow = { id :: Str }
+
+# Every currently-open incident for a company, oldest first.
+fn open_incidents_for(db :: conn.ConnDb, company_id :: Str) -> [sql] List[OpenIncidentRow] {
+  let q := ormq.for_dialect({ sql: "SELECT id FROM operate_incidents WHERE company_id=? AND closed_at='' ORDER BY opened_at ASC", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[OpenIncidentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+type LastSignalRow = { observed_at :: Str }
+
+# The last signal actually linked to an incident — the closing
+# timestamp a merge (below) uses, so a closed-as-redundant incident's
+# `closed_at` reflects its own evidence, not an arbitrary "now".
+fn last_signal_at(db :: conn.ConnDb, incident :: Str) -> [sql] Str {
+  let q := ormq.for_dialect({ sql: "SELECT observed_at FROM company_operate_signals WHERE incident_id=? ORDER BY idx DESC LIMIT 1", params: [PStr(incident)] }, db.dialect)
+  let rows :: Result[List[LastSignalRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => "",
+    Ok(rs) => match list.head(rs) {
+      None => "",
+      Some(r) => r.observed_at,
+    },
+  }
+}
+
+fn close_redundant_opens(db :: conn.ConnDb, log :: tlog.Log, rows :: List[OpenIncidentRow]) -> [sql, time] Result[Int, Str] {
+  match list.head(rows) {
+    None => Ok(0),
+    Some(r) => match close_incident(db, r.id, "resolved", last_signal_at(db, r.id), "") {
+      Err(e) => Err(e),
+      Ok(_) => match trail_incident_closed(log, r.id, "resolved", None) {
+        Err(e) => Err(e),
+        Ok(_) => match close_redundant_opens(db, log, list.tail(rows)) {
+          Err(e) => Err(e),
+          Ok(n) => Ok(n + 1),
+        },
+      },
+    },
+  }
+}
+
+# `backfill_kind` processes "liveness" and "errors" as fully
+# independent per-kind streams, each starting its own walk with no
+# incident open (#137). If a company's history ends unhealthy on BOTH
+# series at once, this leaves two simultaneously-open incidents — but
+# every live-sensing function (`sensing.open_incident_for`, `all_calm`,
+# `sense_company`) assumes at most one open incident per company,
+# picking whichever was opened most recently. Left alone, a live firing
+# after backfill would attach to "whichever incident happens to be
+# more recent" — possibly the wrong kind's episode entirely.
+#
+# Closes every open incident except the one `open_incident_for` would
+# already pick (the most recently opened) as 'resolved', so after
+# backfill there is unambiguously at most one — restoring the
+# invariant rather than merely working around it.
+# `opens` has length >= 2 here (the `<= 1` case already returned), so
+# `list.reverse` is non-empty and `list.tail` drops only the most
+# recently opened one (now first, after the reverse) — leaving every
+# OTHER (older) open incident to be closed as redundant.
+fn reconcile_open_incidents(db :: conn.ConnDb, log :: tlog.Log, company_id :: Str) -> [sql, time] Result[Unit, Str] {
+  let opens := open_incidents_for(db, company_id)
+  if list.len(opens) <= 1 {
+    Ok(())
+  } else {
+    match close_redundant_opens(db, log, list.tail(list.reverse(opens))) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(()),
+    }
+  }
+}
+
 fn backfill_company(db :: conn.ConnDb, log :: tlog.Log, company_id :: Str) -> [sql, time] Result[Int, Str] {
   match backfill_kind(db, log, company_id, "liveness") {
     Err(e) => Err(e),
     Ok(a) => match backfill_kind(db, log, company_id, "errors") {
       Err(e) => Err(e),
-      Ok(b) => Ok(a + b),
+      Ok(b) => match reconcile_open_incidents(db, log, company_id) {
+        Err(e) => Err(e),
+        Ok(_) => Ok(a + b),
+      },
     },
   }
 }
@@ -450,6 +528,20 @@ type EffectIdRow = { id :: Str }
 
 fn pending_effects(db :: conn.ConnDb) -> [sql] List[Str] {
   let q := ormq.for_dialect({ sql: "SELECT id FROM operate_effects WHERE disposition='pending' ORDER BY contracted_at_idx ASC", params: [] }, db.dialect)
+  let rows :: Result[List[EffectIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: EffectIdRow) -> Str {
+      r.id
+    }),
+  }
+}
+
+# Same as `pending_effects`, scoped to one company — the board report
+# (#139) needs to know which of ITS OWN pending contracts to run
+# through `actuation.decide`, not every company's.
+fn pending_effects_for_company(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT e.id AS id FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND e.disposition='pending' ORDER BY e.contracted_at_idx ASC", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[EffectIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],

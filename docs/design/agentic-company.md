@@ -33,7 +33,7 @@ the missing piece visible:
 | Loop | Question it answers | loom status |
 |---|---|---|
 | **Build** | Can we make it? | **Have it.** Sprint → Digest → Improve (C1–C6), dynamic extension, cross-sprint memory. Proven twice this session. |
-| **Operate** | Is it working, for real people? | **Missing entirely.** No uptime signal, no usage signal, no support-message ingestion. Nothing external ever enters the system. |
+| **Operate** | Is it working, for real people? | **Missing entirely** *(when written — v0 landed since: #84/#85; the v1 controller design is `operate-loop.md`, epic #118)*. No uptime signal, no usage signal, no support-message ingestion. Nothing external ever enters the system. |
 | **Strategy** | What should we do next? | **Have a primitive version.** The Strategist (C8, #75) decides continue/revise/add/stop — but its only inputs are internal: mission text, shipped list, last QA verdict, digest summary, board notes. No revenue, no usage, no cost. |
 
 The Strategist cannot make a real business decision because it is never given
@@ -59,7 +59,11 @@ Ordered roughly bottom-up, product → business:
    autonomous** — this is the one place a human must always sign.
 4. **Operate** — uptime, error rates, usage counts, support inbox.
    ❌ **Does not exist at all.** This is the primary gap this document exists
-   to name.
+   to name. *(Update: v0 shipped — liveness #85, error-log scan, cost ledger
+   #94, Strategist grounding #86. The full layer — sensing → incidents →
+   gated actuation → effect verification — is designed in
+   [`operate-loop.md`](operate-loop.md), epic #118, on the
+   [`lex-ctl`](https://github.com/alpibrusl/lex-ctl) kernel.)*
 5. **Strategy** — decide what to build/kill next.
    ⚠️ Exists (C8) but only sees internal signals. Needs augmenting with
    Operate-loop output.

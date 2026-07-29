@@ -366,6 +366,17 @@ fn ensure_budget_cap(db :: conn.ConnDb, incident :: Str, cap_milli :: Int) -> [s
   }
 }
 
+# Set an incident's diagnosed verdict directly (bypassing the tool
+# ladder) — for tests and for a human overriding a diagnosis. The normal
+# writer is `diagnosis.diagnose`.
+fn set_diagnosed_cause(db :: conn.ConnDb, incident :: Str, cause :: Str, p_pct :: Int) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE operate_incidents SET diagnosed_cause=?, diagnosed_p_pct=? WHERE id=?", params: [PStr(cause), PInt(p_pct), PStr(incident)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
 # Ground-truth label for corpus scoring (CTL4): a human (or a test) names
 # the incident's actual root cause; diagnosis accuracy is measured only
 # over labeled incidents.
@@ -374,6 +385,91 @@ fn label_root_cause(db :: conn.ConnDb, incident :: Str, cause :: Str) -> [sql] R
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
+  }
+}
+
+# Read the incident row propose_contract needs: which company, and what
+# diagnosis (CTL4) said. cause/p_pct are '' / 0 when undiagnosed.
+type IncidentDiagRow = { company_id :: Str, diagnosed_cause :: Str, diagnosed_p_pct :: Int, symptoms_json :: Str }
+
+fn incident_diag(db :: conn.ConnDb, incident :: Str) -> [sql] Option[IncidentDiagRow] {
+  let q := ormq.for_dialect({ sql: "SELECT company_id, diagnosed_cause, diagnosed_p_pct, symptoms_json FROM operate_incidents WHERE id=?", params: [PStr(incident)] }, db.dialect)
+  let rows :: Result[List[IncidentDiagRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+# Persist a contract's iteration-index window (CTL5). loom has no
+# wall-clock scheduler yet, so the between-iteration counter (`idx`,
+# already the ordering key on every operate_* row) stands in for the
+# kernel's "ms" unit — the same field name (`deadline_ms`) is reused with
+# this meaning when the row is handed to lex-ctl's verifier.
+fn set_effect_window(db :: conn.ConnDb, effect :: Str, contracted_at_idx :: Int, deadline_idx :: Int) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "UPDATE operate_effects SET contracted_at_idx=?, deadline_idx=? WHERE id=?", params: [PInt(contracted_at_idx), PInt(deadline_idx), PStr(effect)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# Full row needed to reconstruct a lex-ctl EffectContract for judging.
+type EffectFullRow = { action_id :: Str, incident_id :: Str, company_id :: Str, class_key :: Str, subsystem :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at_idx :: Int, deadline_idx :: Int, confidence_pct :: Int, on_falsify :: Str, disposition :: Str }
+
+fn effect_full(db :: conn.ConnDb, effect :: Str) -> [sql] Option[EffectFullRow] {
+  let stmt := "SELECT a.id AS action_id, e.incident_id AS incident_id, a.company_id AS company_id, a.class_key AS class_key, a.subsystem AS subsystem, e.signal AS signal, e.cmp AS cmp, e.threshold_milli AS threshold_milli, e.contracted_at_idx AS contracted_at_idx, e.deadline_idx AS deadline_idx, e.confidence_pct AS confidence_pct, e.on_falsify AS on_falsify, e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE e.id=?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(effect)] }, db.dialect)
+  let rows :: Result[List[EffectFullRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+type EffectIdRow = { id :: Str }
+
+fn pending_effects(db :: conn.ConnDb) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT id FROM operate_effects WHERE disposition='pending' ORDER BY contracted_at_idx ASC", params: [] }, db.dialect)
+  let rows :: Result[List[EffectIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: EffectIdRow) -> Str {
+      r.id
+    }),
+  }
+}
+
+type CountRow2 = { n :: Int }
+
+# Other STILL-PENDING contracts on the same subsystem whose window
+# overlaps this one's — the ambiguity signal the verifier needs. A
+# contract's own row is excluded by id.
+fn concurrent_on_subsystem(db :: conn.ConnDb, subsystem :: Str, exclude_effect :: Str, contracted_at_idx :: Int, deadline_idx :: Int) -> [sql] Int {
+  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.subsystem=? AND e.id!=? AND e.disposition='pending' AND e.contracted_at_idx<=? AND e.deadline_idx>=?"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(subsystem), PStr(exclude_effect), PInt(deadline_idx), PInt(contracted_at_idx)] }, db.dialect)
+  let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
+  }
+}
+
+# Verified (non-pending) sample count for a class — the ≥30-samples half
+# of the CTL6 promotion gate; class_hit_rate_pct is the ≥70% half.
+fn class_sample_count(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
+  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending'"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+  let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
   }
 }
 

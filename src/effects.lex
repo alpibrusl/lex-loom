@@ -289,13 +289,16 @@ fn action_spec_by_class_key(class_key :: Str) -> Option[ActionSpec] {
 }
 
 # Samples ≥ 30 and hit rate ≥ 70% — the phase-3 promotion criterion for
-# starting CTL6 on that class. Ceiling comes from the classification
-# alone (lex-ctl/tier.ceiling); a class whose ceiling is Escalate can
-# meet the numeric bar and still never be `promotable` for Auto, since
-# CTL6 only ever arms a class whose ceiling reaches Auto.
-fn class_promotion_status(db :: conn.ConnDb, class_key :: Str) -> [sql] PromotionStatus {
-  let samples := ledger.class_sample_count(db, class_key)
-  let hit_rate := ledger.class_hit_rate_pct(db, class_key)
+# starting CTL6 on that class, for ONE company (#134 — the measured
+# record must not cross company boundaries: company A's servers being
+# reliably restartable says nothing about company B's). Ceiling comes
+# from the classification alone (lex-ctl/tier.ceiling); a class whose
+# ceiling is Escalate can meet the numeric bar and still never be
+# `promotable` for Auto, since CTL6 only ever arms a class whose
+# ceiling reaches Auto.
+fn class_promotion_status(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] PromotionStatus {
+  let samples := ledger.class_sample_count(db, company_id, class_key)
+  let hit_rate := ledger.class_hit_rate_pct(db, company_id, class_key)
   let ceiling := match action_spec_by_class_key(class_key) {
     None => Escalate,
     Some(spec) => ktier.ceiling(action_class_of(spec)),

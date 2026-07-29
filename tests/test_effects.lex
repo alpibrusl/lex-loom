@@ -304,7 +304,7 @@ fn test_compensatable_class_ceiling_is_propose() -> [sql, fs_write, concurrent, 
   match open_db() {
     Err(e) => Err(e),
     Ok(db) => {
-      let status := eff.class_promotion_status(db, "scale")
+      let status := eff.class_promotion_status(db, "promo-scale-co", "scale")
       match status.ceiling {
         Propose => if not status.promotable {
           Ok(())
@@ -326,7 +326,7 @@ fn test_idempotent_class_ceiling_is_auto() -> [sql, fs_write, concurrent, crypto
   match open_db() {
     Err(e) => Err(e),
     Ok(db) => {
-      let status := eff.class_promotion_status(db, "restart")
+      let status := eff.class_promotion_status(db, "promo-restart-co", "restart")
       match status.ceiling {
         Auto => Ok(()),
         _ => Err("expected the restart class's ceiling to be Auto"),

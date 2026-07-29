@@ -75,9 +75,16 @@ fn evidence_id(incident :: Str, query_text :: Str, observed_at :: Str) -> Str
 }
 
 # ── Recording ─────────────────────────────────────────────────────────────────
+# Every insert below uses `ON CONFLICT(id) DO NOTHING`, not SQLite-only
+# `INSERT OR REPLACE` (#135 — the latter has no Postgres equivalent and
+# throws a syntax error on that dialect). DO NOTHING is the correct
+# semantics here, not just a portable substitute: every id in this file
+# is content-addressed (SHA-256 over the row's own fields), so a second
+# insert under the same id can only ever carry identical content —
+# there is nothing to "replace".
 fn open_incident(db :: conn.ConnDb, company_id :: Str, kind :: Str, opened_at :: Str, symptoms_json :: Str, cap_milli :: Int) -> [sql] Result[Str, Str] {
   let id := incident_id(company_id, kind, opened_at)
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO operate_incidents (id, company_id, opened_at, closed_at, status, symptoms_json, budget_spent_milli, budget_cap_milli, root_cause) VALUES (?, ?, ?, '', 'triage', ?, 0, ?, '')", params: [PStr(id), PStr(company_id), PStr(opened_at), PStr(symptoms_json), PInt(cap_milli)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO operate_incidents (id, company_id, opened_at, closed_at, status, symptoms_json, budget_spent_milli, budget_cap_milli, root_cause) VALUES (?, ?, ?, '', 'triage', ?, 0, ?, '') ON CONFLICT(id) DO NOTHING", params: [PStr(id), PStr(company_id), PStr(opened_at), PStr(symptoms_json), PInt(cap_milli)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(id),
@@ -108,7 +115,7 @@ fn link_signal(db :: conn.ConnDb, signal_row_id :: Str, incident :: Str) -> [sql
 
 fn record_action(db :: conn.ConnDb, incident :: Str, company_id :: Str, class_key :: Str, subsystem :: Str, params_json :: Str, tier :: Str, executed_at :: Str) -> [sql] Result[Str, Str] {
   let id := action_id(incident, class_key, executed_at)
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO operate_actions (id, incident_id, company_id, class_key, subsystem, params_json, tier, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(incident), PStr(company_id), PStr(class_key), PStr(subsystem), PStr(params_json), PStr(tier), PStr(executed_at)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO operate_actions (id, incident_id, company_id, class_key, subsystem, params_json, tier, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", params: [PStr(id), PStr(incident), PStr(company_id), PStr(class_key), PStr(subsystem), PStr(params_json), PStr(tier), PStr(executed_at)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(id),
@@ -117,7 +124,7 @@ fn record_action(db :: conn.ConnDb, incident :: Str, company_id :: Str, class_ke
 
 fn record_effect(db :: conn.ConnDb, action :: Str, incident :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at :: Str, deadline_at :: Str, confidence_pct :: Int, on_falsify :: Str) -> [sql] Result[Str, Str] {
   let id := effect_id(action, signal, cmp, threshold_milli, deadline_at, confidence_pct, on_falsify)
-  let q := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO operate_effects (id, action_id, incident_id, signal, cmp, threshold_milli, contracted_at, deadline_at, confidence_pct, on_falsify, disposition, disposed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '')", params: [PStr(id), PStr(action), PStr(incident), PStr(signal), PStr(cmp), PInt(threshold_milli), PStr(contracted_at), PStr(deadline_at), PInt(confidence_pct), PStr(on_falsify)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO operate_effects (id, action_id, incident_id, signal, cmp, threshold_milli, contracted_at, deadline_at, confidence_pct, on_falsify, disposition, disposed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '') ON CONFLICT(id) DO NOTHING", params: [PStr(id), PStr(action), PStr(incident), PStr(signal), PStr(cmp), PInt(threshold_milli), PStr(contracted_at), PStr(deadline_at), PInt(confidence_pct), PStr(on_falsify)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(id),
@@ -154,7 +161,7 @@ fn record_evidence(db :: conn.ConnDb, incident :: Str, query_text :: Str, cost_m
         Err("evidence budget exhausted")
       } else {
         let id := evidence_id(incident, query_text, observed_at)
-        let iq := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO operate_evidence (id, incident_id, query_text, cost_milli, result_ref, observed_at) VALUES (?, ?, ?, ?, ?, ?)", params: [PStr(id), PStr(incident), PStr(query_text), PInt(cost_milli), PStr(result_ref), PStr(observed_at)] }, db.dialect)
+        let iq := ormq.for_dialect({ sql: "INSERT INTO operate_evidence (id, incident_id, query_text, cost_milli, result_ref, observed_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", params: [PStr(id), PStr(incident), PStr(query_text), PInt(cost_milli), PStr(result_ref), PStr(observed_at)] }, db.dialect)
         match sql.exec(db.handle, iq.sql, iq.params) {
           Err(e) => Err(e.message),
           Ok(_) => {
@@ -470,11 +477,17 @@ fn concurrent_on_subsystem(db :: conn.ConnDb, subsystem :: Str, exclude_effect :
   }
 }
 
-# Verified (non-pending) sample count for a class — the ≥30-samples half
-# of the CTL6 promotion gate; class_hit_rate_pct is the ≥70% half.
-fn class_sample_count(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
-  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending'"
-  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+# Verified (non-pending) sample count for a class, scoped to ONE
+# company — the ≥30-samples half of the CTL6 promotion gate;
+# class_hit_rate_pct is the ≥70% half. Company-scoped because a class
+# key (e.g. "restart") names a KIND of remediation, not a specific
+# target; company A's servers being reliably restartable says nothing
+# about company B's, so the measured record must not cross that
+# boundary (#134 — was previously global-by-class, letting one
+# company's failures trip the breaker for every other company).
+fn class_sample_count(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Int {
+  let stmt := "SELECT COUNT(*) AS n FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[CountRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => 0,
@@ -488,13 +501,14 @@ fn class_sample_count(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
 # ── CTL6: real per-class history, dwell reconstruction, oscillation ──────────
 type DispositionRow = { disposition :: Str }
 
-# Every verified disposition for a class, in the order it was decided —
-# the real record `lex-ctl/tier.record` folds into ClassStats. Chronological
-# by disposed_at, so consecutive-miss tracking matches how the breaker
-# actually experienced the class.
-fn class_dispositions(db :: conn.ConnDb, class_key :: Str) -> [sql] List[Str] {
-  let stmt := "SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending' ORDER BY e.disposed_at ASC"
-  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+# Every verified disposition for a class ON ONE COMPANY, in the order
+# it was decided — the real record `lex-ctl/tier.record` folds into
+# ClassStats. Chronological by disposed_at, so consecutive-miss
+# tracking matches how the breaker actually experienced the class.
+# Company-scoped for the same reason as class_sample_count (#134).
+fn class_dispositions(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] List[Str] {
+  let stmt := "SELECT e.disposition AS disposition FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending' ORDER BY e.disposed_at ASC"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[DispositionRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
@@ -579,15 +593,19 @@ fn incidents_for(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
   }
 }
 
-# Hit rate per action class from verifier dispositions — the number the
-# tier gate consumes. Ambiguous counts as a miss, structurally: only
-# 'materialised' is in the numerator, everything disposed is in the
-# denominator.
+# Hit rate per action class ON ONE COMPANY from verifier dispositions —
+# the number the tier gate consumes. Ambiguous counts as a miss,
+# structurally: only 'materialised' is in the numerator, everything
+# disposed is in the denominator. Company-scoped for the same reason as
+# class_sample_count (#134). COALESCE guards the same NULL-over-zero-
+# rows shape already fixed on this query's CTL7 siblings (#136) — a
+# company with zero dispositions for a class must read as 0/0, not
+# crash on a NULL `hits`.
 type HitRateRow = { hits :: Int, total :: Int }
 
-fn class_hit_rate_pct(db :: conn.ConnDb, class_key :: Str) -> [sql] Int {
-  let stmt := "SELECT SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END) AS hits, COUNT(*) AS total FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.class_key=? AND e.disposition!='pending'"
-  let q := ormq.for_dialect({ sql: stmt, params: [PStr(class_key)] }, db.dialect)
+fn class_hit_rate_pct(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Int {
+  let stmt := "SELECT COALESCE(SUM(CASE WHEN e.disposition='materialised' THEN 1 ELSE 0 END), 0) AS hits, COUNT(*) AS total FROM operate_effects e JOIN operate_actions a ON e.action_id=a.id WHERE a.company_id=? AND a.class_key=? AND e.disposition!='pending'"
+  let q := ormq.for_dialect({ sql: stmt, params: [PStr(company_id), PStr(class_key)] }, db.dialect)
   let rows :: Result[List[HitRateRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => 0,

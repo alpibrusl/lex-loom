@@ -196,7 +196,7 @@ fn test_disposition_vocabulary_is_closed() -> [sql, fs_write, concurrent, crypto
             Ok(eff) => match ledger.record_disposition(db, eff, "looks-fine", "2026-01-01T00:00:06") {
               Err(_) => match ledger.record_disposition(db, eff, "ambiguous", "2026-01-01T00:00:06") {
                 Err(e) => Err(e),
-                Ok(_) => if ledger.class_hit_rate_pct(db, class_key) == 0 {
+                Ok(_) => if ledger.class_hit_rate_pct(db, cid, class_key) == 0 {
                   Ok(())
                 } else {
                   Err("ambiguous disposition inflated the hit rate")

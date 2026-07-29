@@ -240,6 +240,39 @@ competence metric — hit rate per action class — with no extra machinery, and
 that metric is what `tier.effective` consumes: the system earns its own
 authority from measured evidence.
 
+*Shipped (CTL5): `src/effects.lex` — SHADOW MODE, nothing executes. A closed
+action vocabulary, one entry per diagnosed cause (`server_down → restart`,
+`degraded_latency → scale`, `application_error → rollback_release`,
+`transient → hold`), each with a fixed `lex-ctl/tier.ActionClass`
+classification and a typed predicate over one of the sensing series. loom
+has no wall-clock scheduler yet, so `deadline_ms` on the reconstructed
+contract is repurposed as an ABSOLUTE company-iteration idx (the same `idx`
+that already orders every `operate_*` row) rather than true milliseconds —
+callers pass the company's current idx as `now_idx`, and `lex-ctl/verify.judge`
+is called unmodified. `verify_pending` sweeps every pending contract; a
+missing signal and an overlapping in-flight contract on the same subsystem
+(`operate_ledger.concurrent_on_subsystem`) both resolve exactly as designed
+— falsified, and ambiguous-counts-as-a-miss, respectively.*
+
+*Finding a kernel bug in the process: `lex-ctl/contract.OnFalsify` and
+`lex-ctl/tier.Tier` both declared an `Escalate` variant, which broke type
+checking — including `contract.lex`'s own example blocks — the moment a
+single file imported both modules together, which is the normal case for
+any controller (an effect contract needs its action's tier). Fixed upstream
+in lex-ctl by renaming `OnFalsify`'s variant to `Handoff`; `tier.Tier`'s
+`Auto | Propose | Escalate` (the design's own wording) was left untouched.*
+
+*Also surfaced: CTL2's backfill only links historical signals to incidents
+— it never scores them, so every backfilled row's `score_milli` sat at its
+column default (0), meaning CTL4's `latency_residual` tool and CTL5's
+verifier were silently reading a fake "calm" signal for the entire Phase-0
+corpus. Fixed with `sensing.backfill_score`/`backfill_score_all` — a causal,
+no-lookahead rescoring pass over a company's full history — which is also
+exactly what the design's own Phase-1 promotion criterion ("recall against
+the Phase 0 incident set") requires. `company.backfill_operate_corpus` now
+wraps both backfill steps (incidents + scores) as the one deployment
+command.*
+
 ### 2.6 Stability — the controller is inside the loop it observes (CTL6, #124)
 
 Oscillation is the default failure mode, not the exotic one. Four hard

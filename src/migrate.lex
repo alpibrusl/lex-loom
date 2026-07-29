@@ -251,6 +251,8 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __15 := try_ddl(db, "ALTER TABLE operate_incidents ADD COLUMN diagnosed_cause TEXT NOT NULL DEFAULT ''")
   let __16 := try_ddl(db, "ALTER TABLE operate_incidents ADD COLUMN diagnosed_p_pct INTEGER NOT NULL DEFAULT 0")
   let __17 := try_ddl(db, "ALTER TABLE operate_incidents ADD COLUMN diagnosis_gap INTEGER NOT NULL DEFAULT 0")
+  let __18 := try_ddl(db, "ALTER TABLE operate_effects ADD COLUMN contracted_at_idx INTEGER NOT NULL DEFAULT 0")
+  let __19 := try_ddl(db, "ALTER TABLE operate_effects ADD COLUMN deadline_idx INTEGER NOT NULL DEFAULT 0")
   ()
 }
 

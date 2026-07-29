@@ -35,6 +35,8 @@ import "lex-orm/src/query" as ormq
 
 import "lex-schema/json_value" as jv
 
+import "lex-trail/src/log" as tlog
+
 import "./operate_ledger" as oledger
 
 import "./sensing" as sensing
@@ -1757,6 +1759,23 @@ fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
     str.join([incidents_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
   } else {
     incidents_str
+  }
+}
+
+# Populate the phase-0 replay corpus (#118/#120) from a live database's
+# existing signal history: derive incident episodes (`oledger.backfill_all`)
+# and, since backfilled rows never went through the between-iteration
+# hook, retroactively score them (`sensing.backfill_score_all`) so CTL4's
+# diagnosis and CTL5's verifier read real residuals instead of the
+# unscored-column default. Idempotent; run once after deploying, and
+# again any time older, never-backfilled history needs pulling in.
+fn backfill_operate_corpus(db :: conn.ConnDb, log :: tlog.Log) -> [sql, time] Result[{ incidents :: Int, scored :: Int }, Str] {
+  match oledger.backfill_all(db, log) {
+    Err(e) => Err(str.concat("incident backfill failed: ", e)),
+    Ok(n_inc) => match sensing.backfill_score_all(db, sensing.default_policy()) {
+      Err(e) => Err(str.concat("score backfill failed: ", e)),
+      Ok(n_scored) => Ok({ incidents: n_inc, scored: n_scored }),
+    },
   }
 }
 

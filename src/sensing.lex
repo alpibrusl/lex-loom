@@ -225,6 +225,20 @@ fn latest_row(db :: conn.ConnDb, company_id :: Str, kind :: Str) -> [sql] Option
   }
 }
 
+# The latest recorded score for a company's series — what CTL5's verifier
+# reads as the observed effect. None if the series has no readings yet.
+fn latest_score(db :: conn.ConnDb, company_id :: Str, kind :: Str) -> [sql] Option[Int] {
+  let q := ormq.for_dialect({ sql: "SELECT value, score_milli FROM company_operate_signals WHERE company_id=? AND kind=? ORDER BY idx DESC, observed_at DESC LIMIT 1", params: [PStr(company_id), PStr(kind)] }, db.dialect)
+  let rows :: Result[List[ScoreRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => Some(r.score_milli),
+    },
+  }
+}
+
 fn store_score(db :: conn.ConnDb, signal_row_id :: Str, score_milli :: Int) -> [sql] Result[Unit, Str] {
   let q := ormq.for_dialect({ sql: "UPDATE company_operate_signals SET score_milli=? WHERE id=?", params: [PInt(score_milli), PStr(signal_row_id)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
@@ -372,5 +386,110 @@ fn sense_company(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, 
       Ok(r.fired)
     },
   }
+}
+
+# ── Retroactive scoring — the CTL2 backfilled corpus never went through
+#    the live between-iteration hook, so every historical row's
+#    score_milli sits at its column default (0) until this runs. Without
+#    it, any tool reading score_milli (CTL4's latency_residual, CTL5's
+#    verifier) silently reads a fake "perfectly calm" signal for the
+#    entire Phase-0 corpus. This is what "recall against the Phase 0
+#    incident set" (the design's own Phase-1 promotion criterion)
+#    actually requires. ─────────────────────────────────────────────────
+type FullRow = { id :: Str, value :: Str }
+
+fn full_history(db :: conn.ConnDb, company_id :: Str, kind :: Str) -> [sql] List[FullRow] {
+  let q := ormq.for_dialect({ sql: "SELECT id, value FROM company_operate_signals WHERE company_id=? AND kind=? ORDER BY idx ASC, observed_at ASC", params: [PStr(company_id), PStr(kind)] }, db.dialect)
+  let rows :: Result[List[FullRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+# Score one series' full history causally: each row is scored against
+# the baseline built ONLY from rows strictly before it — no lookahead,
+# exactly the property `numeric_history`/`score_value` already give the
+# live path. Binary unhealthy readings still hard-fire regardless of the
+# baseline. Returns the number of rows (re)scored.
+fn backfill_score_walk(db :: conn.ConnDb, kind :: Str, rows :: List[FullRow], baseline :: Baseline, p :: Policy, acc :: Int) -> [sql] Result[Int, Str] {
+  match list.head(rows) {
+    None => Ok(acc),
+    Some(r) => {
+      let score := if ledger.is_healthy(kind, r.value) {
+        match str.to_int(str.trim(r.value)) {
+          None => 0,
+          Some(x) => if baseline.n < p.warmup {
+            0
+          } else {
+            residual_milli(baseline, x)
+          },
+        }
+      } else {
+        hard_fire_milli()
+      }
+      match store_score(db, r.id, score) {
+        Err(e) => Err(e),
+        Ok(_) => {
+          let next_baseline := match str.to_int(str.trim(r.value)) {
+            None => baseline,
+            Some(x) => update_baseline(baseline, x, p),
+          }
+          backfill_score_walk(db, kind, list.tail(rows), next_baseline, p, acc + 1)
+        },
+      }
+    },
+  }
+}
+
+fn backfill_score_kind(db :: conn.ConnDb, company_id :: Str, kind :: Str, p :: Policy) -> [sql] Result[Int, Str] {
+  backfill_score_walk(db, kind, full_history(db, company_id, kind), seed_baseline(), p, 0)
+}
+
+fn backfill_score_kinds(db :: conn.ConnDb, company_id :: Str, kinds :: List[Str], p :: Policy, acc :: Int) -> [sql] Result[Int, Str] {
+  match list.head(kinds) {
+    None => Ok(acc),
+    Some(kind) => match backfill_score_kind(db, company_id, kind, p) {
+      Err(e) => Err(e),
+      Ok(n) => backfill_score_kinds(db, company_id, list.tail(kinds), p, acc + n),
+    },
+  }
+}
+
+# Rescore a company's full history across every sensed series. Safe to
+# re-run: it recomputes deterministically from the raw values, so a
+# repeated call just overwrites with the same scores.
+fn backfill_score(db :: conn.ConnDb, company_id :: Str, p :: Policy) -> [sql] Result[Int, Str] {
+  backfill_score_kinds(db, company_id, sensed_kinds(), p, 0)
+}
+
+type CompanyIdRow2 = { company_id :: Str }
+
+fn distinct_companies(db :: conn.ConnDb) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT DISTINCT company_id FROM company_operate_signals", params: [] }, db.dialect)
+  let rows :: Result[List[CompanyIdRow2], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: CompanyIdRow2) -> Str {
+      r.company_id
+    }),
+  }
+}
+
+fn backfill_score_companies(db :: conn.ConnDb, companies :: List[Str], p :: Policy, acc :: Int) -> [sql] Result[Int, Str] {
+  match list.head(companies) {
+    None => Ok(acc),
+    Some(cid) => match backfill_score(db, cid, p) {
+      Err(e) => Err(e),
+      Ok(n) => backfill_score_companies(db, list.tail(companies), p, acc + n),
+    },
+  }
+}
+
+# Rescore every company in the ledger — the companion step to
+# `operate_ledger.backfill_all`, run once after backfilling incidents so
+# the corpus's scores are real before CTL4/CTL5 read them.
+fn backfill_score_all(db :: conn.ConnDb, p :: Policy) -> [sql] Result[Int, Str] {
+  backfill_score_companies(db, distinct_companies(db), p, 0)
 }
 

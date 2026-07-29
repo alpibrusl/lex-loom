@@ -130,6 +130,17 @@ deniable. The status FSM (`Triage → Acting → Verifying → Resolved`, with
 rejects illegal moves; nothing may rebuild a record with a different status,
 the same rule as lex-agent's task lifecycle.
 
+*Shipped (CTL4): `src/diagnosis.lex` — shadow mode, no actions, no
+production writes. Four hand-picked causes (`server_down`,
+`degraded_latency`, `application_error`, `transient`) with a uniform 25%
+prior, updated by plain integer Bayes as each tool reports. First real
+lex-ctl consumption in loom: `kinc.Hypothesis`/`top_hypothesis`/`confident`
+come straight from the kernel; loom supplies the causes, the tool ladder,
+and the likelihood matrix. Posteriors and the top verdict persist onto
+`operate_incidents` (`hypotheses_json`, `diagnosed_cause`,
+`diagnosed_p_pct`, `diagnosis_gap`); `diagnose_all` sweeps every
+undiagnosed incident (backfilled or freshly sensed) and is idempotent.*
+
 ### 2.3 Evidence acquisition — budgeted, closed tool set (CTL4, #122)
 
 Read tools form a closed set, each annotated with a cost and a hand-assigned
@@ -144,6 +155,17 @@ exhaustion without confidence → escalate with the dossier, and record a
 **sensing gap** — which is a defect of the sensing layer, not of the agent,
 and is the highest-value input to the next CTL3 iteration. `incident.spend`
 refuses overruns structurally; the log-grep spiral cannot happen.
+
+*Shipped (CTL4): the tool ladder — `liveness_reading`, `latency_residual`,
+`recovery_check`, `error_scan` (100/100/100/300 milli) — reads only ledger
+rows linked to the incident; every probe is an `operate_evidence` row
+(`ledger.record_evidence`), so a diagnosis run is fully reconstructable
+from the ledger/trail alone. Exhausting the budget before `p*` is reached
+persists `diagnosis_gap = true` rather than a confident-looking guess.
+`diagnosis.score_corpus`/`calibration` compute the phase-2 promotion
+numbers (top-1 accuracy, confidence-bucket accuracy) over labeled
+incidents (`operate_ledger.label_root_cause`) — the ≥60% top-1 and
+calibration-sanity gate for starting CTL5.*
 
 ### 2.4 Actuation — typed effects behind structural gates (CTL6, #124)
 

@@ -28,6 +28,8 @@ import "../src/operate_ledger" as oledger
 
 import "../src/effects" as eff
 
+import "../src/sensing" as sensing
+
 import "lex-schema/json_value" as jv
 
 # ── C2: condition DSL (pure) ──────────────────────────────────────────────────
@@ -2002,8 +2004,120 @@ fn test_json_escape_survives_a_realistic_llm_judge_verdict() -> Result[Unit, Str
   }
 }
 
+# ── operate_sweep (#118): CTL3 sensing already ran; this closes the loop
+# by actually invoking CTL4 diagnosis and CTL5 contract proposal +
+# verification on what sensing opened — the three stages that existed as
+# tested library code but were never called from anywhere in the live
+# iteration loop or the cron monitor. Mirrors test_diagnosis.lex's
+# degraded_latency episode shape (the live sensing.sense_company path,
+# not the backfill path), since operate_sweep is what runs right after
+# sensing in the real between-iteration hook.
+fn seed_signal(db :: conn.ConnDb, company_id :: Str, idx :: Int, kind :: Str, value :: Str, at :: Str) -> [sql] Result[Unit, Str] {
+  let id := str.join([company_id, "-", kind, "-", int.to_str(idx), "-", at], "")
+  let q := ormq.for_dialect({ sql: "INSERT INTO company_operate_signals (id, company_id, idx, kind, value, observed_at, incident_id, score_milli) VALUES (?, ?, ?, ?, ?, ?, '', 0)", params: [PStr(id), PStr(company_id), PInt(idx), PStr(kind), PStr(value), PStr(at)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn seed_round(db :: conn.ConnDb, cid :: Str, idx :: Int, kind :: Str, value :: Str, at :: Str) -> [sql, time] Result[Int, Str] {
+  match seed_signal(db, cid, idx, kind, value, at) {
+    Err(e) => Err(str.concat("seed: ", e)),
+    Ok(_) => sensing.sense_company(db, None, cid, sensing.default_policy()),
+  }
+}
+
+fn build_degraded_episode(db :: conn.ConnDb, cid :: Str) -> [sql, time] Result[Str, Str] {
+  let __1 := seed_round(db, cid, 1, "latency_ms", "100", "2026-01-01T00:00:01")
+  let __2 := seed_round(db, cid, 2, "latency_ms", "110", "2026-01-01T00:00:02")
+  let __3 := seed_round(db, cid, 3, "latency_ms", "95", "2026-01-01T00:00:03")
+  let __4 := seed_round(db, cid, 4, "latency_ms", "105", "2026-01-01T00:00:04")
+  let __5 := seed_round(db, cid, 5, "latency_ms", "5000", "2026-01-01T00:00:05")
+  match list.head(oledger.incidents_for(db, cid)) {
+    None => Err("latency spike did not open an incident"),
+    Some(inc) => Ok(inc),
+  }
+}
+
+fn test_operate_sweep_diagnoses_and_proposes_contract() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("sweep")
+        match build_degraded_episode(db, cid) {
+          Err(e) => Err(e),
+          Ok(inc) => match company.operate_sweep(db, cid, 5, "2026-01-02T00:00:00") {
+            Err(e) => Err(str.concat("operate_sweep: ", e)),
+            Ok(_) => match oledger.incident_diag(db, inc) {
+              None => Err("incident vanished after operate_sweep"),
+              Some(d) => if d.diagnosed_cause == "degraded_latency" {
+                let pending := oledger.pending_effects_for_company(db, cid)
+                if list.len(pending) == 1 {
+                  Ok(())
+                } else {
+                  Err(str.join(["expected exactly one proposed contract, got ", int.to_str(list.len(pending))], ""))
+                }
+              } else {
+                Err(str.concat("expected diagnosed_cause=degraded_latency, got ", d.diagnosed_cause))
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# A second sweep must not double-propose a contract for the same
+# still-diagnosed incident (`diagnosed_without_action` excludes incidents
+# that already have an operate_actions row).
+fn test_operate_sweep_does_not_double_propose() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("sweep-idem")
+        match build_degraded_episode(db, cid) {
+          Err(e) => Err(e),
+          Ok(_) => match company.operate_sweep(db, cid, 5, "2026-01-02T00:00:00") {
+            Err(e) => Err(str.concat("first sweep: ", e)),
+            Ok(_) => match company.operate_sweep(db, cid, 6, "2026-01-02T00:00:10") {
+              Err(e) => Err(str.concat("second sweep: ", e)),
+              Ok(_) => {
+                let pending := oledger.pending_effects_for_company(db, cid)
+                if list.len(pending) == 1 {
+                  Ok(())
+                } else {
+                  Err(str.join(["expected still exactly one contract after a second sweep, got ", int.to_str(list.len(pending))], ""))
+                }
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_operate_sweep_noop_on_empty_company() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => match company.operate_sweep(db, rand_id("sweep-empty"), 1, "2026-01-02T00:00:00") {
+        Err(e) => Err(str.concat("expected a no-op Ok(()) for a company with no incidents, got: ", e)),
+        Ok(_) => Ok(()),
+      },
+    },
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {

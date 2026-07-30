@@ -41,6 +41,10 @@ import "./operate_ledger" as oledger
 
 import "./sensing" as sensing
 
+import "./diagnosis" as diagnosis
+
+import "./effects" as effects
+
 import "./actuation" as act
 
 import "lex-agent/src/memory" as mem
@@ -1634,6 +1638,27 @@ fn liveness_target(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[{ url ::
   }
 }
 
+# Runs CTL4 diagnosis and CTL5 contract proposal + verification on
+# whatever CTL3 sensing has already opened/scored this round (#118).
+# Pure [sql, time] — no proc/env — so the live iteration loop and the
+# standalone cron monitor (both of which call `check_and_record_liveness`
+# below) advance the same incident/effect state machine identically.
+# Before this, diagnosis and effects were tested library code with no
+# caller outside their own test files — incidents opened but nothing
+# ever diagnosed them or proposed a remediation contract.
+fn operate_sweep(db :: conn.ConnDb, company_id :: Str, idx :: Int, at :: Str) -> [sql, time] Result[Unit, Str] {
+  match diagnosis.diagnose_all(db, None, 60, sensing.default_policy().budget_cap_milli, at) {
+    Err(e) => Err(e),
+    Ok(_) => match effects.propose_for_company(db, None, company_id, idx, at) {
+      Err(e) => Err(e),
+      Ok(_) => match effects.verify_pending(db, None, idx, at) {
+        Err(e) => Err(e),
+        Ok(_) => Ok(()),
+      },
+    },
+  }
+}
+
 fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [env, sql, time, proc] Result[Unit, Str] {
   match liveness_target(db, sprint_id) {
     None => Ok(()),
@@ -1651,7 +1676,7 @@ fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, s
             Err(e) => Err(e),
             Ok(_) => match sensing.sense_company(db, None, company_id, sensing.default_policy()) {
               Err(e) => Err(e),
-              Ok(_) => Ok(()),
+              Ok(_) => operate_sweep(db, company_id, idx, time.now_str()),
             },
           }
         },

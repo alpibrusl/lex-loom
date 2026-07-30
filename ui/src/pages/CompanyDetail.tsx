@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getCompanyDetail } from '../api'
-import type { CompanyDetail as CompanyDetailData, TrailEvent } from '../types'
+import type { CompanyDetail as CompanyDetailData, TrailEvent, CompanyContact } from '../types'
 import PhaseGraph, { type GraphData, graphStatusFromTrail } from '../components/PhaseGraph'
 
 const STAGE_STYLE: Record<string, string> = {
@@ -46,6 +46,39 @@ function ListSection({ title, items, emptyLabel, cardCls }: { title: string; ite
           {items.map((item, i) => (
             <pre key={i} className={`text-sm whitespace-pre-wrap font-sans leading-relaxed rounded-lg p-3 ${cardCls || 'text-slate-300 bg-bg/40'}`}>{item}</pre>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// "Who do I ask about X" -- relationships.lex wired into a company
+// accountability graph (#151). A human contact gets a real mailto/slack
+// link; a pool-agent contact has no such thing (Cast selects it
+// dynamically per task), so its measured record is shown instead.
+function ContactRow({ ct }: { ct: CompanyContact }) {
+  return (
+    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg/40 text-sm">
+      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-800 text-slate-300 flex-shrink-0">{ct.oracle}</span>
+      <span className="text-slate-300 truncate">{ct.name}</span>
+      {ct.contact ? (
+        <a href={ct.contact} className="text-emerald-400 hover:text-emerald-300 text-xs font-mono ml-auto transition-colors">{ct.contact}</a>
+      ) : (
+        <span className="text-muted text-xs ml-auto">{ct.kind}{ct.note ? ` · ${ct.note}` : ''}</span>
+      )}
+    </div>
+  )
+}
+
+function ContactsSection({ contacts }: { contacts: CompanyContact[] }) {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5">
+      <h2 className="text-slate-100 font-semibold mb-3">Contacts — who to ask</h2>
+      {contacts.length === 0 ? (
+        <p className="text-muted text-sm">No contacts configured yet.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {contacts.map((ct, i) => <ContactRow key={i} ct={ct} />)}
         </div>
       )}
     </div>
@@ -167,6 +200,8 @@ export default function CompanyDetail() {
 
       {/* Escalations — need human eyes */}
       <ListSection title="Escalations needing review" items={c.escalations} emptyLabel="(none)" cardCls="text-amber-200 bg-amber-950/40 border border-amber-800/50" />
+
+      <ContactsSection contacts={c.contacts} />
 
       {/* Iterations */}
       <div className="bg-surface border border-border rounded-xl p-5">

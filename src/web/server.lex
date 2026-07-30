@@ -542,6 +542,10 @@ fn metrics_to_json(m :: oledger.OperateMetrics) -> Str {
   str.join(["{\"open_incidents\":", int.to_str(m.open_incidents), ",\"resolved_count\":", int.to_str(m.resolved_count), ",\"escalated_count\":", int.to_str(m.escalated_count), ",\"verified_effects\":", int.to_str(m.verified_effects), ",\"hit_rate_pct\":", int.to_str(m.hit_rate_pct), ",\"hit_rate_trend\":", esc(m.hit_rate_trend), ",\"avg_evidence_cost_milli\":", int.to_str(m.avg_evidence_cost_milli), "}"], "")
 }
 
+fn contact_to_json(row :: company.OracleContact) -> Str {
+  str.join(["{\"oracle\":", esc(row.oracle), ",\"kind\":", esc(row.contact.kind), ",\"name\":", esc(row.contact.name), ",\"contact\":", esc(row.contact.contact), ",\"note\":", esc(row.contact.note), "}"], "")
+}
+
 fn company_list_row_json(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   match company.load_company(db, company_id) {
     None => "",
@@ -612,7 +616,8 @@ fn handle_company_detail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, ran
           }
           let live_status := live_status_of(company.recent_operate_signals(db, company_id, "liveness", 1))
           let iterations_json := str.concat("[", str.concat(str.join(list.map(its, iteration_to_json), ","), "]"))
-          resp.json(str.join(["{\"id\":", esc(cfg.id), ",\"goal\":", esc(cfg.goal), ",\"stage\":", esc(company.stage_to_str(stage)), ",\"max_iterations\":", int.to_str(cfg.max_iterations), ",\"stop_when\":", esc(cfg.stop_when), ",\"spend_cents\":", int.to_str(spend), ",\"latest_sprint_id\":", esc(latest_sprint_id), ",\"live_url\":", esc(live_url), ",\"live_status\":", esc(live_status), ",\"iterations\":", iterations_json, ",\"shipped_summary\":", esc(company.shipped_summary(db, company_id)), ",\"backlog_summary\":", esc(company.backlog_section(db, company_id)), ",\"operate_metrics\":", metrics_to_json(m), ",\"operate_signals\":", esc(company.operate_section(db, company_id)), ",\"escalations\":", str_list_to_json(company.escalation_dossiers_for_company(db, company_id)), ",\"decisions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "goal_decision", 5), company.format_decision)), ",\"stage_transitions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "stage_transition", 5), company.format_stage_transition)), "}"], ""))
+          let contacts_json := str.concat("[", str.concat(str.join(list.map(company.all_contacts(db, company_id), contact_to_json), ","), "]"))
+          resp.json(str.join(["{\"id\":", esc(cfg.id), ",\"goal\":", esc(cfg.goal), ",\"stage\":", esc(company.stage_to_str(stage)), ",\"max_iterations\":", int.to_str(cfg.max_iterations), ",\"stop_when\":", esc(cfg.stop_when), ",\"spend_cents\":", int.to_str(spend), ",\"latest_sprint_id\":", esc(latest_sprint_id), ",\"live_url\":", esc(live_url), ",\"live_status\":", esc(live_status), ",\"iterations\":", iterations_json, ",\"shipped_summary\":", esc(company.shipped_summary(db, company_id)), ",\"backlog_summary\":", esc(company.backlog_section(db, company_id)), ",\"operate_metrics\":", metrics_to_json(m), ",\"operate_signals\":", esc(company.operate_section(db, company_id)), ",\"escalations\":", str_list_to_json(company.escalation_dossiers_for_company(db, company_id)), ",\"contacts\":", contacts_json, ",\"decisions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "goal_decision", 5), company.format_decision)), ",\"stage_transitions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "stage_transition", 5), company.format_stage_transition)), "}"], ""))
         },
       },
     },

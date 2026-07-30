@@ -161,6 +161,26 @@ fn resolve_oracle_contacts(db :: conn.ConnDb, company_id :: Str, oracle :: Str) 
   }
 }
 
+type OracleContact = { oracle :: Str, contact :: Contact }
+
+# Every contact this company has ever been given, one row per relationship
+# edge, resolved to a real Contact -- the structured form the Company Detail
+# UI renders as a real section instead of a preformatted text block.
+# Deliberately lists whatever is configured rather than only oracles a live
+# gate currently references, so adding a contact ahead of needing it is
+# visible immediately.
+fn all_contacts(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] List[OracleContact] {
+  match rel.peers_of(db, company_id) {
+    Err(_) => [],
+    Ok(rels) => list.fold(rels, [], fn (acc :: List[OracleContact], r :: rel.Relationship) -> [sql, fs_read] List[OracleContact] {
+      match resolve_one_contact(db, r.to_agent) {
+        None => acc,
+        Some(ct) => list.concat(acc, [{ oracle: r.role, contact: ct }]),
+      }
+    }),
+  }
+}
+
 fn contact_to_line(oracle :: Str, ct :: Contact) -> Str {
   if str.is_empty(ct.contact) {
     str.join(["  ", oracle, ": ", ct.name, " (", ct.kind, if str.is_empty(ct.note) {
@@ -173,20 +193,11 @@ fn contact_to_line(oracle :: Str, ct :: Contact) -> Str {
   }
 }
 
-# Every contact this company has ever been given, grouped by oracle — the
-# board report's "who do I ask" section. Deliberately lists whatever is
-# configured rather than only oracles a live gate currently references, so
-# adding a contact ahead of needing it is visible immediately.
+# board_report's prose rendering of `all_contacts`.
 fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
-  let lines := match rel.peers_of(db, company_id) {
-    Err(_) => [],
-    Ok(rels) => list.fold(rels, [], fn (acc :: List[Str], r :: rel.Relationship) -> [sql, fs_read] List[Str] {
-      match resolve_one_contact(db, r.to_agent) {
-        None => acc,
-        Some(ct) => list.concat(acc, [contact_to_line(r.role, ct)]),
-      }
-    }),
-  }
+  let lines := list.map(all_contacts(db, company_id), fn (row :: OracleContact) -> Str {
+    contact_to_line(row.oracle, row.contact)
+  })
   if list.is_empty(lines) {
     "(no contacts configured)"
   } else {

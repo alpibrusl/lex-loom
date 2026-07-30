@@ -91,6 +91,14 @@ export interface CompanyIterationRow {
   goal: string;
 }
 
+export interface CompanyContact {
+  oracle: string;
+  kind: string;
+  name: string;
+  contact: string;
+  note: string;
+}
+
 export interface CompanyDetail {
   id: string;
   goal: string;
@@ -107,6 +115,7 @@ export interface CompanyDetail {
   operate_metrics: OperateMetrics;
   operate_signals: string;
   escalations: string[];
+  contacts: CompanyContact[];
   decisions: string[];
   stage_transitions: string[];
 }

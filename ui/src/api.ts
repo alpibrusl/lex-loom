@@ -10,20 +10,28 @@ export async function getSeries(): Promise<{ series: SprintStat[] }> {
   return get('/api/series');
 }
 
+// *id routes are wildcards on the backend, not a single :id segment (#153):
+// company iteration sprint ids are always "<company_id>/iter-N", so the raw
+// id (with its real "/") goes straight into the path -- no encoding needed,
+// the router rejoins wildcard segments with "/" on its own.
 export async function getSprintStatus(id: string): Promise<SprintStatus> {
-  return get(`/api/sprints/${id}/status`);
+  return get(`/api/sprint-status/${id}`);
 }
 
 export async function getSprintTrail(id: string): Promise<{ sprint_id: string; events: TrailEvent[] }> {
-  return get(`/api/sprints/${id}/trail`);
+  return get(`/api/sprint-trail/${id}`);
 }
 
 export async function getSprintDigest(id: string): Promise<DigestData> {
-  return get(`/api/sprints/${id}/digest`);
+  return get(`/api/sprint-digest/${id}`);
 }
 
-export async function getArtifact(sprintId: string, hash: string): Promise<{ hash: string; content: string }> {
-  return get(`/api/sprints/${sprintId}/artifact/${hash}`);
+export async function getSprintGraph(id: string): Promise<{ graph: import('./components/PhaseGraph').GraphData | null }> {
+  return get(`/api/sprint-graph/${id}`);
+}
+
+export async function getArtifact(hash: string): Promise<{ hash: string; content: string }> {
+  return get(`/api/artifact/${hash}`);
 }
 
 export async function getAgents(): Promise<{ agents: Agent[] }> {

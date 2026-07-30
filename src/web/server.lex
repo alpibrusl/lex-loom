@@ -3,13 +3,20 @@
 # Endpoints:
 #   GET  /                        — dashboard HTML (src/web/dashboard.html)
 #   POST /api/sprints             — launch sprint, returns {sprint_id,success,summary}
-#   GET  /api/sprints/:id/status  — phase transitions + trail count
-#   GET  /api/sprints/:id/trail   — trail events as JSON
-#   GET  /api/sprints/:id/digest  — tightened specs + seed-graph flag
+#   GET  /api/sprint-status/*id   — phase transitions + trail count
+#   GET  /api/sprint-trail/*id    — trail events as JSON
+#   GET  /api/sprint-digest/*id   — tightened specs + seed-graph flag
+#   GET  /api/sprint-graph/*id    — the sprint's node/edge graph
+#   GET  /api/artifact/:hash      — a content-addressed artifact by hash
 #   GET  /api/companies           — company list (id, stage, iteration count, incidents, spend)
 #   GET  /api/companies/:id       — company detail: mission, stage, iterations, product
 #                                    status, operate metrics, escalations, decisions
 #
+# *id routes are wildcards, not a single :id segment (#153): company
+# iteration sprint ids are always "<company_id>/iter-N", which a plain
+# :id segment can never match (the router requires wildcards to be the
+# LAST pattern segment, so the action verb moved before the id instead of
+# after it, e.g. /api/sprints/:id/status -> /api/sprint-status/*id).
 # Run:
 #   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
 #     src/web/server.lex serve_loom
@@ -116,7 +123,7 @@ fn get_jv_str(j :: jv.Json, key :: Str) -> Str {
   }
 }
 
-# ── /api/sprints/:id/status ───────────────────────────────────────────────────
+# ── /api/sprint-status/*id ──────────────────────────────────────────────────
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 fn trans_to_json(r :: TransRow) -> Str {
@@ -147,7 +154,7 @@ fn handle_status(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql
   }
 }
 
-# ── /api/sprints/:id/trail ────────────────────────────────────────────────────
+# ── /api/sprint-trail/*id ───────────────────────────────────────────────────
 fn trail_row_to_json(r :: dg.TrailRow) -> Str {
   str.join(["{\"ts\":", esc(r.ts), ",\"event_kind\":", esc(r.event_kind), ",\"data_json\":", esc(r.data_json), "}"], "")
 }
@@ -166,7 +173,7 @@ fn handle_trail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql,
   }
 }
 
-# ── /api/sprints/:id/graph ───────────────────────────────────────────────────
+# ── /api/sprint-graph/*id ───────────────────────────────────────────────────
 type GraphRow = { graph_json :: Str }
 
 fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
@@ -189,33 +196,33 @@ fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql,
   }
 }
 
-# ── /api/sprints/:id/artifact/:hash ──────────────────────────────────────────
+# ── /api/artifact/:hash ───────────────────────────────────────────────────────
+# Content-addressed: hash alone is the real key (this query never filtered by
+# sprint id even before #153), so it doesn't need the sprint-id-in-the-path
+# problem every other sprint route below has.
 type ArtifactContentRow = { content :: Str }
 
 fn handle_artifact(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
-  match ctx.path_param(c, "id") {
-    None => resp.bad_request("missing sprint id"),
-    Some(_sprint_id) => match ctx.path_param(c, "hash") {
-      None => resp.bad_request("missing hash"),
-      Some(hash) => match open_loom_db(db_path) {
-        Err(_) => resp.internal_error(),
-        Ok(db) => {
-          let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
-          let rows :: Result[List[ArtifactContentRow], SqlError] := sql.query(db.handle, q, [])
-          match rows {
-            Err(_) => resp.not_found(),
-            Ok(rs) => match list.head(rs) {
-              None => resp.not_found(),
-              Some(r) => resp.json(str.join(["{\"hash\":", esc(hash), ",\"content\":", esc(r.content), "}"], "")),
-            },
-          }
-        },
+  match ctx.path_param(c, "hash") {
+    None => resp.bad_request("missing hash"),
+    Some(hash) => match open_loom_db(db_path) {
+      Err(_) => resp.internal_error(),
+      Ok(db) => {
+        let q := str.join(["SELECT content FROM artifacts WHERE hash='", sq(hash), "'"], "")
+        let rows :: Result[List[ArtifactContentRow], SqlError] := sql.query(db.handle, q, [])
+        match rows {
+          Err(_) => resp.not_found(),
+          Ok(rs) => match list.head(rs) {
+            None => resp.not_found(),
+            Some(r) => resp.json(str.join(["{\"hash\":", esc(hash), ",\"content\":", esc(r.content), "}"], "")),
+          },
+        }
       },
     },
   }
 }
 
-# ── /api/sprints/:id/digest ───────────────────────────────────────────────────
+# ── /api/sprint-digest/*id ──────────────────────────────────────────────────
 fn spec_to_json(s :: dg.TightenedSpec) -> Str {
   str.join(["{\"node_role\":", esc(s.node_role), ",\"spec_src\":", esc(s.spec_src), ",\"reason\":", esc(s.reason), "}"], "")
 }
@@ -633,19 +640,19 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
       Err(_) => resp.not_found(),
     }
   })
-  let r2 := router.route_effectful(r1, "GET", "/api/sprints/:id/status", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r2 := router.route_effectful(r1, "GET", "/api/sprint-status/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_status(db_path, c)
   })
-  let r3 := router.route_effectful(r2, "GET", "/api/sprints/:id/trail", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r3 := router.route_effectful(r2, "GET", "/api/sprint-trail/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_trail(db_path, c)
   })
-  let r4 := router.route_effectful(r3, "GET", "/api/sprints/:id/digest", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r4 := router.route_effectful(r3, "GET", "/api/sprint-digest/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_digest(db_path, c)
   })
-  let r5 := router.route_effectful(r4, "GET", "/api/sprints/:id/graph", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r5 := router.route_effectful(r4, "GET", "/api/sprint-graph/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_graph(db_path, c)
   })
-  let r6 := router.route_effectful(r5, "GET", "/api/sprints/:id/artifact/:hash", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r6 := router.route_effectful(r5, "GET", "/api/artifact/:hash", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_artifact(db_path, c)
   })
   let r7 := router.route_effectful(r6, "GET", "/api/agents", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {

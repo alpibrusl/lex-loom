@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getCompanyDetail } from '../api'
+import { getCompanyDetail, getSprintGraph, getSprintTrail } from '../api'
 import type { CompanyDetail as CompanyDetailData, TrailEvent, CompanyContact } from '../types'
 import PhaseGraph, { type GraphData, graphStatusFromTrail } from '../components/PhaseGraph'
 
@@ -86,7 +86,7 @@ function ContactsSection({ contacts }: { contacts: CompanyContact[] }) {
 }
 
 // Latest iteration's agent pipeline, embedded inline — reuses PhaseGraph,
-// the same component SprintDetail uses, fed by the same /api/sprints/:id/graph
+// the same component SprintDetail uses, fed by the same /api/sprint-graph/*id
 // endpoint (no new backend route for this).
 function LatestIterationGraph({ sprintId }: { sprintId: string }) {
   const [graph, setGraph] = useState<GraphData | null>(null)
@@ -99,8 +99,8 @@ function LatestIterationGraph({ sprintId }: { sprintId: string }) {
     async function load() {
       try {
         const [gr, tr] = await Promise.all([
-          fetch(`/api/sprints/${sprintId}/graph`).then(r => r.json()),
-          fetch(`/api/sprints/${sprintId}/trail`).then(r => r.json()),
+          getSprintGraph(sprintId),
+          getSprintTrail(sprintId),
         ])
         if (!alive) return
         if (gr.graph) setGraph(gr.graph)

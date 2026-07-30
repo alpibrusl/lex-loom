@@ -207,6 +207,25 @@ fn propose_contract(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str,
   }
 }
 
+fn propose_list(db :: conn.ConnDb, log :: Option[tlog.Log], ids :: List[Str], now_idx :: Int, at :: Str, acc :: Int) -> [sql, time] Result[Int, Str] {
+  match list.head(ids) {
+    None => Ok(acc),
+    Some(id) => match propose_contract(db, log, id, now_idx, at) {
+      Err(e) => Err(e),
+      Ok(_) => propose_list(db, log, list.tail(ids), now_idx, at, acc + 1),
+    },
+  }
+}
+
+# Propose a contract for every one of this company's incidents that CTL4
+# diagnosed a real cause for and that has no action yet
+# (`operate_ledger.diagnosed_without_action`) — the automatic counterpart
+# to calling `propose_contract` by hand for one incident at a time.
+# Returns the number of contracts newly proposed.
+fn propose_for_company(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, now_idx :: Int, at :: Str) -> [sql, time] Result[Int, Str] {
+  propose_list(db, log, ledger.diagnosed_without_action(db, company_id), now_idx, at, 0)
+}
+
 # ── Verify ────────────────────────────────────────────────────────────────────
 # Judge one effect contract against the ledger. Idempotent: a
 # non-pending disposition is returned as-is without re-judging.

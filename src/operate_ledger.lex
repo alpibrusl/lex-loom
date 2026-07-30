@@ -488,6 +488,23 @@ fn incident_diag(db :: conn.ConnDb, incident :: Str) -> [sql] Option[IncidentDia
   }
 }
 
+type DiagnosedIdRow = { id :: Str }
+
+# Incidents CTL4 diagnosed (a real cause, not a sensing gap) that CTL5
+# has not yet proposed a remediation for — the input `effects.lex`'s
+# automatic sweep works from. Oldest first, so a budget-bounded caller
+# processes the longest-waiting incident first.
+fn diagnosed_without_action(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT oi.id AS id FROM operate_incidents oi WHERE oi.company_id=? AND oi.diagnosed_cause!='' AND oi.diagnosis_gap=0 AND NOT EXISTS (SELECT 1 FROM operate_actions oa WHERE oa.incident_id=oi.id) ORDER BY oi.opened_at ASC", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[DiagnosedIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: DiagnosedIdRow) -> Str {
+      r.id
+    }),
+  }
+}
+
 # Persist a contract's iteration-index window (CTL5). loom has no
 # wall-clock scheduler yet, so the between-iteration counter (`idx`,
 # already the ordering key on every operate_* row) stands in for the

@@ -5,25 +5,74 @@ export interface GraphNode { id: string; role: string; gate: string; expand?: st
 export interface GraphEdge { from: string; to: string; handoff: string }
 export interface GraphData  { id: string; phase: string; nodes: GraphNode[]; edges: GraphEdge[] }
 
-// Map role → phase column
+// Map role → phase column. Covers every role in the Architect's actual
+// vocabulary (roles.lex's AVAILABLE ROLES), not just the Lex build/qa track --
+// found live (#153): a real company sprint (py_build/py_qa/launch/finance/
+// legal/docs) had 7 of its 10 non-intake nodes silently vanish from this
+// diagram because their roles weren't Lex's literal "build"/"qa" strings and
+// PHASE_ORDER didn't include an 'Other' bucket for anything unmapped.
 const ROLE_PHASE: Record<string, string> = {
   intake: 'Intake',
+  pm: 'Intake',
   architect: 'Design',
+  ux_designer: 'Design',
+  brand_designer: 'Design',
+  content_designer: 'Design',
   build: 'Implementation',
+  py_build: 'Implementation',
+  fe_build: 'Implementation',
+  devops: 'Implementation',
   qa: 'QA',
+  py_qa: 'QA',
+  security: 'QA',
+  deploy: 'Ship',
+  launch: 'Ship',
   demo: 'Demo',
+  finance: 'Business',
+  legal: 'Business',
+  monetization_handoff: 'Business',
+  brand_strategist: 'Distribution',
+  copywriter: 'Distribution',
+  content_creator: 'Distribution',
+  seo_specialist: 'Distribution',
+  docs: 'Scribe',
   scribe: 'Scribe',
 }
 
-const PHASE_ORDER = ['Intake', 'Design', 'Implementation', 'QA', 'Demo', 'Scribe']
+// 'Other' is a deliberate catch-all, not a dead end: any role not in
+// ROLE_PHASE above still renders here instead of vanishing, so a role added
+// to the Architect's vocabulary later degrades gracefully instead of
+// silently dropping nodes again.
+const PHASE_ORDER = ['Intake', 'Design', 'Implementation', 'QA', 'Ship', 'Demo', 'Business', 'Distribution', 'Scribe', 'Other']
+
+const DEFAULT_STYLE = { bg: 'bg-slate-800', border: 'border-slate-600', text: 'text-slate-300', dot: 'bg-slate-400', icon: '●' }
 
 const ROLE_STYLE: Record<string, { bg: string; border: string; text: string; dot: string; icon: string }> = {
-  intake:     { bg: 'bg-slate-800',    border: 'border-slate-600', text: 'text-slate-300',  dot: 'bg-slate-400',   icon: '📋' },
-  architect:  { bg: 'bg-indigo-950',   border: 'border-indigo-700', text: 'text-indigo-300', dot: 'bg-indigo-400',  icon: '🏗' },
-  build:      { bg: 'bg-blue-950',     border: 'border-blue-700',   text: 'text-blue-300',   dot: 'bg-blue-400',    icon: '⚙️' },
-  qa:         { bg: 'bg-amber-950',    border: 'border-amber-700',  text: 'text-amber-300',  dot: 'bg-amber-400',   icon: '🔬' },
-  demo:       { bg: 'bg-violet-950',   border: 'border-violet-700', text: 'text-violet-300', dot: 'bg-violet-400',  icon: '🎯' },
-  scribe:     { bg: 'bg-teal-950',     border: 'border-teal-700',   text: 'text-teal-300',   dot: 'bg-teal-400',    icon: '📝' },
+  intake:              { bg: 'bg-slate-800',   border: 'border-slate-600',  text: 'text-slate-300',  dot: 'bg-slate-400',   icon: '📋' },
+  pm:                  { bg: 'bg-slate-800',   border: 'border-slate-600',  text: 'text-slate-300',  dot: 'bg-slate-400',   icon: '📝' },
+  architect:           { bg: 'bg-indigo-950',  border: 'border-indigo-700', text: 'text-indigo-300', dot: 'bg-indigo-400',  icon: '🏗' },
+  ux_designer:         { bg: 'bg-indigo-950',  border: 'border-indigo-700', text: 'text-indigo-300', dot: 'bg-indigo-400',  icon: '🧭' },
+  brand_designer:      { bg: 'bg-indigo-950',  border: 'border-indigo-700', text: 'text-indigo-300', dot: 'bg-indigo-400',  icon: '🎨' },
+  content_designer:    { bg: 'bg-indigo-950',  border: 'border-indigo-700', text: 'text-indigo-300', dot: 'bg-indigo-400',  icon: '✍️' },
+  build:               { bg: 'bg-blue-950',    border: 'border-blue-700',   text: 'text-blue-300',   dot: 'bg-blue-400',    icon: '⚙️' },
+  py_build:            { bg: 'bg-blue-950',    border: 'border-blue-700',   text: 'text-blue-300',   dot: 'bg-blue-400',    icon: '🐍' },
+  fe_build:            { bg: 'bg-blue-950',    border: 'border-blue-700',   text: 'text-blue-300',   dot: 'bg-blue-400',    icon: '🖥️' },
+  devops:              { bg: 'bg-blue-950',    border: 'border-blue-700',   text: 'text-blue-300',   dot: 'bg-blue-400',    icon: '🐳' },
+  qa:                  { bg: 'bg-amber-950',   border: 'border-amber-700',  text: 'text-amber-300',  dot: 'bg-amber-400',   icon: '🔬' },
+  py_qa:               { bg: 'bg-amber-950',   border: 'border-amber-700',  text: 'text-amber-300',  dot: 'bg-amber-400',   icon: '🔬' },
+  security:            { bg: 'bg-amber-950',   border: 'border-amber-700',  text: 'text-amber-300',  dot: 'bg-amber-400',   icon: '🛡️' },
+  deploy:               { bg: 'bg-cyan-950',    border: 'border-cyan-700',   text: 'text-cyan-300',   dot: 'bg-cyan-400',    icon: '🚀' },
+  launch:              { bg: 'bg-cyan-950',    border: 'border-cyan-700',   text: 'text-cyan-300',   dot: 'bg-cyan-400',    icon: '🟢' },
+  demo:                { bg: 'bg-violet-950',  border: 'border-violet-700', text: 'text-violet-300', dot: 'bg-violet-400',  icon: '🎯' },
+  finance:             { bg: 'bg-emerald-950', border: 'border-emerald-700', text: 'text-emerald-300', dot: 'bg-emerald-400', icon: '💰' },
+  legal:               { bg: 'bg-emerald-950', border: 'border-emerald-700', text: 'text-emerald-300', dot: 'bg-emerald-400', icon: '⚖️' },
+  monetization_handoff: { bg: 'bg-emerald-950', border: 'border-emerald-700', text: 'text-emerald-300', dot: 'bg-emerald-400', icon: '🤝' },
+  brand_strategist:    { bg: 'bg-pink-950',    border: 'border-pink-700',   text: 'text-pink-300',   dot: 'bg-pink-400',    icon: '📣' },
+  copywriter:          { bg: 'bg-pink-950',    border: 'border-pink-700',   text: 'text-pink-300',   dot: 'bg-pink-400',    icon: '✏️' },
+  content_creator:     { bg: 'bg-pink-950',    border: 'border-pink-700',   text: 'text-pink-300',   dot: 'bg-pink-400',    icon: '📰' },
+  seo_specialist:      { bg: 'bg-pink-950',    border: 'border-pink-700',   text: 'text-pink-300',   dot: 'bg-pink-400',    icon: '🔎' },
+  docs:                { bg: 'bg-teal-950',    border: 'border-teal-700',   text: 'text-teal-300',   dot: 'bg-teal-400',    icon: '📚' },
+  scribe:              { bg: 'bg-teal-950',    border: 'border-teal-700',   text: 'text-teal-300',   dot: 'bg-teal-400',    icon: '📝' },
 }
 
 function nodePhase(role: string): string {
@@ -80,7 +129,7 @@ export default function PhaseGraph({ graph, acceptedNodes = new Set(), activeNod
                 <div className="flex flex-col gap-2">
                   {nodes.map(n => {
                     const role = roleOf(n)
-                    const st = ROLE_STYLE[role] || ROLE_STYLE['build']
+                    const st = ROLE_STYLE[role] || DEFAULT_STYLE
                     const done = acceptedNodes.has(n.id)
                     const active = activeNode === n.id
                     const box = (

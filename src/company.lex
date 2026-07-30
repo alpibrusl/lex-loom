@@ -49,6 +49,10 @@ import "./actuation" as act
 
 import "lex-agent/src/memory" as mem
 
+import "./agent/relationships" as rel
+
+import "./agent/registry" as reg
+
 # ── C1: types ─────────────────────────────────────────────────────────────────
 # The persistent mission. `stop_when` is a C2 condition (e.g. "iter ge 3");
 # `max_iterations` is the hard ceiling regardless of the condition.
@@ -84,7 +88,109 @@ fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Res
   let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
-    Ok(_) => Ok(()),
+    Ok(_) => reg.register(db, c.id, "loom-company", c.id, "", []),
+  }
+}
+
+# ── Contacts (#151): "who do I ask about X for this company" ────────────────
+#
+# relationships.lex is a generic directed graph (from_agent, to_agent, role,
+# contract_json) between anything registered in the (vendored, portable)
+# agent registry — it has no idea what a "company" or "agent_pool" is, by
+# design (src/agent/* stays loom-agnostic). This is the loom-specific layer
+# on top: `role` is repurposed as the oracle/domain name a `human <oracle>`
+# gate already carries, `from_agent` is a company (registered above), and
+# `to_agent` is either a real human (registered in the registry, resolved
+# via `reg.find_by_id`) or a pool specialist's own `agent_pool.id` (resolved
+# directly against agent_pool -- pool agents are NOT registered in the
+# generic registry; that table is already the loom-specific source of truth
+# for them).
+#
+# Deliberately NOT a reporting hierarchy: a company can have zero, one, or
+# several contacts per oracle, and nothing here gates or routes execution —
+# it only answers "who's accountable," for a human operator or a future
+# escalation flow to read.
+fn add_contact(db :: conn.ConnDb, company_id :: Str, oracle :: Str, contact_id :: Str, contact_name :: Str, contact_url :: Str) -> [sql, fs_write, random, time] Result[Unit, Str] {
+  match reg.register(db, contact_id, "human", contact_name, contact_url, [oracle]) {
+    Err(e) => Err(e),
+    Ok(_) => rel.add(db, company_id, contact_id, oracle, "{}"),
+  }
+}
+
+fn add_pool_agent_contact(db :: conn.ConnDb, company_id :: Str, oracle :: Str, agent_id :: Str) -> [sql, fs_write, random, time] Result[Unit, Str] {
+  rel.add(db, company_id, agent_id, oracle, "{}")
+}
+
+type PoolAgentContactRow = { id :: Str, role :: Str, domain_tags_json :: Str, attestation_count :: Int }
+
+fn find_pool_agent_contact(db :: conn.ConnDb, agent_id :: Str) -> [sql] Option[PoolAgentContactRow] {
+  let q := ormq.for_dialect({ sql: "SELECT id, role, domain_tags_json, attestation_count FROM agent_pool WHERE id=?", params: [PStr(agent_id)] }, db.dialect)
+  let rows :: Result[List[PoolAgentContactRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+# A resolved contact for one relationship edge, whatever kind of node
+# `to_agent` turned out to be — a human has a real `contact` (their
+# `inbox_url`); a pool agent has no such thing (Cast selects it dynamically
+# per task), so `contact` is empty and `note` carries its measured record
+# instead, since that record IS the accountability signal for an agent.
+type Contact = { id :: Str, kind :: Str, name :: Str, contact :: Str, note :: Str }
+
+fn resolve_one_contact(db :: conn.ConnDb, to_agent :: Str) -> [sql, fs_read] Option[Contact] {
+  match reg.find_by_id(db, to_agent) {
+    Ok(Some(ref)) => Some({ id: ref.id, kind: ref.kind, name: ref.name, contact: ref.inbox_url, note: "" }),
+    _ => match find_pool_agent_contact(db, to_agent) {
+      None => None,
+      Some(row) => Some({ id: row.id, kind: "pool-agent", name: str.join([row.role, " specialist"], ""), contact: "", note: str.join(["attestation=", int.to_str(row.attestation_count), " tags=", row.domain_tags_json], "") }),
+    },
+  }
+}
+
+fn resolve_oracle_contacts(db :: conn.ConnDb, company_id :: Str, oracle :: Str) -> [sql, fs_read] List[Contact] {
+  match rel.peers_by_role(db, company_id, oracle) {
+    Err(_) => [],
+    Ok(rels) => list.fold(rels, [], fn (acc :: List[Contact], r :: rel.Relationship) -> [sql, fs_read] List[Contact] {
+      match resolve_one_contact(db, r.to_agent) {
+        None => acc,
+        Some(ct) => list.concat(acc, [ct]),
+      }
+    }),
+  }
+}
+
+fn contact_to_line(oracle :: Str, ct :: Contact) -> Str {
+  if str.is_empty(ct.contact) {
+    str.join(["  ", oracle, ": ", ct.name, " (", ct.kind, if str.is_empty(ct.note) {
+      ""
+    } else {
+      str.concat(", ", ct.note)
+    }, ")"], "")
+  } else {
+    str.join(["  ", oracle, ": ", ct.name, " <", ct.contact, ">"], "")
+  }
+}
+
+# Every contact this company has ever been given, grouped by oracle — the
+# board report's "who do I ask" section. Deliberately lists whatever is
+# configured rather than only oracles a live gate currently references, so
+# adding a contact ahead of needing it is visible immediately.
+fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
+  let lines := match rel.peers_of(db, company_id) {
+    Err(_) => [],
+    Ok(rels) => list.fold(rels, [], fn (acc :: List[Str], r :: rel.Relationship) -> [sql, fs_read] List[Str] {
+      match resolve_one_contact(db, r.to_agent) {
+        None => acc,
+        Some(ct) => list.concat(acc, [contact_to_line(r.role, ct)]),
+      }
+    }),
+  }
+  if list.is_empty(lines) {
+    "(no contacts configured)"
+  } else {
+    str.join(lines, "\n")
   }
 }
 
@@ -97,6 +203,22 @@ fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg
       None => None,
       Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when }),
     },
+  }
+}
+
+type CompanyIdRow = { id :: Str }
+
+# Every company id, newest-created first — the one genuinely new query the
+# Company-view UI's list endpoint needs (#149); everything else it renders
+# comes from an existing per-company function called once per id here.
+fn list_companies(db :: conn.ConnDb) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT id FROM companies ORDER BY created_at DESC", params: [] }, db.dialect)
+  let rows :: Result[List[CompanyIdRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: CompanyIdRow) -> Str {
+      r.id
+    }),
   }
 }
 
@@ -1864,7 +1986,7 @@ fn escalation_dossiers_for_company(db :: conn.ConnDb, company_id :: Str) -> [sql
   escalation_dossiers(db, latest_iteration_idx(db, company_id), oledger.pending_effects_for_company(db, company_id))
 }
 
-fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
     Some(cfg) => {
@@ -1873,7 +1995,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

@@ -28,6 +28,8 @@ import "../src/operate_ledger" as oledger
 
 import "../src/effects" as eff
 
+import "../src/agent/registry" as registry
+
 import "../src/sensing" as sensing
 
 import "lex-schema/json_value" as jv
@@ -181,6 +183,192 @@ fn run_iter_roundtrip(db :: conn.ConnDb, id :: Str) -> [sql, fs_write, time] Res
           }
         } else {
           Err(str.concat("expected latest idx 2, got ", int.to_str(latest)))
+        }
+      },
+    },
+  }
+}
+
+# The one genuinely new query the Company-view UI needs (#149) — everything
+# else the new /api/companies* endpoints use is an existing per-company
+# function called once per id from this list.
+fn test_list_companies_returns_seeded_ids() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id_a := rand_id("list-a")
+        let id_b := rand_id("list-b")
+        let cfg := fn (id :: Str) -> company.CompanyCfg {
+          { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        }
+        match company.save_company(db, cfg(id_a)) {
+          Err(e) => Err(e),
+          Ok(_) => match company.save_company(db, cfg(id_b)) {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let ids := company.list_companies(db)
+              let has_a := list.fold(ids, false, fn (found :: Bool, x :: Str) -> Bool {
+                found or x == id_a
+              })
+              let has_b := list.fold(ids, false, fn (found :: Bool, x :: Str) -> Bool {
+                found or x == id_b
+              })
+              if has_a and has_b {
+                Ok(())
+              } else {
+                Err(str.join(["expected both seeded ids in list_companies (", int.to_str(list.len(ids)), " ids returned)"], ""))
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+# ── relationships.lex wiring (#151): "who do I contact about X for this
+# company" — a company-scoped accountability graph, not a rigid org chart.
+# `role` on a relationship is repurposed as the oracle/domain name (the same
+# string a `human <oracle>` gate already carries); `to_agent` is either a
+# real human registered in the (vendored, generic) agent registry, or a pool
+# specialist's own `agent_pool.id` directly -- no registry entry needed for
+# the latter, since agent_pool is already the loom-specific source of truth
+# for those.
+fn seed_pool_agent(db :: conn.ConnDb, id :: Str, role :: Str, tags_json :: Str, attestation :: Int) -> [sql, fs_write] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "INSERT INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, bounce_count, retired_at, created_at) VALUES (?, ?, 'you are a specialist', 'test-model', ?, ?, 0, '', '2026-01-01T00:00:00')", params: [PStr(id), PStr(role), PStr(tags_json), PInt(attestation)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn test_save_company_registers_in_registry() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("reg-co")
+        match company.save_company(db, { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match registry.find_by_id(db, id) {
+            Err(e) => Err(e),
+            Ok(None) => Err("company was not registered"),
+            Ok(Some(ref)) => if ref.kind == "loom-company" {
+              Ok(())
+            } else {
+              Err(str.concat("expected kind loom-company, got ", ref.kind))
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_add_contact_and_resolve_returns_human() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("contact-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe", "Jane Doe", "mailto:jane@example.com") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let contacts := company.resolve_oracle_contacts(db, cid, "legal-counsel")
+              match list.head(contacts) {
+                None => Err("expected one contact, got none"),
+                Some(ct) => if ct.name == "Jane Doe" and ct.contact == "mailto:jane@example.com" {
+                  Ok(())
+                } else {
+                  Err(str.join(["unexpected contact: name=", ct.name, " contact=", ct.contact], ""))
+                },
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_add_pool_agent_contact_and_resolve_returns_pool_agent() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("pool-contact-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match seed_pool_agent(db, "strict-qa-v1", "py_qa", "[\"lex\",\"qa\"]", 12) {
+            Err(e) => Err(e),
+            Ok(_) => match company.add_pool_agent_contact(db, cid, "security", "strict-qa-v1") {
+              Err(e) => Err(e),
+              Ok(_) => {
+                let contacts := company.resolve_oracle_contacts(db, cid, "security")
+                match list.head(contacts) {
+                  None => Err("expected one contact, got none"),
+                  Some(ct) => if ct.kind == "pool-agent" and str.contains(ct.note, "attestation=12") {
+                    Ok(())
+                  } else {
+                    Err(str.join(["unexpected contact: kind=", ct.kind, " note=", ct.note], ""))
+                  },
+                }
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_resolve_oracle_contacts_empty_when_none_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("no-contact-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => if list.is_empty(company.resolve_oracle_contacts(db, cid, "security")) {
+            Ok(())
+          } else {
+            Err("expected no contacts for an unconfigured oracle")
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("section-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe-2", "Jane Doe", "mailto:jane@example.com") {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let section := company.contacts_section(db, cid)
+              if str.contains(section, "legal-counsel") and str.contains(section, "Jane Doe") {
+                Ok(())
+              } else {
+                Err(str.concat("contacts_section missing expected content: ", section))
+              }
+            },
+          },
         }
       },
     },
@@ -779,7 +967,7 @@ fn test_board_notes_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
   }
 }
 
-fn test_board_report_contains_sections() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_board_report_contains_sections() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -1414,7 +1602,7 @@ fn test_operate_section_omits_errors_section_when_none_recorded() -> [sql, fs_wr
   }
 }
 
-fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_board_report_shows_operate_section() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -1449,7 +1637,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, time, crypto, ra
 # this proves the FILTER: a genuinely Propose-tier pending contract
 # must NOT leak into the "Escalations needing review" section, always
 # showing "(none)" rather than every pending contract.
-fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -1825,7 +2013,7 @@ fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
   }
 }
 
-fn test_board_report_shows_spend() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_board_report_shows_spend() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -2117,7 +2305,7 @@ fn test_operate_sweep_noop_on_empty_company() -> [sql, fs_write, time, crypto, r
 }
 
 fn suite() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_list_companies_returns_seeded_ids(), test_save_company_registers_in_registry(), test_add_contact_and_resolve_returns_human(), test_add_pool_agent_contact_and_resolve_returns_pool_agent(), test_resolve_oracle_contacts_empty_when_none_configured(), test_contacts_section_lists_configured_contacts(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, crypto, random, io, proc] Unit {

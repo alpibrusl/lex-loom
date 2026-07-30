@@ -759,6 +759,57 @@ fn board_note_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write] U
   }
 }
 
+# ── add_contact_cmd (#151) ────────────────────────────────────────────────────
+# Register a human as the contact for one oracle/domain on a company —
+#   COMPANY_ID=acme ORACLE=legal-counsel CONTACT_ID=jane-doe \
+#   CONTACT_NAME="Jane Doe" CONTACT_URL=mailto:jane@example.com \
+#   lex run --allow-effects env,io,sql,fs_read,fs_write,time,crypto,random \
+#     src/main.lex add_contact_cmd
+fn add_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, random] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  let oracle := get_env("ORACLE", "")
+  let contact_id := get_env("CONTACT_ID", "")
+  let contact_name := get_env("CONTACT_NAME", "")
+  let contact_url := get_env("CONTACT_URL", "")
+  if str.is_empty(oracle) or str.is_empty(contact_id) or str.is_empty(contact_name) {
+    io.print("[contacts] ORACLE, CONTACT_ID, and CONTACT_NAME are required")
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[contacts] FATAL: ", e)),
+      Ok(db) => match company.add_contact(db, company_id, oracle, contact_id, contact_name, contact_url) {
+        Err(e) => io.print(str.concat("[contacts] FATAL: ", e)),
+        Ok(_) => io.print(str.join(["[contacts] ", company_id, "/", oracle, " -> ", contact_name], "")),
+      },
+    }
+  }
+}
+
+# ── add_pool_contact_cmd (#151) ───────────────────────────────────────────────
+# Point an oracle/domain at an existing agent_pool specialist instead of a
+# human — the specialist's own measured record (attestation_count, domain
+# tags) is the accountability signal, not a contact address.
+#   COMPANY_ID=acme ORACLE=security AGENT_ID=strict-qa-v1 \
+#   lex run --allow-effects env,io,sql,fs_read,fs_write,time,crypto,random \
+#     src/main.lex add_pool_contact_cmd
+fn add_pool_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, random] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  let oracle := get_env("ORACLE", "")
+  let agent_id := get_env("AGENT_ID", "")
+  if str.is_empty(oracle) or str.is_empty(agent_id) {
+    io.print("[contacts] ORACLE and AGENT_ID are required")
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[contacts] FATAL: ", e)),
+      Ok(db) => match company.add_pool_agent_contact(db, company_id, oracle, agent_id) {
+        Err(e) => io.print(str.concat("[contacts] FATAL: ", e)),
+        Ok(_) => io.print(str.join(["[contacts] ", company_id, "/", oracle, " -> agent:", agent_id], "")),
+      },
+    }
+  }
+}
+
 # ── sprint_digest ─────────────────────────────────────────────────────────────
 fn sprint_digest() -> [env, io, sql, fs_read, fs_write] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

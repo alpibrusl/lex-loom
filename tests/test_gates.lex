@@ -62,6 +62,32 @@ fn test_json_denies_invalid() -> Result[Unit, Str] {
   deny("json invalid", "spec json", "not json at all")
 }
 
+# Found live (URL-shortener sprint, real kimi-k2.7-code run): py_qa's
+# run_code tool hit a real ModuleNotFoundError (flask not installed),
+# which annotate_missing_dependency (roles.lex) prefixes with the literal
+# sentinel "[MISSING_DEPENDENCY]" -- but the QA agent still emitted
+# {"verdict":"PASS",...} reasoning that the code "would pass in a Flask
+# environment". run_code's own evidence file only records a boolean
+# passed/failed, so the orchestrator's evidence cross-check
+# (runner.verify_json_verdict_evidence) can be satisfied by ANY later
+# run_code call that happens to pass -- even a trivial, unrelated one --
+# without ever verifying that run actually exercised the real deliverable.
+# This closes the cheapest version of that gap at the pure-gate layer:
+# a PASS verdict whose own output text admits the sentinel is
+# self-contradictory and denied outright, before the effectful evidence
+# check even runs.
+fn test_json_verdict_pass_allows_clean_pass() -> Result[Unit, Str] {
+  allow("verdict PASS, no missing-dependency admission", "spec json-verdict-pass", "{\"verdict\":\"PASS\",\"reason\":\"all good\"}")
+}
+
+fn test_json_verdict_pass_denies_fail() -> Result[Unit, Str] {
+  deny("verdict FAIL", "spec json-verdict-pass", "{\"verdict\":\"FAIL\",\"reason\":\"broke\"}")
+}
+
+fn test_json_verdict_pass_denies_missing_dependency_admission() -> Result[Unit, Str] {
+  deny("verdict PASS but output admits MISSING_DEPENDENCY", "spec json-verdict-pass", "{\"verdict\":\"PASS\",\"reason\":\"would pass in a Flask environment\",\"output\":\"[MISSING_DEPENDENCY] No module named 'flask'\"}")
+}
+
 # launch/deploy nodes return {"ok": true|false, ...} from a real tool
 # (run_server / deploy_hetzner) — "spec json" alone accepts a well-formed
 # {"ok": false, "error": "..."} just as happily as a real success, so a
@@ -197,7 +223,7 @@ fn test_judge_and_sh_not_plain_grounded() -> Result[Unit, Str] {
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
 }
 
 fn run_all() -> Unit {

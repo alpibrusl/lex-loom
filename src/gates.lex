@@ -55,7 +55,15 @@ fn is_grounded(gate :: Str) -> Bool {
 # `spec json-verdict-pass` is grounded too (#/py_qa self-attestation gap):
 # the orchestrator additionally requires real run_code evidence agreeing
 # with the claimed verdict (runner.verify_json_verdict_evidence), rather
-# than trusting the agent's self-reported "verdict" string alone.
+# than trusting the agent's self-reported "verdict" string alone. That
+# evidence check only compares a boolean pass/fail against the LAST
+# run_code call, though, so it can't by itself catch a PASS claimed after
+# a trivial, unrelated run_code call happened to pass. `evaluate` below
+# closes the cheapest version of that gap in the pure layer: a PASS
+# verdict whose own output text admits the roles.lex "[MISSING_DEPENDENCY]"
+# sentinel is self-contradictory (found live: py_qa hit a real
+# ModuleNotFoundError, then still emitted PASS reasoning the code "would
+# pass in a [missing-package] environment") and is denied outright.
 fn is_json_verdict_pass(gate :: Str) -> Bool {
   str.trim(gate) == "spec json-verdict-pass"
 }
@@ -326,7 +334,11 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                       match extract_verdict(output) {
                         None => GateDeny("output missing 'verdict' field"),
                         Some(v) => if v == "PASS" {
-                          GateAllow
+                          if str.contains(output, "[MISSING_DEPENDENCY]") {
+                            GateDeny("verdict is 'PASS' but the output admits [MISSING_DEPENDENCY] — a run that never exercised the real dependency cannot ground a pass")
+                          } else {
+                            GateAllow
+                          }
                         } else {
                           GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
                         },

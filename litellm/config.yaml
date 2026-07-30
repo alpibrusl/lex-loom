@@ -166,6 +166,13 @@ model_list:
       merge_reasoning_content_in_choices: true
 
   # Kimi (Moonshot AI)
+  - model_name: kimi-k3
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      merge_reasoning_content_in_choices: true
+
   - model_name: kimi-k2.7-code
     litellm_params:
       model: openai/kimi-k2.7-code

@@ -1,0 +1,29 @@
+# Example company manifest (#91). Consumed by bin/bootstrap-company.sh, never
+# by the LLM. Declares identity + stack + policy ONCE, up front; the bootstrap
+# realizes it deterministically and the agents only fill in features.
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "pulsecheck"                                        # [enforced] → COMPANY_ID + workspace dir
+name    = "PulseCheck"
+mission = "Build PulseCheck: a hosted feedback and NPS (Net Promoter Score) widget API for small SaaS products who want to collect user feedback without building their own system. Core v1: a single Python HTTP server with SQLite storage. POST /projects (create a project, returns an API key). POST /feedback (submit {score: 0-10, comment, project_api_key} -- validates score range and API key). GET /projects/<id>/stats (NPS score computed as %promoters - %detractors, response count). GET /projects/<id>/feedback (paginated recent feedback). Tests for every endpoint including invalid score rejection and unknown API key rejection. Since this is a real hosted product for paying developers, draft pricing tiers (a free tier capped at N responses/month + one paid tier) and a ToS/privacy policy draft before considering monetization ready -- real payment/product creation stays a human step, never autonomous."   # [enforced] → GOAL
+
+[stack]
+path  = "python-fastapi"      # [enforced] → skeleton + (later) tech-specialist agents; MUST be a vetted path under paths/ -- picked over python-flask for real input validation (score range, API key) before handlers run
+model = "kimi-k2.7-code"      # [enforced] → MODEL (proven reliable this session on real sprints; needs LITELLM_BASE_URL pointed at our LiteLLM proxy)
+storage = "sqlite"            # [declared-intent] informs skeleton
+
+[infra]
+# repo/hosting/domain intentionally left blank -- nothing publishes without GITHUB_PUBLISH=1 anyway, and no deploy target is set for this run
+
+[roles]
+packs = ["engineering", "finance", "legal"]   # [enforced] finance drafts pricing tiers, legal drafts a ToS/privacy disclaimer -- matches the mission's own ask (real paying developers, monetization mentioned explicitly)
+
+[monitoring]
+checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]
+
+[policy]
+max_iterations = 12           # [enforced] → MAX_ITERATIONS
+budget_eur     = 25           # [enforced] → STOP_WHEN="spend ge 25.00" (rough estimate guard, not real billing)
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants -- money/legal-identity actions never autonomous

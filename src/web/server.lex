@@ -6,6 +6,9 @@
 #   GET  /api/sprints/:id/status  — phase transitions + trail count
 #   GET  /api/sprints/:id/trail   — trail events as JSON
 #   GET  /api/sprints/:id/digest  — tightened specs + seed-graph flag
+#   GET  /api/companies           — company list (id, stage, iteration count, incidents, spend)
+#   GET  /api/companies/:id       — company detail: mission, stage, iterations, product
+#                                    status, operate metrics, escalations, decisions
 #
 # Run:
 #   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
@@ -59,6 +62,10 @@ import "../cast" as cast
 import "../pool_seed" as pool_seed
 
 import "../series" as ser
+
+import "../company" as company
+
+import "../operate_ledger" as oledger
 
 import "lex-trail/src/log" as tlog
 
@@ -517,6 +524,101 @@ fn handle_series(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_
   }
 }
 
+# ── /api/companies ─────────────────────────────────────────────────────────────
+# The Company layer (mission, iterations, backlog, operate-loop incidents/
+# escalations, #118/#145/#147/#148) had zero UI before this -- board_report_cmd
+# was the only way to see any of it. `company.list_companies` is the one
+# genuinely new query; every field below comes from an existing per-company
+# function `board_report_cmd` already calls.
+fn str_list_to_json(xs :: List[Str]) -> Str {
+  str.concat("[", str.concat(str.join(list.map(xs, esc), ","), "]"))
+}
+
+fn iteration_to_json(it :: company.CompanyIteration) -> Str {
+  str.join(["{\"idx\":", int.to_str(it.idx), ",\"sprint_id\":", esc(it.sprint_id), ",\"status\":", esc(it.status), ",\"goal\":", esc(it.goal), "}"], "")
+}
+
+fn metrics_to_json(m :: oledger.OperateMetrics) -> Str {
+  str.join(["{\"open_incidents\":", int.to_str(m.open_incidents), ",\"resolved_count\":", int.to_str(m.resolved_count), ",\"escalated_count\":", int.to_str(m.escalated_count), ",\"verified_effects\":", int.to_str(m.verified_effects), ",\"hit_rate_pct\":", int.to_str(m.hit_rate_pct), ",\"hit_rate_trend\":", esc(m.hit_rate_trend), ",\"avg_evidence_cost_milli\":", int.to_str(m.avg_evidence_cost_milli), "}"], "")
+}
+
+fn company_list_row_json(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  match company.load_company(db, company_id) {
+    None => "",
+    Some(cfg) => {
+      let its := company.load_iterations(db, company_id)
+      let stage := company.load_stage(db, company_id)
+      let m := oledger.operate_metrics(db, company_id)
+      let spend := company.get_company_cost_cents(db, company_id)
+      str.join(["{\"id\":", esc(cfg.id), ",\"goal\":", esc(cfg.goal), ",\"stage\":", esc(company.stage_to_str(stage)), ",\"iterations\":", int.to_str(list.len(its)), ",\"open_incidents\":", int.to_str(m.open_incidents), ",\"escalated_count\":", int.to_str(m.escalated_count), ",\"spend_cents\":", int.to_str(spend), "}"], "")
+    },
+  }
+}
+
+fn handle_list_companies(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  match open_loom_db(db_path) {
+    Err(_) => resp.internal_error(),
+    Ok(db) => {
+      let rows := list.map(company.list_companies(db), fn (id :: Str) -> [sql] Str {
+        company_list_row_json(db, id)
+      })
+      let non_empty := list.filter(rows, fn (r :: Str) -> Bool {
+        not str.is_empty(r)
+      })
+      resp.json(str.concat("{\"companies\":[", str.concat(str.join(non_empty, ","), "]}")))
+    },
+  }
+}
+
+# The product's live URL/status -- the same `liveness_target` +
+# `recent_operate_signals` data `check_and_record_liveness` already produces,
+# just newly exposed. "unknown" (not "down") when no reading exists yet, so
+# the UI can tell "never checked" apart from "checked and it's down".
+fn live_status_of(readings :: List[Str]) -> Str {
+  match list.head(readings) {
+    None => "unknown",
+    Some(r) => if str.contains(r, ": up") {
+      "up"
+    } else {
+      "down"
+    },
+  }
+}
+
+fn handle_company_detail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  match ctx.path_param(c, "id") {
+    None => resp.bad_request("missing company id"),
+    Some(company_id) => match open_loom_db(db_path) {
+      Err(_) => resp.internal_error(),
+      Ok(db) => match company.load_company(db, company_id) {
+        None => resp.not_found(),
+        Some(cfg) => {
+          let its := company.load_iterations(db, company_id)
+          let stage := company.load_stage(db, company_id)
+          let spend := company.get_company_cost_cents(db, company_id)
+          let m := oledger.operate_metrics(db, company_id)
+          let latest := list.head(list.reverse(its))
+          let latest_sprint_id := match latest {
+            None => "",
+            Some(it) => it.sprint_id,
+          }
+          let live := match latest {
+            None => None,
+            Some(it) => company.liveness_target(db, it.sprint_id),
+          }
+          let live_url := match live {
+            None => "",
+            Some(t) => t.url,
+          }
+          let live_status := live_status_of(company.recent_operate_signals(db, company_id, "liveness", 1))
+          let iterations_json := str.concat("[", str.concat(str.join(list.map(its, iteration_to_json), ","), "]"))
+          resp.json(str.join(["{\"id\":", esc(cfg.id), ",\"goal\":", esc(cfg.goal), ",\"stage\":", esc(company.stage_to_str(stage)), ",\"max_iterations\":", int.to_str(cfg.max_iterations), ",\"stop_when\":", esc(cfg.stop_when), ",\"spend_cents\":", int.to_str(spend), ",\"latest_sprint_id\":", esc(latest_sprint_id), ",\"live_url\":", esc(live_url), ",\"live_status\":", esc(live_status), ",\"iterations\":", iterations_json, ",\"shipped_summary\":", esc(company.shipped_summary(db, company_id)), ",\"backlog_summary\":", esc(company.backlog_section(db, company_id)), ",\"operate_metrics\":", metrics_to_json(m), ",\"operate_signals\":", esc(company.operate_section(db, company_id)), ",\"escalations\":", str_list_to_json(company.escalation_dossiers_for_company(db, company_id)), ",\"decisions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "goal_decision", 5), company.format_decision)), ",\"stage_transitions\":", str_list_to_json(list.map(company.recent_events(db, company_id, "stage_transition", 5), company.format_stage_transition)), "}"], ""))
+        },
+      },
+    },
+  }
+}
+
 # ── Router (static + read-only JSON routes) ───────────────────────────────────
 fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r0 := router.new()
@@ -556,8 +658,14 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r11 := router.route_effectful(r10, "POST", "/api/attention/:id/approve", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_approve_attention(db_path, c)
   })
-  router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r12 := router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_reject_attention(db_path, c)
+  })
+  let r13 := router.route_effectful(r12, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    handle_list_companies(db_path)
+  })
+  router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+    handle_company_detail(db_path, c)
   })
 }
 

@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import SprintDetail from './pages/SprintDetail'
 import Agents from './pages/Agents'
+import Companies from './pages/Companies'
+import CompanyDetail from './pages/CompanyDetail'
 
 function Nav() {
   const cls = ({ isActive }: { isActive: boolean }) =>
@@ -19,6 +21,7 @@ function Nav() {
           <span className="text-muted text-xs hidden sm:block">self-improving orchestrator</span>
         </NavLink>
         <NavLink to="/" end className={cls}>Dashboard</NavLink>
+        <NavLink to="/companies" className={cls}>Companies</NavLink>
         <NavLink to="/agents" className={cls}>Agent Pool</NavLink>
       </div>
     </nav>
@@ -34,6 +37,8 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/sprint/:id" element={<SprintDetail />} />
           <Route path="/agents" element={<Agents />} />
+          <Route path="/companies" element={<Companies />} />
+          <Route path="/company/:id" element={<CompanyDetail />} />
         </Routes>
       </main>
     </BrowserRouter>

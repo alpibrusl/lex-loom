@@ -63,3 +63,50 @@ export interface ProviderInfo {
   configured: string[];
   models: Record<string, string[]>;
 }
+
+export interface CompanyStat {
+  id: string;
+  goal: string;
+  stage: string;
+  iterations: number;
+  open_incidents: number;
+  escalated_count: number;
+  spend_cents: number;
+}
+
+export interface OperateMetrics {
+  open_incidents: number;
+  resolved_count: number;
+  escalated_count: number;
+  verified_effects: number;
+  hit_rate_pct: number;
+  hit_rate_trend: string;
+  avg_evidence_cost_milli: number;
+}
+
+export interface CompanyIterationRow {
+  idx: number;
+  sprint_id: string;
+  status: string;
+  goal: string;
+}
+
+export interface CompanyDetail {
+  id: string;
+  goal: string;
+  stage: string;
+  max_iterations: number;
+  stop_when: string;
+  spend_cents: number;
+  latest_sprint_id: string;
+  live_url: string;
+  live_status: 'up' | 'down' | 'unknown';
+  iterations: CompanyIterationRow[];
+  shipped_summary: string;
+  backlog_summary: string;
+  operate_metrics: OperateMetrics;
+  operate_signals: string;
+  escalations: string[];
+  decisions: string[];
+  stage_transitions: string[];
+}

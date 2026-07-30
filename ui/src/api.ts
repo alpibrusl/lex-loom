@@ -1,4 +1,4 @@
-import type { SprintStat, SprintStatus, TrailEvent, Agent, AgentDetail, SprintResult, DigestData, ProviderInfo } from './types';
+import type { SprintStat, SprintStatus, TrailEvent, Agent, AgentDetail, SprintResult, DigestData, ProviderInfo, CompanyStat, CompanyDetail } from './types';
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -65,4 +65,12 @@ export async function createAgent(req: {
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+
+export async function getCompanies(): Promise<{ companies: CompanyStat[] }> {
+  return get('/api/companies');
+}
+
+export async function getCompanyDetail(id: string): Promise<CompanyDetail> {
+  return get(`/api/companies/${id}`);
 }

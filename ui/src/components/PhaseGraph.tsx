@@ -1,6 +1,7 @@
+import { Link } from 'react-router-dom'
 import type { TrailEvent } from '../types'
 
-export interface GraphNode { id: string; role: string; gate: string }
+export interface GraphNode { id: string; role: string; gate: string; expand?: string }
 export interface GraphEdge { from: string; to: string; handoff: string }
 export interface GraphData  { id: string; phase: string; nodes: GraphNode[]; edges: GraphEdge[] }
 
@@ -82,8 +83,8 @@ export default function PhaseGraph({ graph, acceptedNodes = new Set(), activeNod
                     const st = ROLE_STYLE[role] || ROLE_STYLE['build']
                     const done = acceptedNodes.has(n.id)
                     const active = activeNode === n.id
-                    return (
-                      <div key={n.id} className={`px-3 py-2 rounded-lg border text-xs ${st.bg} ${st.border} ${active ? 'ring-2 ring-white/20' : ''}`}>
+                    const box = (
+                      <div className={`px-3 py-2 rounded-lg border text-xs ${st.bg} ${st.border} ${active ? 'ring-2 ring-white/20' : ''} ${n.expand ? 'hover:border-slate-400 transition-colors' : ''}`}>
                         <div className="flex items-center gap-1.5 mb-1">
                           <span>{st.icon}</span>
                           <span className={`font-semibold ${st.text}`}>{role}</span>
@@ -94,7 +95,17 @@ export default function PhaseGraph({ graph, acceptedNodes = new Set(), activeNod
                         {n.gate && (
                           <div className="mt-1 text-muted/70 text-[10px] leading-tight line-clamp-2" title={n.gate}>{n.gate}</div>
                         )}
+                        {n.expand && (
+                          <div className="mt-1 text-indigo-300 text-[10px] font-semibold">🧩 sub-loom →</div>
+                        )}
                       </div>
+                    )
+                    return n.expand ? (
+                      <Link key={n.id} to={`/sprint/${encodeURIComponent(`${graph.id}/${n.id}`)}`} title={`Open sub-loom: ${n.expand}`}>
+                        {box}
+                      </Link>
+                    ) : (
+                      <div key={n.id}>{box}</div>
                     )
                   })}
                 </div>

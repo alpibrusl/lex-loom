@@ -62,6 +62,30 @@ fn test_json_denies_invalid() -> Result[Unit, Str] {
   deny("json invalid", "spec json", "not json at all")
 }
 
+# launch/deploy nodes return {"ok": true|false, ...} from a real tool
+# (run_server / deploy_hetzner) — "spec json" alone accepts a well-formed
+# {"ok": false, "error": "..."} just as happily as a real success, so a
+# launch that genuinely never started the server still passed its gate.
+fn test_json_ok_true_allows_true() -> Result[Unit, Str] {
+  allow("json-ok-true with ok:true", "spec json-ok-true", "{\"ok\": true, \"url\": \"http://localhost:8080\"}")
+}
+
+fn test_json_ok_true_denies_false() -> Result[Unit, Str] {
+  deny("json-ok-true with ok:false", "spec json-ok-true", "{\"ok\": false, \"error\": \"server did not respond within 20s\"}")
+}
+
+fn test_json_ok_true_denies_missing_field() -> Result[Unit, Str] {
+  deny("json-ok-true missing ok field", "spec json-ok-true", "{\"url\": \"http://localhost:8080\"}")
+}
+
+fn test_json_ok_true_denies_non_boolean() -> Result[Unit, Str] {
+  deny("json-ok-true non-boolean ok field", "spec json-ok-true", "{\"ok\": \"true\"}")
+}
+
+fn test_json_ok_true_denies_invalid_json() -> Result[Unit, Str] {
+  deny("json-ok-true invalid json", "spec json-ok-true", "not json at all")
+}
+
 fn test_json_field_allows_present() -> Result[Unit, Str] {
   allow("json-field id present", "spec json-field id", "{\"id\": \"sprint-1\", \"phase\": \"Design\"}")
 }
@@ -148,6 +172,18 @@ fn test_sh_well_formed() -> Result[Unit, Str] {
   }
 }
 
+fn test_json_ok_true_well_formed() -> Result[Unit, Str] {
+  if gates.is_well_formed("spec json-ok-true") {
+    Ok(())
+  } else {
+    Err("spec json-ok-true should be well-formed")
+  }
+}
+
+fn test_json_ok_true_gate_not_grounded() -> Result[Unit, Str] {
+  is_grounded_eq("spec json-ok-true", "spec json-ok-true", false)
+}
+
 fn test_judge_and_sh_not_plain_grounded() -> Result[Unit, Str] {
   if gates.is_grounded("spec judge \"x\"") {
     Err("judge is not the compiles-grounded lane")
@@ -161,7 +197,7 @@ fn test_judge_and_sh_not_plain_grounded() -> Result[Unit, Str] {
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
 }
 
 fn run_all() -> Unit {

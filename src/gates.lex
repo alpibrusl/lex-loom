@@ -10,6 +10,7 @@
 #   "spec not-contains X"     output must not contain X
 #   "spec starts-with X"      output must start with X
 #   "spec json"               output must be valid JSON
+#   "spec json-ok-true"       output must be JSON with an "ok" field equal to boolean true
 #   "spec json-field K"       output must be JSON with field K present
 #   "spec len-gt N"           output length must be > N chars
 #
@@ -74,38 +75,42 @@ fn is_well_formed(gate :: Str) -> Bool {
       if g == "spec json" {
         true
       } else {
-        if g == "spec json-verdict-pass" {
+        if g == "spec json-ok-true" {
           true
         } else {
-          let has_arg := fn (prefix :: Str) -> Bool {
-            if str.starts_with(g, prefix) {
-              str.len(str.trim(str.slice(g, str.len(prefix), str.len(g)))) > 0
-            } else {
-              false
-            }
-          }
-          if has_arg("spec contains ") {
+          if g == "spec json-verdict-pass" {
             true
           } else {
-            if has_arg("spec not-contains ") {
+            let has_arg := fn (prefix :: Str) -> Bool {
+              if str.starts_with(g, prefix) {
+                str.len(str.trim(str.slice(g, str.len(prefix), str.len(g)))) > 0
+              } else {
+                false
+              }
+            }
+            if has_arg("spec contains ") {
               true
             } else {
-              if has_arg("spec starts-with ") {
+              if has_arg("spec not-contains ") {
                 true
               } else {
-                if has_arg("spec json-field ") {
+                if has_arg("spec starts-with ") {
                   true
                 } else {
-                  if has_arg("spec len-gt ") {
+                  if has_arg("spec json-field ") {
                     true
                   } else {
-                    if has_arg("spec judge ") {
+                    if has_arg("spec len-gt ") {
                       true
                     } else {
-                      if has_arg("spec sh ") {
+                      if has_arg("spec judge ") {
                         true
                       } else {
-                        has_arg("human ")
+                        if has_arg("spec sh ") {
+                          true
+                        } else {
+                          has_arg("human ")
+                        }
                       }
                     }
                   }
@@ -281,42 +286,54 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                 Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
               }
             } else {
-              if str.starts_with(trimmed, "spec json-field ") {
-                let field := str.trim(str.slice(trimmed, 16, str.len(trimmed)))
+              if trimmed == "spec json-ok-true" {
                 match jv.parse(output) {
                   Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
-                  Ok(j) => match jv.get_field(j, field) {
-                    None => GateDeny(str.join(["JSON output missing field '", field, "'"], "")),
-                    Some(_) => GateAllow,
+                  Ok(j) => match jv.get_field(j, "ok") {
+                    None => GateDeny("JSON output missing field 'ok'"),
+                    Some(JBool(true)) => GateAllow,
+                    Some(JBool(false)) => GateDeny("'ok' field is false"),
+                    Some(_) => GateDeny("'ok' field is not a boolean"),
                   },
                 }
               } else {
-                if str.starts_with(trimmed, "spec len-gt ") {
-                  let rest := str.trim(str.slice(trimmed, 12, str.len(trimmed)))
-                  let n_str := match list.head(str.split(rest, " ")) {
-                    Some(tok) => tok,
-                    None => rest,
-                  }
-                  match str.to_int(n_str) {
-                    None => GateDeny(str.concat("invalid len-gt value: ", n_str)),
-                    Some(n) => if str.len(output) > n {
-                      GateAllow
-                    } else {
-                      GateDeny(str.join(["output length ", int.to_str(str.len(output)), " not > ", int.to_str(n)], ""))
+                if str.starts_with(trimmed, "spec json-field ") {
+                  let field := str.trim(str.slice(trimmed, 16, str.len(trimmed)))
+                  match jv.parse(output) {
+                    Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
+                    Ok(j) => match jv.get_field(j, field) {
+                      None => GateDeny(str.join(["JSON output missing field '", field, "'"], "")),
+                      Some(_) => GateAllow,
                     },
                   }
                 } else {
-                  if trimmed == "spec json-verdict-pass" {
-                    match extract_verdict(output) {
-                      None => GateDeny("output missing 'verdict' field"),
-                      Some(v) => if v == "PASS" {
+                  if str.starts_with(trimmed, "spec len-gt ") {
+                    let rest := str.trim(str.slice(trimmed, 12, str.len(trimmed)))
+                    let n_str := match list.head(str.split(rest, " ")) {
+                      Some(tok) => tok,
+                      None => rest,
+                    }
+                    match str.to_int(n_str) {
+                      None => GateDeny(str.concat("invalid len-gt value: ", n_str)),
+                      Some(n) => if str.len(output) > n {
                         GateAllow
                       } else {
-                        GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
+                        GateDeny(str.join(["output length ", int.to_str(str.len(output)), " not > ", int.to_str(n)], ""))
                       },
                     }
                   } else {
-                    from_spec_verdict(ev.eval(spec_non_empty(), [("output", sp.VStr(output))]))
+                    if trimmed == "spec json-verdict-pass" {
+                      match extract_verdict(output) {
+                        None => GateDeny("output missing 'verdict' field"),
+                        Some(v) => if v == "PASS" {
+                          GateAllow
+                        } else {
+                          GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
+                        },
+                      }
+                    } else {
+                      from_spec_verdict(ev.eval(spec_non_empty(), [("output", sp.VStr(output))]))
+                    }
                   }
                 }
               }

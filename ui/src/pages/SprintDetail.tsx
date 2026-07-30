@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSprintTrail, getSprintDigest, getArtifact, getAgents, getAgent } from '../api'
+import { getSprintTrail, getSprintDigest, getSprintGraph, getArtifact, getAgents, getAgent } from '../api'
 import type { TrailEvent, DigestData, Agent } from '../types'
 import DiffViewer from '../components/DiffViewer'
 import PhaseGraph, { type GraphData, graphStatusFromTrail } from '../components/PhaseGraph'
@@ -270,8 +270,7 @@ export default function SprintDetail() {
       if (graphEv) {
         // Try to fetch from graph endpoint
         try {
-          const gr = await fetch(`/api/sprints/${id}/graph`)
-          const grData = await gr.json()
+          const grData = await getSprintGraph(id!)
           if (grData.graph) setGraphJson(JSON.stringify(grData.graph))
         } catch {}
       }
@@ -296,7 +295,7 @@ export default function SprintDetail() {
 
       // Load artifact contents
       for (const step of stepList) {
-        getArtifact(id!, step.artifactHash).then(r => {
+        getArtifact(step.artifactHash).then(r => {
           const raw = r.content
           if (step.role === 'qa') {
             try {

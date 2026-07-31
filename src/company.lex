@@ -1985,6 +1985,70 @@ fn product_signals_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   }
 }
 
+# Real financial signal (#160): the only $ figure tracked anywhere today is
+# LLM API cost — get_company_cost_cents, documented as "a rough proxy, not
+# real billing data." There is no revenue signal at all, so a company can
+# never compare what it spent against what it (if anything) actually earned.
+#
+# loom never touches a payment rail itself (human_gates already keeps
+# "payments" a human-only action) — this is READ-ONLY, and deliberately
+# provider-agnostic: an operator who wants real economics tracked sets
+# REVENUE_URL to any endpoint THEY control (a tiny script reading their own
+# Stripe dashboard, an x402 payment log, anything) that returns
+# {"revenue_cents": N}. loom just reads that one field; it never learns
+# which payment rail, if any, is behind it.
+fn fetch_revenue_signal(url :: Str) -> [proc] Str {
+  let script := str.join(["curl -s --max-time 5 '", url, "' 2>/dev/null || echo CURL_FAILED"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "(unreachable)",
+    Ok(r) => {
+      let out := str.trim(r.stdout)
+      if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+        "(unreachable)"
+      } else {
+        str.slice(out, 0, 200)
+      }
+    },
+  }
+}
+
+# Reads REVENUE_URL from the environment and, if set, fetches + records the
+# revenue signal alongside liveness/product_usage. A no-op (never records
+# anything) when unset, so real_economics_section can tell "never configured"
+# apart from "configured, currently unreachable or zero" (#160).
+fn check_and_record_revenue(db :: conn.ConnDb, company_id :: Str, idx :: Int) -> [env, sql, time, proc] Result[Unit, Str] {
+  match env.get("REVENUE_URL") {
+    None => Ok(()),
+    Some(url) => if str.is_empty(url) {
+      Ok(())
+    } else {
+      record_operate_signal(db, company_id, idx, "revenue_cents", fetch_revenue_signal(url))
+    },
+  }
+}
+
+# The Strategist's + board report's real-economics view (#160): the latest
+# recorded revenue reading against the estimated LLM spend, so "are we
+# actually making money" is a real comparison instead of absent entirely.
+fn real_economics_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let latest := recent_operate_signals(db, company_id, "revenue_cents", 1)
+  if list.is_empty(latest) {
+    "(no revenue source configured — set REVENUE_URL to track real income against spend)"
+  } else {
+    let reading := after_ts(str.join(latest, ""))
+    let revenue_cents := match jv.parse(reading) {
+      Err(_) => 0,
+      Ok(j) => json_int_field(j, "revenue_cents"),
+    }
+    let spend := get_company_cost_cents(db, company_id)
+    if str.contains(reading, "unreachable") {
+      str.join(["Revenue source configured but unreachable on the last check. Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
+    } else {
+      str.join(["Revenue so far: ", format_cents(revenue_cents), ". Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
+    }
+  }
+}
+
 # Populate the phase-0 replay corpus (#118/#120) from a live database's
 # existing signal history: derive incident episodes (`oledger.backfill_all`)
 # and, since backfilled rows never went through the between-iteration
@@ -2048,7 +2112,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

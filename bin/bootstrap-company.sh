@@ -50,11 +50,13 @@ model = get("stack", "model", "glm-5.2")
 maxit = get("policy", "max_iterations", 12)
 budg  = get("policy", "budget_eur", None)
 repo  = get("infra", "repo", "")
+revenue_url = get("finance", "revenue_url", "")
 
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
     "CBUDGET": "" if budg is None else str(budg),
+    "CREVENUE_URL": revenue_url,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -176,5 +178,5 @@ fi
 # ── Hand off to the runtime (loom fills in features inside the skeleton).
 export LOOM_WORKSPACE="$WS"
 COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN" \
-  DB_PATH="$DIR/company.db" GOAL="$CGOAL" \
+  DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   bin/run-company.sh

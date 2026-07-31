@@ -1741,6 +1741,56 @@ fn fetch_product_usage(url :: Str) -> [proc] Str {
   }
 }
 
+# Distribution signal (#161): "nothing measures what happened after" a
+# marketing role's content shipped. The same golden-path convention as
+# /loom/usage, sibling to the /loom/content route the Content Creator's
+# publish_content tool writes to — loom just reads the {posts:[{title,
+# views}]} shape back and forwards the raw JSON, same opaque-signal
+# philosophy as product_usage.
+fn fetch_distribution_signal(url :: Str) -> [proc] Str {
+  let script := str.join(["curl -s --max-time 5 '", url, "/loom/content' 2>/dev/null || echo CURL_FAILED"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "(unreachable)",
+    Ok(r) => {
+      let out := str.trim(r.stdout)
+      if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+        "(unreachable)"
+      } else {
+        str.slice(out, 0, 500)
+      }
+    },
+  }
+}
+
+fn sum_post_views(posts :: List[jv.Json]) -> Int {
+  list.fold(posts, 0, fn (acc :: Int, p :: jv.Json) -> Int {
+    acc + json_int_field(p, "views")
+  })
+}
+
+# The Strategist's + board report's distribution view (#161): how many
+# pieces of content actually got published, and whether anyone showed up —
+# closing the loop marketing roles previously had no way to see.
+fn distribution_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let latest := recent_operate_signals(db, company_id, "content_reach", 1)
+  if list.is_empty(latest) {
+    "(no content published yet — no launched server, or the Content Creator hasn't published via publish_content)"
+  } else {
+    let reading := after_ts(str.join(latest, ""))
+    if str.contains(reading, "unreachable") {
+      "Content was published, but the product is unreachable on the last check."
+    } else {
+      match jv.parse(reading) {
+        Err(_) => reading,
+        Ok(j) => match jv.get_field(j, "posts") {
+          Some(JList(posts)) => str.join(["Published posts: ", int.to_str(list.len(posts)), ". Total views recorded: ", int.to_str(sum_post_views(posts)), "."], ""),
+          _ => "(no content published yet)",
+        },
+      }
+    }
+  }
+}
+
 # SSH into the Hetzner host and grep the deployed container's last 5 minutes
 # of docker logs for error-shaped lines -- a real bug often still answers
 # HTTP requests (so `check_liveness`'s any-response-counts-as-up misses it
@@ -1831,6 +1881,11 @@ fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, s
           }
           let __usage := if reading.status == "up" {
             record_operate_signal(db, company_id, idx, "product_usage", fetch_product_usage(target.url))
+          } else {
+            Ok(())
+          }
+          let __dist := if reading.status == "up" {
+            record_operate_signal(db, company_id, idx, "content_reach", fetch_distribution_signal(target.url))
           } else {
             Ok(())
           }
@@ -2112,7 +2167,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

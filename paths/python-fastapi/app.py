@@ -12,11 +12,25 @@ layout each sprint.
 """
 from __future__ import annotations
 
+import html
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 app = FastAPI(title="app")
+
+# In-process store, deliberately the simplest thing that actually works for
+# a single dev/demo server (same scope as the rest of this skeleton) — build
+# agents extend this into real persistence once the product needs it to
+# survive a restart.
+_POSTS: list[dict] = []
+
+
+class ContentPost(BaseModel):
+    title: str
+    body: str
 
 
 @app.get("/health")
@@ -33,6 +47,38 @@ def health() -> dict:
 @app.get("/loom/usage")
 def loom_usage() -> dict:
     return {"summary": "no usage data yet"}
+
+
+# Real, self-hosted distribution — no external platform, no API keys. The
+# Content Creator agent POSTs here to actually publish (not just write prose
+# nobody reads); /blog serves it to real visitors and /loom/usage's sibling
+# read here is how loom measures whether anyone showed up. Build agents may
+# extend this with real templates/styling, but keep the two routes and the
+# {title, body, views} shape so loom's distribution signal keeps working.
+@app.get("/loom/content")
+def loom_content_list() -> dict:
+    return {"posts": [{"title": p["title"], "views": p["views"]} for p in _POSTS]}
+
+
+@app.post("/loom/content", status_code=201)
+def loom_content_publish(post: ContentPost) -> dict:
+    title = post.title.strip()
+    body = post.body.strip()
+    if not title or not body:
+        raise HTTPException(status_code=400, detail="title and body are required")
+    _POSTS.append({"title": title, "body": body, "views": 0})
+    return {"ok": True, "post_count": len(_POSTS)}
+
+
+@app.get("/blog", response_class=HTMLResponse)
+def blog() -> str:
+    if not _POSTS:
+        return "<h1>Blog</h1><p>No posts yet.</p>"
+    parts = ["<h1>Blog</h1>"]
+    for p in _POSTS:
+        p["views"] += 1
+        parts.append(f"<article><h2>{html.escape(p['title'])}</h2><p>{html.escape(p['body'])}</p></article>")
+    return "".join(parts)
 
 
 if __name__ == "__main__":

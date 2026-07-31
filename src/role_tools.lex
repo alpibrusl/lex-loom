@@ -40,7 +40,11 @@ fn tools_for(role :: Str) -> List[Str] {
               if role == "security" {
                 ["security_scan"]
               } else {
-                []
+                if role == "content_creator" {
+                  ["publish_content"]
+                } else {
+                  []
+                }
               }
             }
           }

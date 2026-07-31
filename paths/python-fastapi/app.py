@@ -81,6 +81,17 @@ def blog() -> str:
     return "".join(parts)
 
 
+# Read-only, by the CX agent (never end users). Starts empty — the product
+# has no real users yet. As the domain model grows, build agents extend this
+# to surface REAL items needing a human response (support requests, negative
+# feedback, error reports — whatever this product's domain actually
+# generates), each as {id, text, status}. CX only ever drafts replies from
+# what's returned here; it never sends anything.
+@app.get("/loom/support")
+def loom_support() -> dict:
+    return {"items": []}
+
+
 if __name__ == "__main__":
     import uvicorn
 

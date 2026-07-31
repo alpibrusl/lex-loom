@@ -66,6 +66,16 @@ def create_app() -> Flask:
             parts.append(f"<article><h2>{escape(p['title'])}</h2><p>{escape(p['body'])}</p></article>")
         return "".join(parts), 200
 
+    # Read-only, by the CX agent (never end users). Starts empty — the
+    # product has no real users yet. As the domain model grows, build agents
+    # extend this to surface REAL items needing a human response (support
+    # requests, negative feedback, error reports — whatever this product's
+    # domain actually generates), each as {id, text, status}. CX only ever
+    # drafts replies from what's returned here; it never sends anything.
+    @app.route("/loom/support", methods=["GET"])
+    def loom_support():
+        return jsonify({"items": []})
+
     return app
 
 

@@ -48,8 +48,8 @@ fn board_notes_section(notes :: List[Str]) -> Str {
 
 # Pure prompt construction, split out from decide_next so it's testable
 # without a real LLM call or a live DB (#86).
-fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, product_signals :: Str, build_status :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
-  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, product_signals :: Str, economics :: Str, build_status :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
+  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nREAL ECONOMICS (revenue read from a human-configured, read-only source, compared against estimated LLM spend — loom never touches payments itself):\n", economics, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
 }
 
 # Pure, testable: whether pending notes should be marked consumed given the
@@ -92,8 +92,9 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let notes := company.pending_board_notes(db, ccfg.id)
   let operate := company.operate_section(db, ccfg.id)
   let product_signals := company.product_signals_section(db, ccfg.id)
+  let economics := company.real_economics_section(db, ccfg.id)
   let build_status := company.build_status_section(db, ccfg.id)
-  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, product_signals, build_status, current_goal, ctx)
+  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, product_signals, economics, build_status, current_goal, ctx)
   let reply := strategist_reply_with_retry(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx), 0)
   let __sc := company.record_strategist_cost(db, ccfg.id, ctx.idx)
   let decision := company.parse_strategist_decision(reply)
@@ -182,6 +183,14 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     match company.check_and_record_liveness(db, ccfg.id, k, sprint_id) {
       Ok(_) => (),
       Err(m) => io.print(str.join(["[company] liveness check failed: ", m], "")),
+    }
+  } else {
+    ()
+  }
+  let __revenue := if result.success {
+    match company.check_and_record_revenue(db, ccfg.id, k) {
+      Ok(_) => (),
+      Err(m) => io.print(str.join(["[company] revenue check failed: ", m], "")),
     }
   } else {
     ()

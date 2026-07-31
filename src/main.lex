@@ -548,6 +548,10 @@ fn company_monitor_cmd() -> [env, io, sql, fs_read, fs_write, time, proc] Unit {
           io.print(str.join(["[loom] no iterations recorded yet for company ", company_id], ""))
         } else {
           let sprint_id := company.iteration_sprint_id(company_id, idx)
+          let __rev := match company.check_and_record_revenue(db, company_id, idx) {
+            Err(e) => io.print(str.concat("[loom] revenue check failed: ", e)),
+            Ok(_) => (),
+          }
           match company.check_and_record_liveness(db, company_id, idx, sprint_id) {
             Err(e) => io.print(str.concat("[loom] liveness check failed: ", e)),
             Ok(_) => io.print(str.join(["[loom] liveness checked for ", company_id, " iter ", int.to_str(idx)], "")),

@@ -50,8 +50,13 @@ fi
 : "${WORKER_COUNT:=2}"
 : "${POLL_MS:=500}"
 : "${RECLAIM_LEASE_SECONDS:=300}"
+# Optional, read-only (#160): a human-configured endpoint returning
+# {"revenue_cents": N} from whatever payment rail they actually use. loom
+# never touches a payment rail itself -- unset means no real economics
+# signal is tracked, not that revenue is zero.
+: "${REVENUE_URL:=}"
 
-export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS
+export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS REVENUE_URL
 
 WORKER_PIDS=()
 WORKER_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loom-company-workers.XXXXXX")"

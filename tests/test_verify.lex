@@ -167,7 +167,7 @@ fn role_tools_csv(tools :: List[tl.Tool]) -> Str {
 # is what makes the independent re-derivation trustworthy — fails CI the moment
 # the two diverge.
 fn test_runtime_matches_policy() -> [env] Result[Unit, Str] {
-  list.fold(["build", "py_build", "qa", "py_qa", "launch", "deploy"], Ok(()), fn (acc :: Result[Unit, Str], r :: Str) -> [env] Result[Unit, Str] {
+  list.fold(["build", "py_build", "qa", "py_qa", "launch", "deploy", "content_creator"], Ok(()), fn (acc :: Result[Unit, Str], r :: Str) -> [env] Result[Unit, Str] {
     match acc {
       Err(e) => Err(e),
       Ok(_) => {

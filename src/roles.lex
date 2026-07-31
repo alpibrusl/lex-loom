@@ -438,19 +438,21 @@ fn make_provider_no_mistral() -> [env] prov.Provider {
 # Construct a tool from its canonical name. The inverse of `tool.name`; the only
 # place a role-policy name (role_tools.tools_for) is bound to its implementation.
 # `evidence_path` only matters to `run_code` (see make_run_code_tool); every
-# other tool ignores it.
-fn tool_by_name(name :: Str, evidence_path :: Str) -> [env] Option[t.Tool] {
+# other tool ignores it. `sprint_id` scopes lex_check/lex_run/py_check/
+# security_scan's shared work dir (see lex_skill.work_dir) so a build node's
+# files can never be clobbered by an unrelated sprint (#156).
+fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[t.Tool] {
   if name == "lex_guidelines" {
     Some(lexskill.make_lex_guidelines_tool())
   } else {
     if name == "lex_check" {
-      Some(lexskill.make_lex_check_tool(evidence_path))
+      Some(lexskill.make_lex_check_tool(evidence_path, sprint_id))
     } else {
       if name == "lex_run" {
-        Some(lexskill.make_lex_run_tool(evidence_path))
+        Some(lexskill.make_lex_run_tool(evidence_path, sprint_id))
       } else {
         if name == "py_check" {
-          Some(lexskill.make_py_check_tool())
+          Some(lexskill.make_py_check_tool(sprint_id))
         } else {
           if name == "run_code" {
             Some(make_run_code_tool(evidence_path))
@@ -462,7 +464,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str) -> [env] Option[t.Tool] {
                 Some(make_deploy_hetzner_tool())
               } else {
                 if name == "security_scan" {
-                  Some(lexskill.make_security_scan_tool())
+                  Some(lexskill.make_security_scan_tool(sprint_id))
                 } else {
                   None
                 }
@@ -478,10 +480,12 @@ fn tool_by_name(name :: Str, evidence_path :: Str) -> [env] Option[t.Tool] {
 # An agent's tool set, derived from its role's canonical policy — so the tools a
 # node is granted at runtime are exactly the tools the verifier checks against.
 # `evidence_path` is forwarded to `run_code` (see make_run_code_tool); pass ""
-# for roles/callers that don't need grounded json-verdict evidence.
-fn tools_of_role(role :: Str, evidence_path :: Str) -> [env] List[t.Tool] {
+# for roles/callers that don't need grounded json-verdict evidence. `sprint_id`
+# is forwarded to tool_by_name; pass "" for roles/callers that never touch the
+# shared work dir.
+fn tools_of_role(role :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] List[t.Tool] {
   list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> [env] List[t.Tool] {
-    match tool_by_name(name, evidence_path) {
+    match tool_by_name(name, evidence_path, sprint_id) {
       Some(tool) => list.concat(acc, [tool]),
       None => acc,
     }
@@ -510,12 +514,12 @@ fn make_emit_graph_tool(sprint_id :: Str) -> t.Tool {
 
 fn architect(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-architect", kind: "architect", system_prompt: "You are a software design architect. Given a project request, produce a concise technical design specification in plain prose: describe the components, key functions or classes, their interfaces, and expected behaviour. Do not output JSON or sprint graphs. Write 2-4 paragraphs maximum.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn architect_with_context(model :: Str, specs_context :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-architect", kind: "architect", system_prompt: str.concat("You are the Architect for a software sprint. Given a project request, output ONLY a JSON sprint graph -- no prose, no markdown fences. Each node needs an id, a role, and a gate. Each edge needs from, to, and a handoff. Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"schema {}\"}]}", specs_context), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # Select the most relevant lex_guidelines topic(s) for a task request.
@@ -595,7 +599,7 @@ fn architect_lex(model :: Str, request :: Str) -> [env] runner.AgentDef {
   let topic := lex_topic_for_request(request)
   let lex_hint := str.join(["\n\nLEX CONTEXT HINT: This sprint targets the Lex language. When specifying Build nodes, ", "include in the gate field: 'call lex_guidelines(topic=", topic, ") before writing any code'. ", "Lex is NOT in the model's training data. The Build agent has lex_guidelines and lex_check tools. ", "The QA agent has lex_check and lex_run tools."], "")
   let system_prompt := str.join(["You are the Architect for a Lex language software sprint. ", "Given a project request, output ONLY a JSON sprint graph — no prose, no markdown fences. ", "Each node needs an id, a role ('build', 'qa', 'demo', 'scribe'), and a gate. ", "Each edge needs from, to, and a handoff describing what artifact passes. ", "Shape: {\"id\":\"...\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"...\",\"role\":\"...\",\"gate\":\"...\"}],", "\"edges\":[{\"from\":\"...\",\"to\":\"...\",\"handoff\":\"...\"}]}", lex_hint], "")
-  { id: "loom-architect-lex", kind: "architect", system_prompt: system_prompt, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-architect-lex", kind: "architect", system_prompt: system_prompt, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # ── System prompt helpers ─────────────────────────────────────────────────────
@@ -644,12 +648,12 @@ fn build_system_prompt() -> Str {
 
 fn pm(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-pm", kind: "pm", system_prompt: pm_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-pm", kind: "pm", system_prompt: pm_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn architect_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: architect_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-architect", kind: "architect", system_prompt: architect_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # ── LLM-as-judge evaluator (the `spec judge "<criteria>"` gate) ────────────────
@@ -663,7 +667,7 @@ fn judge_system_prompt(criteria :: Str) -> Str {
 
 fn judge_agent(model :: Str, criteria :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-judge", kind: "judge", system_prompt: judge_system_prompt(criteria), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-judge", kind: "judge", system_prompt: judge_system_prompt(criteria), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # Strategist — the agent-first "board" (company C8, #62). Between iterations it
@@ -673,86 +677,96 @@ fn judge_agent(model :: Str, criteria :: Str) -> [env] runner.AgentDef {
 # recorded, so the company's direction changes are auditable, not silent.
 fn strategist_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-strategist", kind: "strategist", system_prompt: strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-strategist", kind: "strategist", system_prompt: strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn strategist_system_prompt() -> Str {
   str.join(["You are the STRATEGIST for an autonomous software company that pursues a persistent MISSION by running a series of build sprints (iterations). After each iteration you decide the company's next move.\n\n", "You receive:\n", "- MISSION: the enduring goal that does not change.\n", "- SHIPPED SO FAR: every feature the company has ALREADY successfully built, oldest first.\n", "- BOARD NOTES: advisory guidance from a human board member.\n", "- OPERATE SIGNALS: real observations from OUTSIDE the build sandbox — this is the ONLY signal in your context that isn't produced by the same build/QA/digest loop judging its own work. Includes a liveness check (is a launched/deployed server actually still responding), a scan of the last 5 minutes of the live container's own logs for errors/exceptions/tracebacks (a service can be technically 'up' while its logs show it's throwing errors on every request, which liveness alone would miss), any open incidents the operate controller has recorded, and CONTROLLER METRICS — a summarised rollup, never raw incident text: open incident count, incidents resolved vs. escalated, the verified-action hit rate and its trend, average evidence cost per closed incident, and company spend so far.\n", "- LEX BUILD STATUS: ground truth (from the actual sprint graphs run, not a self-report) on whether the MOST RECENT iteration's graph accepted a Lex ('build' role) node — NOT lifetime history. If MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration point: (a) if this says no Lex build node has EVER shipped, that integration is unbuilt regardless of Python-side progress — 'revise' or 'add' a goal that actually builds/wires the Lex side; (b) if this says the MOST RECENT iteration dropped Lex even though one shipped earlier, that is a REGRESSION, not progress — do not describe the mission as satisfied by whatever the last iteration built (e.g. do not call a plain Python/Flask server \"the Lex server\" just because the goal text said 'Lex') — 'revise' to bring the current direction back to actually using Lex.\n", "- CURRENT GOAL: what the last iteration actually attempted.\n", "- LAST RESULT: the four-layer verifier verdict (passed/failed) and the digest summary of what was built and learned.\n\n", "Decide ONE of:\n", "- \"continue\": the current goal is right and not yet met — run it again to improve.\n", "- \"revise\": the CURRENT goal should change now — a pivot, a narrower scope. Provide the new goal; it replaces the current one immediately.\n", "- \"add\": the current goal is fine as-is, but you see a DIFFERENT feature the mission needs later. Provide that feature as a goal — it is QUEUED to a backlog and worked on only once the current goal is later stopped, without interrupting what's in progress now.\n", "- \"stop\": the current goal is fully achieved. If a feature is queued in the backlog, the company automatically moves on to it next; if the backlog is empty, the company halts (the mission itself is complete or a dead end has been reached). Explain which.\n\n", "RULES:\n", "- Ground your decision in the LAST RESULT, not optimism. A failed verdict is evidence the goal is too big or mis-specified — prefer revise (narrower) over continue.\n", "- A QA-passed feature that OPERATE SIGNALS show is actually down/broken in the real world — including a production error-log scan showing real exceptions, even if the liveness check itself is still 'up' — is EVIDENCE AGAINST treating it as shipped, regardless of what the last QA verdict said. QA proves the code works in a sandbox, not that it's still working now. Prefer \"revise\" (fix what's actually broken — name the specific error from the log scan in the new goal) over moving on to new work when this happens.\n", "- Sustained incident/cost load on a shipped feature — an escalated-incident count that keeps growing, a declining verified-action hit rate, or evidence cost climbing without incidents actually closing — is EVIDENCE AGAINST 'continue' on that feature, independent of the last QA verdict; QA proves the code once, the controller metrics show whether it keeps working in production. Prefer 'revise' to address the specific pattern the metrics show.\n", "- NEVER revise/add a goal that duplicates or substantially overlaps something already in SHIPPED SO FAR — check that list first. If everything you can think of is already shipped, prefer \"stop\" over inventing a repeat.\n", "- A revise/add goal MUST be a concrete, buildable request in one or two sentences, advancing the MISSION, and must be a genuinely NEW capability not already shipped.\n", "- Use \"add\" to grow the feature set over time (e.g. after a core function seals, add the next related capability) rather than only ever revising the one thing in front of you.\n", "- Only \"stop\" when the CURRENT goal's evidence genuinely supports it — stopping is not risky if a backlog item is queued, since the company just moves on.\n", "- \"add\" deliberately leaves the CURRENT goal running one more iteration (it does not interrupt in-progress work) — so if the CURRENT goal is actually FULLY, ROBUSTLY done (not just \"good enough for now\"), prefer \"stop\" over \"add\" even when you also see a future feature worth queuing: queue it with \"add\" only once, on THIS decision, if the current goal genuinely still benefits from another iteration; otherwise choose \"stop\" directly so the company advances immediately instead of needlessly re-verifying an already-complete goal.\n\n", "Output ONLY a JSON object — no prose, no markdown fences:\n", "{\"decision\":\"continue|revise|add|stop\",\"goal\":\"<new/queued goal, required iff revise or add, else empty>\",\"reason\":\"<one sentence grounded in the result>\"}"], "")
 }
 
-fn build(model :: Str) -> [env] runner.AgentDef {
+fn build(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
-fn py_build(model :: Str) -> [env] runner.AgentDef {
+fn py_build(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 # evidence_path grounds `spec json-verdict-pass` for this role the same way
 # py_qa's does (#110) -- found live: this used to hardcode "" here, silently
 # defeating the lex_check/lex_run evidence fix even after it was wired
 # through tool_by_name, because THIS constructor never passed the real path.
-fn qa(model :: Str, evidence_path :: Str) -> [env] runner.AgentDef {
+fn qa(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path), proc_cmd: "", a2a_url: "" }
+  { id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 # `evidence_path` grounds `spec json-verdict-pass` (see make_run_code_tool) —
 # the caller derives it per sprint+node (runner.qa_evidence_path) so a
 # verdict can be checked against real run_code evidence instead of trusted
 # blind.
-fn py_qa(model :: Str, evidence_path :: Str) -> [env] runner.AgentDef {
+fn py_qa(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path), proc_cmd: "", a2a_url: "" }
+  { id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 fn devops(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-devops", kind: "devops", system_prompt: devops_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-devops", kind: "devops", system_prompt: devops_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn docs(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-docs", kind: "docs", system_prompt: docs_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-docs", kind: "docs", system_prompt: docs_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
-fn security_agent(model :: Str) -> [env] runner.AgentDef {
+fn security_agent(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
-fn launch_system_prompt() -> Str {
-  "You are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd and port ONCE (the tool frees the port automatically before starting — do NOT add fuser/kill yourself):\n   - For Lex servers in /tmp/loom-lex-work: cmd=\"cd /tmp/loom-lex-work && PORT=<port> lex run --allow-effects env,io,time,net,sql,fs_read,fs_write,proc,concurrent <filename> <fn_name>\", port=<port>, timeout_s=45\n   - For Python servers in /tmp/loom-py-work: cmd=\"cd /tmp/loom-py-work && PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."
+# Interpolates the real sprint-scoped work dirs (lex_skill.work_dir/
+# py_work_dir) so the Launch agent's cd targets the exact directory Build
+# actually wrote to for THIS sprint, never a global shared path (#156).
+fn launch_system_prompt(sprint_id :: Str) -> Str {
+  let lex_dir := lexskill.work_dir(sprint_id)
+  let py_dir := lexskill.py_work_dir(sprint_id)
+  str.join(["You are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd and port ONCE (the tool frees the port automatically before starting — do NOT add fuser/kill yourself):\n   - For Lex servers in ", lex_dir, ": cmd=\"cd ", lex_dir, " && PORT=<port> lex run --allow-effects env,io,time,net,sql,fs_read,fs_write,proc,concurrent <filename> <fn_name>\", port=<port>, timeout_s=45\n   - For Python servers in ", py_dir, ": cmd=\"cd ", py_dir, " && PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."], "")
 }
 
-fn launch(model :: Str) -> [env] runner.AgentDef {
+fn launch(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("launch", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 # Deploys to a real, already-provisioned Hetzner server (#101) -- runs BEFORE
 # launch when present, so launch/demo report the real public URL instead of
 # localhost. Kept deliberately simple for v1: one target (Hetzner), direct
 # host:port exposure, no Caddy/TLS/domain yet.
-fn deploy_system_prompt() -> Str {
-  "You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which work dir the build wrote to (Lex: /tmp/loom-lex-work, Python: /tmp/loom-py-work), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."
+# Interpolates the real sprint-scoped work dirs so the Deploy agent's
+# work_dir argument to deploy_hetzner names the exact directory Build
+# actually wrote to for THIS sprint, never a global shared path (#156).
+fn deploy_system_prompt(sprint_id :: Str) -> Str {
+  let lex_dir := lexskill.work_dir(sprint_id)
+  let py_dir := lexskill.py_work_dir(sprint_id)
+  str.join(["You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which work dir the build wrote to (Lex: ", lex_dir, ", Python: ", py_dir, "), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."], "")
 }
 
-fn deploy(model :: Str) -> [env] runner.AgentDef {
+fn deploy(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(), model_name: model, provider: p, tools: tools_of_role("deploy", ""), proc_cmd: "", a2a_url: "" }
+  { id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("deploy", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-demo", kind: "demo", system_prompt: "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence, and any docs produced, write a concise stakeholder-facing summary.\n\nLAUNCH STATUS RULES (mandatory — do not invent):\n- If Launch output contains \"ok\":true → lead with \"✅ Live at <url>\" and show the ACTUAL response text verbatim.\n- If Launch output contains \"ok\":false → say \"⚠️ Server not confirmed live\" and explain the error. Give the exact manual run commands from the build output.\n- NEVER claim the server is live if launch reported ok:false. NEVER invent HTTP responses or HTML.\n\nWrite for a non-technical audience.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-demo", kind: "demo", system_prompt: "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence, and any docs produced, write a concise stakeholder-facing summary.\n\nLAUNCH STATUS RULES (mandatory — do not invent):\n- If Launch output contains \"ok\":true → lead with \"✅ Live at <url>\" and show the ACTUAL response text verbatim.\n- If Launch output contains \"ok\":false → say \"⚠️ Server not confirmed live\" and explain the error. Give the exact manual run commands from the build output.\n- NEVER claim the server is live if launch reported ok:false. NEVER invent HTTP responses or HTML.\n\nWrite for a non-technical audience.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn scribe(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-scribe", kind: "scribe", system_prompt: "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-scribe", kind: "scribe", system_prompt: "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages.", model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # ── Design department ─────────────────────────────────────────────────────────
@@ -833,73 +847,74 @@ fn assessor_system_prompt(role :: Str) -> Str {
 
 fn assessor_agent(role :: Str, model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: str.concat("loom-assessor-", role), kind: "assessor", system_prompt: assessor_system_prompt(role), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: str.concat("loom-assessor-", role), kind: "assessor", system_prompt: assessor_system_prompt(role), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn ux_designer(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-ux-designer", kind: "ux_designer", system_prompt: ux_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-ux-designer", kind: "ux_designer", system_prompt: ux_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn brand_designer(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-brand-designer", kind: "brand_designer", system_prompt: brand_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-brand-designer", kind: "brand_designer", system_prompt: brand_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn content_designer(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-content-designer", kind: "content_designer", system_prompt: content_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-content-designer", kind: "content_designer", system_prompt: content_designer_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn fe_build(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-fe-build", kind: "fe_build", system_prompt: fe_build_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-fe-build", kind: "fe_build", system_prompt: fe_build_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn brand_strategist(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-brand-strategist", kind: "brand_strategist", system_prompt: brand_strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-brand-strategist", kind: "brand_strategist", system_prompt: brand_strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn copywriter(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-copywriter", kind: "copywriter", system_prompt: copywriter_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-copywriter", kind: "copywriter", system_prompt: copywriter_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn content_creator(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-content-creator", kind: "content_creator", system_prompt: content_creator_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-content-creator", kind: "content_creator", system_prompt: content_creator_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn seo_specialist(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-seo-specialist", kind: "seo_specialist", system_prompt: seo_specialist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-seo-specialist", kind: "seo_specialist", system_prompt: seo_specialist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn finance_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-finance", kind: "finance", system_prompt: finance_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-finance", kind: "finance", system_prompt: finance_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn legal_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-legal", kind: "legal", system_prompt: legal_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-legal", kind: "legal", system_prompt: legal_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn monetization_handoff_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-monetization-handoff", kind: "monetization_handoff", system_prompt: monetization_handoff_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  { id: "loom-monetization-handoff", kind: "monetization_handoff", system_prompt: monetization_handoff_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # Resolve a node role string to an AgentDef using a pre-computed Provider.
 # `evidence_path` grounds py_qa's `run_code` tool (see make_run_code_tool) —
-# pass "" when the caller doesn't need grounded json-verdict evidence. Has no
-# callers anywhere in the codebase today (kept as library API surface) — [env]
-# was added so its `deploy` branch can build a real deploy_hetzner tool the
+# pass "" when the caller doesn't need grounded json-verdict evidence. `sprint_id`
+# scopes build/py_build/qa/py_qa/security/launch/deploy's shared work dir (#156).
+# Has no callers anywhere in the codebase today (kept as library API surface) —
+# [env] was added so its `deploy` branch can build a real deploy_hetzner tool the
 # same way `for_role` does, not because any caller currently needs it.
-fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str) -> [env] Option[runner.AgentDef] {
+fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {
   let mk := fn (id :: Str, kind :: Str, sp :: Str) -> runner.AgentDef {
-    { id: id, kind: kind, system_prompt: sp, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+    { id: id, kind: kind, system_prompt: sp, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
   }
   if role == "pm" {
     Some(mk("loom-pm", "pm", pm_system_prompt()))
@@ -908,16 +923,16 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
       Some(mk("loom-architect", "architect", architect_system_prompt()))
     } else {
       if role == "build" {
-        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", ""), proc_cmd: "", a2a_url: "" })
+        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
       } else {
         if role == "py_build" {
-          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", ""), proc_cmd: "", a2a_url: "" })
+          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
         } else {
           if role == "qa" {
-            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path), proc_cmd: "", a2a_url: "" })
+            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
           } else {
             if role == "py_qa" {
-              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path), proc_cmd: "", a2a_url: "" })
+              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
             } else {
               if role == "devops" {
                 Some(mk("loom-devops", "devops", devops_system_prompt()))
@@ -926,7 +941,7 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
                   Some(mk("loom-docs", "docs", docs_system_prompt()))
                 } else {
                   if role == "security" {
-                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", ""), proc_cmd: "", a2a_url: "" })
+                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
                   } else {
                     if role == "ux_designer" {
                       Some(mk("loom-ux-designer", "ux_designer", ux_designer_system_prompt()))
@@ -941,10 +956,10 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
                             Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
                           } else {
                             if role == "launch" {
-                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(), model_name: model, provider: p, tools: tools_of_role("launch", ""), proc_cmd: "", a2a_url: "" })
+                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("launch", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
                             } else {
                               if role == "deploy" {
-                                Some({ id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(), model_name: model, provider: p, tools: tools_of_role("deploy", ""), proc_cmd: "", a2a_url: "" })
+                                Some({ id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("deploy", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
                               } else {
                                 if role == "demo" {
                                   Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
@@ -1003,8 +1018,10 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
 # Resolve a node role string to an AgentDef.
 # `evidence_path` grounds py_qa's `run_code` tool — pass "" if the caller
 # doesn't need grounded json-verdict evidence (e.g. improver.lex only reads
-# .system_prompt off the result).
-fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[runner.AgentDef] {
+# .system_prompt off the result). `sprint_id` scopes build/py_build/qa/py_qa/
+# security/launch/deploy's shared work dir (#156) — pass "" for callers that
+# never execute the returned agent's tools for real.
+fn for_role(role :: Str, model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {
   if role == "pm" {
     Some(pm(model))
   } else {
@@ -1012,16 +1029,16 @@ fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[run
       Some(architect_agent(model))
     } else {
       if role == "build" {
-        Some(build(model))
+        Some(build(model, sprint_id))
       } else {
         if role == "py_build" {
-          Some(py_build(model))
+          Some(py_build(model, sprint_id))
         } else {
           if role == "qa" {
-            Some(qa(model, evidence_path))
+            Some(qa(model, evidence_path, sprint_id))
           } else {
             if role == "py_qa" {
-              Some(py_qa(model, evidence_path))
+              Some(py_qa(model, evidence_path, sprint_id))
             } else {
               if role == "devops" {
                 Some(devops(model))
@@ -1030,7 +1047,7 @@ fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[run
                   Some(docs(model))
                 } else {
                   if role == "security" {
-                    Some(security_agent(model))
+                    Some(security_agent(model, sprint_id))
                   } else {
                     if role == "ux_designer" {
                       Some(ux_designer(model))
@@ -1045,10 +1062,10 @@ fn for_role(role :: Str, model :: Str, evidence_path :: Str) -> [env] Option[run
                             Some(fe_build(model))
                           } else {
                             if role == "launch" {
-                              Some(launch(model))
+                              Some(launch(model, sprint_id))
                             } else {
                               if role == "deploy" {
-                                Some(deploy(model))
+                                Some(deploy(model, sprint_id))
                               } else {
                                 if role == "demo" {
                                   Some(demo(model))

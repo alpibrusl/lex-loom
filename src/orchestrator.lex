@@ -247,7 +247,7 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
-    None => roles.for_role(n.role, cfg.model, runner.qa_evidence_path(cfg.id, n.id)),
+    None => roles.for_role(n.role, cfg.model, runner.qa_evidence_path(cfg.id, n.id), cfg.id),
   }
   match agent_cfg_opt {
     None => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("unknown role: ", n.role) },
@@ -354,11 +354,11 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                   },
                   GateAllow => match if gates.is_grounded(n.gate) {
-                    runner.verify_compiles(n.role)
+                    runner.verify_compiles(n.role, cfg.id)
                   } else {
                     if gates.is_shell_gate(n.gate) {
                       if runner.is_build_kind(n.role) {
-                        runner.verify_shell(gates.shell_command(n.gate), n.role)
+                        runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
                       } else {
                         runner.verify_shell_on_output(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""))
                       }
@@ -370,7 +370,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
                         }
                         runner.verify_json_verdict_evidence(evidence_path, claimed_pass)
                       } else {
-                        runner.verify_build_compiles(n.role)
+                        runner.verify_build_compiles(n.role, cfg.id)
                       }
                     }
                   } {

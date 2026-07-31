@@ -256,7 +256,7 @@ fn test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected() -> [env,
       let bad_id := uniq("sprint-bad")
       let __sa := seed_pool_agent(db, good_id, "role", 0, "[]")
       let __sb := seed_pool_agent(db, bad_id, "role", 0, "[]")
-      let roster := [{ node_id: "good-node", pool_agent_id: good_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "") }, { node_id: "bad-node", pool_agent_id: bad_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "") }]
+      let roster := [{ node_id: "good-node", pool_agent_id: good_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "", "test-cast") }, { node_id: "bad-node", pool_agent_id: bad_id, agent_config: cast.default_config_for_role("role", "gemma4:latest", "", "test-cast") }]
       let __u := cast.update_pool_from_sprint(db, roster, ["good-node"])
       if count_of_row(db, good_id) == 1 {
         if count_of_row(db, bad_id) == -1 {

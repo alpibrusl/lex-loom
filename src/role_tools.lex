@@ -43,7 +43,11 @@ fn tools_for(role :: Str) -> List[Str] {
                 if role == "content_creator" {
                   ["publish_content"]
                 } else {
-                  []
+                  if role == "cx" {
+                    ["fetch_support_items"]
+                  } else {
+                    []
+                  }
                 }
               }
             }

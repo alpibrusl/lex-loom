@@ -57,3 +57,10 @@ def test_blog_renders_published_posts_and_counts_a_view():
     assert b"Hello" in resp.data
     stats = client.get("/loom/content").get_json()["posts"]
     assert stats[0]["views"] == 1
+
+
+def test_loom_support_starts_empty():
+    client = create_app().test_client()
+    resp = client.get("/loom/support")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"items": []}

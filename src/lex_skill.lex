@@ -28,14 +28,26 @@ import "lex-schema/error" as e
 
 import "std.process" as proc
 
-fn work_dir() -> Str {
-  "/tmp/loom-lex-work"
+# A stray "/" in sprint_id (company iterations are ids like "<company>/iter-N")
+# would otherwise split into a nested path component; flatten it instead.
+fn sanitize_sprint_id(sprint_id :: Str) -> Str {
+  str.replace(sprint_id, "/", "_")
+}
+
+# Scoped per sprint so two sprints running on the same machine — a live
+# company's current iteration and an unrelated later sprint or test run —
+# never share, and can never silently overwrite, each other's build files.
+# Found live: a global "/tmp/loom-lex-work" was overwritten by a later test
+# run's fixture seeding while a real company's server was still running out
+# of it (#156).
+fn work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-lex-work-", sanitize_sprint_id(sprint_id)], "")
 }
 
 # Python builds use a separate work dir so a parallel Lex build never clobbers
 # them. Must match runner.py_work_dir().
-fn py_work_dir() -> Str {
-  "/tmp/loom-py-work"
+fn py_work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-py-work-", sanitize_sprint_id(sprint_id)], "")
 }
 
 # Concise Lex essentials — the must-knows for a model that has never seen Lex.
@@ -242,8 +254,8 @@ fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
 
 # Writes `code` to work_dir/<filename> and type-checks it. Returns structured
 # errors so the model can repair. Files accumulate so imports resolve.
-fn make_lex_check_tool(evidence_path :: Str) -> t.Tool {
-  let dir := work_dir()
+fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
+  let dir := work_dir(sprint_id)
   let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
   t.define("lex_check", "Write `code` to <filename> and run `lex check`. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. ALWAYS call this after writing each .lex file and repair until ok='true' before finishing. Never claim code compiles without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
@@ -293,8 +305,8 @@ fn make_lex_check_tool(evidence_path :: Str) -> t.Tool {
 # accumulate so multi-file projects build, and the runner recovers them as the
 # node artifact. Without this gate a build agent can emit a prose plan that the
 # build node accepts; py_compile forces real, parseable Python.
-fn make_py_check_tool() -> t.Tool {
-  let dir := py_work_dir()
+fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
+  let dir := py_work_dir(sprint_id)
   let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
   t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. ALWAYS call this after writing each .py file and repair until ok='true' before finishing. Never claim code compiles without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
@@ -356,10 +368,10 @@ fn parse_security_record(rec :: Str) -> jv.Json {
   JObj([("severity", JStr(sev)), ("file", JStr(file)), ("line", JStr(line)), ("snippet", JStr(snip))])
 }
 
-fn make_security_scan_tool() -> t.Tool {
+fn make_security_scan_tool(sprint_id :: Str) -> t.Tool {
   let params := { title: "SecurityScan", description: "Scan the build work dirs for known-dangerous code patterns", fields: [] }
   t.define("security_scan", "Call this FIRST, before writing your verdict. Greps every file in the Lex and Python work dirs for hardcoded secrets, shell/eval injection, string-built SQL, and debug-mode-on. Returns {findings: [{severity, file, line, snippet}]} (empty list if none found). A GROUNDED check — you must not report PASS if this returns critical/high findings, and must not invent findings it did not report.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
-    let script := str.join(["scan() {\n", "  local dir=\"$1\"\n", "  [ -d \"$dir\" ] || return 0\n", "  cd \"$dir\" || return 0\n", "  local pats=(\n", "    'critical:(api_key|apikey|secret|password|passwd|token)[[:space:]]*[:=][[:space:]]*[\"'\"'\"'][A-Za-z0-9+/=_-]{8,}[\"'\"'\"']'\n", "    'critical:shell[[:space:]]*=[[:space:]]*True'\n", "    'critical:os\\.(system|popen)\\('\n", "    'critical:\\b(eval|exec)\\('\n", "    'high:execute\\((f[\"'\"'\"']|[\"'\"'\"'].*%s|[\"'\"'\"'].*\\+)'\n", "    'medium:debug[[:space:]]*=[[:space:]]*[Tt]rue'\n", "  )\n", "  for p in \"${pats[@]}\"; do\n", "    local sev=\"${p%%:*}\"\n", "    local rx=\"${p#*:}\"\n", "    grep -rniE \"$rx\" . --include='*.py' --include='*.lex' --include='*.js' 2>/dev/null | while IFS=: read -r f l snip; do\n", "      clean=$(echo \"$snip\" | sed -e 's/^[[:space:]]*//' -e 's/@@[FR]@@//g' | cut -c1-200)\n", "      printf '%s@@F@@%s@@F@@%s@@F@@%s@@R@@\\n' \"$sev\" \"${f#./}\" \"$l\" \"$clean\"\n", "    done\n", "  done\n", "}\n", "scan '", work_dir(), "'\n", "scan '", py_work_dir(), "'\n"], "")
+    let script := str.join(["scan() {\n", "  local dir=\"$1\"\n", "  [ -d \"$dir\" ] || return 0\n", "  cd \"$dir\" || return 0\n", "  local pats=(\n", "    'critical:(api_key|apikey|secret|password|passwd|token)[[:space:]]*[:=][[:space:]]*[\"'\"'\"'][A-Za-z0-9+/=_-]{8,}[\"'\"'\"']'\n", "    'critical:shell[[:space:]]*=[[:space:]]*True'\n", "    'critical:os\\.(system|popen)\\('\n", "    'critical:\\b(eval|exec)\\('\n", "    'high:execute\\((f[\"'\"'\"']|[\"'\"'\"'].*%s|[\"'\"'\"'].*\\+)'\n", "    'medium:debug[[:space:]]*=[[:space:]]*[Tt]rue'\n", "  )\n", "  for p in \"${pats[@]}\"; do\n", "    local sev=\"${p%%:*}\"\n", "    local rx=\"${p#*:}\"\n", "    grep -rniE \"$rx\" . --include='*.py' --include='*.lex' --include='*.js' 2>/dev/null | while IFS=: read -r f l snip; do\n", "      clean=$(echo \"$snip\" | sed -e 's/^[[:space:]]*//' -e 's/@@[FR]@@//g' | cut -c1-200)\n", "      printf '%s@@F@@%s@@F@@%s@@F@@%s@@R@@\\n' \"$sev\" \"${f#./}\" \"$l\" \"$clean\"\n", "    done\n", "  done\n", "}\n", "scan '", work_dir(sprint_id), "'\n", "scan '", py_work_dir(sprint_id), "'\n"], "")
     match proc.run("bash", ["-c", script]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("security_scan failed: ", msg))),
       Ok(r) => {
@@ -384,8 +396,8 @@ fn make_security_scan_tool() -> t.Tool {
 # Executes a function in a previously-checked file. For tests, use
 # fn_name='run_all'. The file must already exist in the work dir (write it
 # with lex_check first).
-fn make_lex_run_tool(evidence_path :: Str) -> t.Tool {
-  let dir := work_dir()
+fn make_lex_run_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
+  let dir := work_dir(sprint_id)
   let params := { title: "LexRun", description: "Run a function in a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("fn_name", []), s.required_str("args", [])] }
   t.define("lex_run", "Run `lex run <filename> <fn_name> <args>` on a file already written via lex_check. For tests use fn_name='run_all' and args=''. args are space-separated JSON values. Returns {ok, output}. Base your verdict on this output — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {

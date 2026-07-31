@@ -3,6 +3,14 @@
 # Exercises make_security_scan_tool() directly against seeded work-dir
 # content: a file with real, known-dangerous patterns and a clean file that
 # must NOT trigger any finding.
+#
+# Uses a fixed, obviously-fake sprint_id (never a real company's id) so this
+# suite's seed/clear never touches -- and can never be clobbered by, or
+# clobber -- any real sprint's sprint-scoped work dir (#156). Found live: this
+# test used to rm -rf and seed the GLOBAL /tmp/loom-py-work, which a real
+# company's already-running server was reading its source from -- a `lex test`
+# run overwrote its server.py with this suite's deliberately-vulnerable
+# fixture mid-demo.
 
 import "std.str" as str
 
@@ -15,6 +23,10 @@ import "std.process" as proc
 import "lex-schema/json_value" as jv
 
 import "../src/lex_skill" as lexskill
+
+fn test_sprint_id() -> Str {
+  "test-security-scan-fixture"
+}
 
 fn seed_dirty(dir :: Str) -> [io, proc] Unit {
   let __mk := proc.run("bash", ["-c", str.concat("mkdir -p ", dir)])
@@ -29,7 +41,7 @@ fn seed_clean(dir :: Str) -> [io, proc] Unit {
 }
 
 fn clear_dirs() -> [proc] Unit {
-  let __c := proc.run("bash", ["-c", "rm -rf /tmp/loom-lex-work /tmp/loom-py-work"])
+  let __c := proc.run("bash", ["-c", str.join(["rm -rf ", lexskill.work_dir(test_sprint_id()), " ", lexskill.py_work_dir(test_sprint_id())], "")])
   ()
 }
 
@@ -55,8 +67,8 @@ fn has_severity(findings :: List[jv.Json], sev :: Str) -> Bool {
 
 fn test_scan_empty_dirs_reports_nothing() -> [io, net, proc] Result[Unit, Str] {
   let __c := clear_dirs()
-  let __mk1 := proc.run("bash", ["-c", "mkdir -p /tmp/loom-py-work /tmp/loom-lex-work"])
-  let tool := lexskill.make_security_scan_tool()
+  let __mk1 := proc.run("bash", ["-c", str.join(["mkdir -p ", lexskill.py_work_dir(test_sprint_id()), " ", lexskill.work_dir(test_sprint_id())], "")])
+  let tool := lexskill.make_security_scan_tool(test_sprint_id())
   match tool.execute(JObj([])) {
     Err(_) => Err("security_scan errored on empty dirs"),
     Ok(result) => if list.is_empty(findings_of(result)) {
@@ -69,8 +81,8 @@ fn test_scan_empty_dirs_reports_nothing() -> [io, net, proc] Result[Unit, Str] {
 
 fn test_scan_clean_file_reports_nothing() -> [io, net, proc] Result[Unit, Str] {
   let __c := clear_dirs()
-  let __s := seed_clean("/tmp/loom-py-work")
-  let tool := lexskill.make_security_scan_tool()
+  let __s := seed_clean(lexskill.py_work_dir(test_sprint_id()))
+  let tool := lexskill.make_security_scan_tool(test_sprint_id())
   match tool.execute(JObj([])) {
     Err(_) => Err("security_scan errored on a clean file"),
     Ok(result) => if list.is_empty(findings_of(result)) {
@@ -83,8 +95,8 @@ fn test_scan_clean_file_reports_nothing() -> [io, net, proc] Result[Unit, Str] {
 
 fn test_scan_dirty_file_reports_all_severities() -> [io, net, proc] Result[Unit, Str] {
   let __c := clear_dirs()
-  let __s := seed_dirty("/tmp/loom-py-work")
-  let tool := lexskill.make_security_scan_tool()
+  let __s := seed_dirty(lexskill.py_work_dir(test_sprint_id()))
+  let tool := lexskill.make_security_scan_tool(test_sprint_id())
   match tool.execute(JObj([])) {
     Err(_) => Err("security_scan errored on a dirty file"),
     Ok(result) => {

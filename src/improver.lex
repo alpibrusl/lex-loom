@@ -131,7 +131,7 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
   let current_opt := load_best_agent(db, role)
   let current_prompt := match current_opt {
     Some(a) => a.system_prompt,
-    None => match roles.for_role(role, model, "") {
+    None => match roles.for_role(role, model, "", "") {
       Some(def) => def.system_prompt,
       None => str.join(["You are the ", role, " agent. Complete your assigned task carefully and accurately."], ""),
     },
@@ -149,7 +149,7 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
     None => 0,
   }
   let p := roles.make_provider()
-  let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "" }
+  let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
   let prompt := improvement_prompt(role, current_prompt, lesson, specs)
   let __log := io.print(str.join(["[loom/improver] improving role=", role, " sprint=", sprint_id], ""))
   let improved_prompt := runner.step(db, improver_def, prompt, sprint_id)

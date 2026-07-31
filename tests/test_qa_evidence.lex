@@ -92,7 +92,7 @@ fn test_evidence_contradicting_claim_denies() -> [io] Result[Unit, Str] {
 fn test_lex_check_records_passing_evidence() -> [net, io, proc] Result[Unit, Str] {
   let path := "/tmp/loom-qa-evidence-test-lex-check-pass.json"
   let __c := runner.clear_qa_evidence(path)
-  let tool := lexskill.make_lex_check_tool(path)
+  let tool := lexskill.make_lex_check_tool(path, "test-qa-evidence")
   let args := JObj([("filename", JStr("evidence_test_pass.lex")), ("code", JStr("fn main() -> Unit { () }"))])
   match tool.execute(args) {
     Err(_) => Err("lex_check tool call itself failed"),
@@ -106,7 +106,7 @@ fn test_lex_check_records_passing_evidence() -> [net, io, proc] Result[Unit, Str
 fn test_lex_check_records_failing_evidence() -> [net, io, proc] Result[Unit, Str] {
   let path := "/tmp/loom-qa-evidence-test-lex-check-fail.json"
   let __c := runner.clear_qa_evidence(path)
-  let tool := lexskill.make_lex_check_tool(path)
+  let tool := lexskill.make_lex_check_tool(path, "test-qa-evidence")
   let args := JObj([("filename", JStr("evidence_test_fail.lex")), ("code", JStr("this is not valid lex at all }{"))])
   match tool.execute(args) {
     Err(_) => Err("lex_check tool call itself failed"),
@@ -123,12 +123,12 @@ fn test_lex_check_records_failing_evidence() -> [net, io, proc] Result[Unit, Str
 fn test_lex_check_then_failing_lex_run_merges_to_overall_fail() -> [net, io, proc] Result[Unit, Str] {
   let path := "/tmp/loom-qa-evidence-test-merge-fail.json"
   let __c := runner.clear_qa_evidence(path)
-  let check_tool := lexskill.make_lex_check_tool(path)
+  let check_tool := lexskill.make_lex_check_tool(path, "test-qa-evidence")
   let check_args := JObj([("filename", JStr("evidence_test_merge.lex")), ("code", JStr("fn run_all() -> Int { 1 / 0 }"))])
   match check_tool.execute(check_args) {
     Err(_) => Err("lex_check tool call itself failed"),
     Ok(_) => {
-      let run_tool := lexskill.make_lex_run_tool(path)
+      let run_tool := lexskill.make_lex_run_tool(path, "test-qa-evidence")
       let run_args := JObj([("filename", JStr("evidence_test_merge.lex")), ("fn_name", JStr("run_all")), ("args", JStr(""))])
       match run_tool.execute(run_args) {
         Err(_) => Err("lex_run tool call itself failed"),
@@ -153,7 +153,7 @@ fn test_lex_check_then_failing_lex_run_merges_to_overall_fail() -> [net, io, pro
 fn test_for_role_qa_threads_evidence_path_to_its_tools() -> [env, net, io, proc] Result[Unit, Str] {
   let path := "/tmp/loom-qa-evidence-test-for-role-wiring.json"
   let __c := runner.clear_qa_evidence(path)
-  match roles.for_role("qa", "test-model", path) {
+  match roles.for_role("qa", "test-model", path, "test-qa-evidence") {
     None => Err("expected for_role(\"qa\", ...) to resolve to an agent"),
     Some(agent) => {
       let lex_check_tools := list.filter(agent.tools, fn (tl :: t.Tool) -> Bool {

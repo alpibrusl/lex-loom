@@ -59,7 +59,10 @@ import "lex-orm/src/connection" as conn
 
 import "./trace" as trace
 
-type AgentDef = { id :: Str, kind :: Str, system_prompt :: Str, model_name :: Str, provider :: prov.Provider, tools :: List[t.Tool], proc_cmd :: Str, a2a_url :: Str }
+# sprint_id scopes build-kind roles' shared work dir (see build_work_dir/
+# py_work_dir below) so two sprints never read/write each other's files (#156).
+# Empty for roles that never touch a work dir (pm, architect, docs, ...).
+type AgentDef = { id :: Str, kind :: Str, system_prompt :: Str, model_name :: Str, provider :: prov.Provider, tools :: List[t.Tool], proc_cmd :: Str, a2a_url :: Str, sprint_id :: Str }
 
 type PeerInfo = { id :: Str, kind :: Str, name :: Str, inbox_url :: Str, role :: Str }
 
@@ -209,20 +212,25 @@ fn extract_answer(steps :: List[d.Step]) -> Str {
 # must never share, or recover_build_artifact would mix one language's files into
 # the other's artifact. Keep the Lex path in sync with lex_skill.work_dir() and
 # the Python path with lex_skill.py_work_dir().
-fn build_work_dir() -> Str {
-  "/tmp/loom-lex-work"
+# Scoped per sprint -- keep in sync with lex_skill.sanitize_sprint_id.
+fn sanitize_sprint_id(sprint_id :: Str) -> Str {
+  str.replace(sprint_id, "/", "_")
 }
 
-fn py_work_dir() -> Str {
-  "/tmp/loom-py-work"
+fn build_work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-lex-work-", sanitize_sprint_id(sprint_id)], "")
+}
+
+fn py_work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-py-work-", sanitize_sprint_id(sprint_id)], "")
 }
 
 # Which work dir a build kind writes to (build → Lex, py_build → Python).
-fn work_dir_for(kind :: Str) -> Str {
+fn work_dir_for(kind :: Str, sprint_id :: Str) -> Str {
   if kind == "py_build" {
-    py_work_dir()
+    py_work_dir(sprint_id)
   } else {
-    build_work_dir()
+    build_work_dir(sprint_id)
   }
 }
 
@@ -259,16 +267,16 @@ fn has_fence(s :: Str) -> Bool {
 }
 
 # Start each build attempt from a clean work_dir so stale files don't leak in.
-fn clear_work_dir(kind :: Str) -> [proc] Unit {
-  let d := work_dir_for(kind)
+fn clear_work_dir(kind :: Str, sprint_id :: Str) -> [proc] Unit {
+  let d := work_dir_for(kind, sprint_id)
   let __ := proc.run("bash", ["-c", str.join(["rm -rf ", d, "/* 2>/dev/null; mkdir -p ", d], "")])
   ()
 }
 
 # Emit every file written to the work_dir as a fenced block labelled with its
 # filename — the format the QA agent extracts.
-fn recover_build_artifact(kind :: Str) -> [proc] Str {
-  let cmd := str.join(["cd ", work_dir_for(kind), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
+fn recover_build_artifact(kind :: Str, sprint_id :: Str) -> [proc] Str {
+  let cmd := str.join(["cd ", work_dir_for(kind, sprint_id), " 2>/dev/null && for f in *; do [ -f \"$f\" ] && { echo '```'\"$f\"; cat \"$f\"; echo '```'; }; done"], "")
   match proc.run("bash", ["-c", cmd]) {
     Err(_) => "",
     Ok(r) => r.stdout,
@@ -282,9 +290,9 @@ fn recover_build_artifact(kind :: Str) -> [proc] Str {
 # .py). Returns Ok(()) if all compile and at least one source file exists, else
 # Err(<first failing file + compiler output>). Pure [proc] — runs the real
 # compiler, same as the agent's own check tool.
-fn verify_build_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
+fn verify_build_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   if is_build_kind(kind) {
-    verify_compiles(kind)
+    verify_compiles(kind, sprint_id)
   } else {
     Ok(())
   }
@@ -301,8 +309,8 @@ fn verify_build_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
 # way `spec compiles` wraps the compiler. Runs on the files the node produced
 # (build/py_build/fe_build work dir). Trusted-sprint use: the gate is author-
 # defined and runs at the same trust level as the build agent's own code.
-fn verify_shell(cmd :: Str, kind :: Str) -> [proc] Result[Unit, Str] {
-  let dir := work_dir_for(kind)
+fn verify_shell(cmd :: Str, kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
+  let dir := work_dir_for(kind, sprint_id)
   let script := str.join(["cd ", dir, " 2>/dev/null || { echo NO_WORKDIR; exit 3; }; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
@@ -359,9 +367,9 @@ fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, pro
   }
 }
 
-fn verify_compiles(kind :: Str) -> [proc] Result[Unit, Str] {
+fn verify_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   {
-    let dir := work_dir_for(kind)
+    let dir := work_dir_for(kind, sprint_id)
     let check := if kind == "py_build" {
       "python3 -m py_compile"
     } else {
@@ -616,7 +624,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) 
       let llm_def := { name: def.id, goal: sys, model: the_model, provider: def.provider, tools: all_tools, options: opts, permission_spec: None }
       let conv := conv_from_msg(def.kind, msg_json)
       let __clear := if is_build_kind(def.kind) {
-        clear_work_dir(def.kind)
+        clear_work_dir(def.kind, def.sprint_id)
       } else {
         ()
       }
@@ -629,7 +637,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) 
         if has_fence(out0) {
           out0
         } else {
-          let recovered := recover_build_artifact(def.kind)
+          let recovered := recover_build_artifact(def.kind, def.sprint_id)
           if str.is_empty(str.trim(recovered)) {
             out0
           } else {

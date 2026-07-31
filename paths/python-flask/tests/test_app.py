@@ -12,3 +12,10 @@ def test_health():
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.get_json() == {"ok": True}
+
+
+def test_loom_usage():
+    client = create_app().test_client()
+    resp = client.get("/loom/usage")
+    assert resp.status_code == 200
+    assert "summary" in resp.get_json()

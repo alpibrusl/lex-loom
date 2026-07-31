@@ -20,6 +20,16 @@ def create_app() -> Flask:
     def health():
         return jsonify({"ok": True})
 
+    # Read by the company's own strategic planning (the Strategist agent
+    # between iterations), never by end users. As the product's domain model
+    # grows, keep this returning a short, honest summary of REAL usage (row
+    # counts, notable trends) so the company can steer itself on its own
+    # data instead of flying blind between iterations. Build agents extend
+    # this — do not leave it as the trivial stub past the first real feature.
+    @app.route("/loom/usage", methods=["GET"])
+    def loom_usage():
+        return jsonify({"summary": "no usage data yet"})
+
     return app
 
 

@@ -1717,6 +1717,30 @@ fn check_liveness_timed(url :: Str) -> [proc] LivenessReading {
   }
 }
 
+# Product-usage signal (#159): the golden-path skeletons (paths/python-flask,
+# paths/python-fastapi) all expose /loom/usage — a convention, not a schema
+# loom understands. Each generated product defines its own meaningful
+# summary there (row counts, notable trends in ITS domain); loom just fetches
+# and forwards the raw text as an opaque signal to the Strategist, instead of
+# the Strategist only ever seeing operate signals (liveness/errors) and
+# self-reported QA/digest text. Found live: PulseCheck's whole product is
+# collecting NPS feedback, and the Strategist never read any of it back into
+# its continue/revise/add/stop decision.
+fn fetch_product_usage(url :: Str) -> [proc] Str {
+  let script := str.join(["curl -s --max-time 5 '", url, "/loom/usage' 2>/dev/null || echo CURL_FAILED"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "(unreachable)",
+    Ok(r) => {
+      let out := str.trim(r.stdout)
+      if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+        "(unreachable)"
+      } else {
+        str.slice(out, 0, 500)
+      }
+    },
+  }
+}
+
 # SSH into the Hetzner host and grep the deployed container's last 5 minutes
 # of docker logs for error-shaped lines -- a real bug often still answers
 # HTTP requests (so `check_liveness`'s any-response-counts-as-up misses it
@@ -1802,6 +1826,11 @@ fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, s
         Ok(_) => {
           let __lat := if reading.status == "up" {
             record_operate_signal(db, company_id, idx, "latency_ms", int.to_str(reading.ms))
+          } else {
+            Ok(())
+          }
+          let __usage := if reading.status == "up" {
+            record_operate_signal(db, company_id, idx, "product_usage", fetch_product_usage(target.url))
           } else {
             Ok(())
           }
@@ -1940,6 +1969,19 @@ fn operate_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
     str.join([metrics_str, "\n\nRecent error log scans (production deploys only):\n", str.join(errors, "\n")], "")
   } else {
     metrics_str
+  }
+}
+
+# The Strategist's view of the PRODUCT's own reported usage (#159) — the
+# single most recent /loom/usage reading recorded alongside liveness. Opaque
+# free text: loom never parses or trusts its shape, only forwards it, since
+# each generated product defines its own summary for its own domain.
+fn product_signals_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  let latest := recent_operate_signals(db, company_id, "product_usage", 1)
+  if list.is_empty(latest) {
+    "(no product usage signal recorded yet — no launched server, or its /loom/usage endpoint hasn't been reached)"
+  } else {
+    str.join(latest, "\n")
   }
 }
 

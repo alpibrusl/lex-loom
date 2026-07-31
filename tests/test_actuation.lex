@@ -218,6 +218,68 @@ fn test_circuit_breaker_trips_and_demotes() -> [sql, fs_write, concurrent, crypt
   }
 }
 
+# #158: lex-ctl's own breaker only ever demotes Auto -> Propose — a class
+# that structurally ceilings at Propose (Compensatable/Service, e.g.
+# application_error's rollback_release) has NO breaker applied to it at
+# all, so it can fail forever without ever reaching a human. This is
+# loom's own floor on top of lex-ctl's tier model: double the breaker's
+# consecutive-miss threshold (6, vs. the breaker's 3) forces Escalate
+# regardless of the structural ceiling. 6 consecutive falsified
+# dispositions on rollback_release must escalate, not stay at Propose.
+fn test_sustained_failures_on_propose_ceiling_escalates() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("escalate-propose")
+      match seed_falsified(db, cid, "rollback_release", 6, 1200000) {
+        Err(e) => Err(e),
+        Ok(_) => match ledger.open_incident(db, cid, "errors", "2026-02-06T00:00:00Z", "[\"errors\"]", 1000) {
+          Err(e) => Err(e),
+          Ok(inc) => match ledger.set_diagnosed_cause(db, inc, "application_error", 90) {
+            Err(e) => Err(e),
+            Ok(_) => match eff.propose_contract(db, None, inc, 1300000, "2026-02-06T00:00:01Z") {
+              Err(e) => Err(e),
+              Ok(effect_id) => match act.decide(db, effect_id, 1300000) {
+                Err(e) => Err(e),
+                Ok(Cleared(Escalate)) => dispose_now(db, effect_id, "2026-02-06T00:00:02Z"),
+                Ok(other) => Err(str.concat("expected 6 consecutive falsifications to force Escalate, got ", act.decision_str(other))),
+              },
+            },
+          },
+        },
+      }
+    },
+  }
+}
+
+# The same floor also applies on top of an Auto-ceiling class whose
+# breaker already tripped it to Propose (#158): the breaker alone caps
+# it at Propose forever, but 6 consecutive misses (double the breaker's
+# 3) must still escalate — the ladder has a terminal rung, not just an
+# Auto<->Propose oscillation.
+fn test_sustained_failures_on_auto_ceiling_escalates() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("escalate-auto")
+      match seed_materialised(db, cid, "hold", 40, 1400000) {
+        Err(e) => Err(e),
+        Ok(_) => match seed_falsified(db, cid, "hold", 6, 1440000) {
+          Err(e) => Err(e),
+          Ok(_) => match propose_hold(db, cid, 1500000, "2026-02-06T00:01:00Z") {
+            Err(e) => Err(e),
+            Ok(effect_id) => match act.decide(db, effect_id, 1500000) {
+              Err(e) => Err(e),
+              Ok(Cleared(Escalate)) => dispose_now(db, effect_id, "2026-02-06T00:01:01Z"),
+              Ok(other) => Err(str.concat("expected 6 consecutive misses to escalate past Propose, got ", act.decision_str(other))),
+            },
+          },
+        },
+      }
+    },
+  }
+}
+
 # #134: a tripped breaker on one company must never leak into another
 # company's decision for the same class_key. "noisy" trips the breaker
 # for its own "hold" class; "cid" independently earns a clean 40-sample
@@ -372,7 +434,7 @@ fn test_dossier_renders_diagnosis() -> [sql, fs_write, concurrent, crypto, fs_re
 }
 
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_compensatable_class_never_clears_to_auto(), test_class_with_real_record_reaches_auto(), test_circuit_breaker_trips_and_demotes(), test_tier_state_is_isolated_per_company(), test_dwell_lock_blocks_overlapping_action(), test_precondition_mismatch_blocks(), test_oscillation_detection(), test_dossier_renders_diagnosis()]
+  let results := [test_compensatable_class_never_clears_to_auto(), test_class_with_real_record_reaches_auto(), test_circuit_breaker_trips_and_demotes(), test_sustained_failures_on_propose_ceiling_escalates(), test_sustained_failures_on_auto_ceiling_escalates(), test_tier_state_is_isolated_per_company(), test_dwell_lock_blocks_overlapping_action(), test_precondition_mismatch_blocks(), test_oscillation_detection(), test_dossier_renders_diagnosis()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

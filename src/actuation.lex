@@ -107,6 +107,32 @@ fn real_stats(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] k
   })
 }
 
+# CTL6 escalation floor (#158): lex-ctl's own breaker (ktier.effective)
+# only ever demotes Auto -> Propose — a class whose structural ceiling is
+# already Propose (e.g. rollback_release, Compensatable/Service) has no
+# breaker applied to it at all and can fail forever without ever reaching
+# a human. Found live: proposing a real effect against pulsecheck with 6
+# manufactured consecutive falsifications still cleared to Propose.
+# This is loom's own floor layered on top of lex-ctl's tier model, not a
+# change to the vendored kernel: at DOUBLE the breaker's consecutive-miss
+# threshold, force Escalate regardless of what the structural ceiling or
+# the breaker alone would allow. Gives the Auto -> Propose -> Escalate
+# ladder a terminal rung instead of an Auto<->Propose oscillation.
+fn escalation_floor_misses() -> Int {
+  policy().breaker_misses * 2
+}
+
+fn with_escalation_floor(tier :: ktier.Tier, stats :: ktier.ClassStats) -> ktier.Tier {
+  match tier {
+    Escalate => Escalate,
+    _ => if stats.consecutive_misses >= escalation_floor_misses() {
+      Escalate
+    } else {
+      tier
+    },
+  }
+}
+
 # The tier a class actually operates at right now FOR ONE COMPANY:
 # structural ceiling demoted by that company's own measured record and
 # circuit breaker — never promoted past its ceiling, never promoted on
@@ -114,7 +140,10 @@ fn real_stats(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] k
 fn real_tier(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Option[ktier.Tier] {
   match eff.action_spec_by_class_key(class_key) {
     None => None,
-    Some(spec) => Some(ktier.effective(eff.action_class_of(spec), real_stats(db, company_id, class_key), policy())),
+    Some(spec) => {
+      let stats := real_stats(db, company_id, class_key)
+      Some(with_escalation_floor(ktier.effective(eff.action_class_of(spec), stats, policy()), stats))
+    },
   }
 }
 

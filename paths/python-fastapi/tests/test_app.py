@@ -14,3 +14,10 @@ def test_health():
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+def test_loom_usage():
+    client = TestClient(app)
+    resp = client.get("/loom/usage")
+    assert resp.status_code == 200
+    assert "summary" in resp.json()

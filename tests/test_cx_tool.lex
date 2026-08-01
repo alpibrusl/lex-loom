@@ -1,10 +1,17 @@
-# test_cx_tool.lex — unit tests for the fetch_support_items tool (#162).
+# test_cx_tool.lex — unit tests for the fetch_support_items (#162) and
+# web_search (#163) tools.
 #
 # Read-only by design (see roles.lex's make_fetch_support_tool comment) — the
 # CX role has no send path at all, so the only real behavior to verify is the
 # fetch itself. Same reasoning as test_deploy_hetzner.lex: the real curl-a-
 # live-server path is live-verified rather than mocked in this suite; only
-# the deterministic validation/error paths are unit-tested here.
+# the deterministic validation/error paths are unit-tested here. web_search
+# follows the same convention despite hitting a real, keyless, always-up
+# public endpoint (DuckDuckGo) rather than a company's own local server --
+# depending on a live external network call succeeding is exactly the kind
+# of CI flakiness this suite's existing fetch_* tests already avoid, so only
+# the deterministic paths are unit-tested; the real search was verified live
+# during development (see the PR description).
 
 import "std.str" as str
 
@@ -63,8 +70,25 @@ fn test_unreachable_url_returns_clean_error() -> [env, net, io, proc] Result[Uni
   }
 }
 
+# query is required -- must be rejected before any network call is attempted.
+fn test_missing_query_returns_clean_error() -> [env, net, io, proc] Result[Unit, Str] {
+  let tool := roles.make_web_search_tool()
+  match tool.execute(JObj([("query", JStr(""))])) {
+    Err(_) => Err("expected an Ok(JObj) result, not a tool-level Err"),
+    Ok(result) => if str.contains(get_str(result, "error"), "query") {
+      if str.is_empty(get_str(result, "results")) {
+        Ok(())
+      } else {
+        Err("expected empty results alongside the error")
+      }
+    } else {
+      Err(str.concat("expected the error to mention query, got: ", get_str(result, "error")))
+    },
+  }
+}
+
 fn suite() -> [env, net, io, proc] List[Result[Unit, Str]] {
-  [test_missing_url_returns_clean_error(), test_unreachable_url_returns_clean_error()]
+  [test_missing_url_returns_clean_error(), test_unreachable_url_returns_clean_error(), test_missing_query_returns_clean_error()]
 }
 
 fn run_all() -> [env, net, io, proc] Unit {

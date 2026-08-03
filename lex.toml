@@ -3,7 +3,7 @@ name        = "lex-loom"
 version     = "0.1.0"
 edition     = "2025"
 license     = "EUPL-1.2"
-description = "Multi-agent sprint cycles built on lex-soft (design stage)"
+description = "Autonomous companies — persistent goals run as iterating multi-agent sprint cycles"
 
 [dependencies]
 lex-llm         = { git = "https://github.com/alpibrusl/lex-llm" }

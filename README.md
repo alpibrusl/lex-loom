@@ -4,11 +4,31 @@
 
 **Part of the [Lex](https://lexlang.org) project** — Agents · [Manifesto](https://lexlang.org/manifesto) · [All packages](https://lexlang.org)
 
-Multi-agent **sprint cycles** — give it a task, watch a pipeline of specialised agents design, build, verify, document, and learn from the result.
+**Autonomous companies.** Give loom a persistent goal and it runs a **company**: a
+series of iterating sprint cycles — Architect, Build, QA, Demo, Retro, Digest —
+that design, build, verify, ship, and learn from the result, carrying tightened
+specs and agent memory forward between iterations until a grounded condition
+says stop. A **sprint** is the primitive a company runs on each iteration; you
+can also run a single sprint standalone to test one change.
 
-Every phase transition is evidence-gated. Every artifact is content-addressed. The audit trail is append-only. The system learns: the Digest phase tightens specs and seeds the next sprint's graph from lessons in the current trail.
+Every phase transition is evidence-gated. Every artifact is content-addressed. The audit trail is append-only. The system learns: the Digest phase tightens specs and seeds the next iteration's graph from lessons in the current trail.
 
-> **Status: M5 complete + pool fitness loop.** Full sprint pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with learning loop, agent pool scoring, bounce penalties, and retirement running on Vertex AI / Anthropic / Ollama.
+> **Status: M5+ sprint engine, company layer landing incrementally.** The sprint
+> pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with
+> learning loop, agent pool scoring, bounce penalties, and retirement is
+> complete. Above it, the company layer has: Product loop, Distribution roles
+> (CX, research, self-hosted content publishing), a real revenue signal, Board
+> oversight, Portfolio (multiple concurrent product lines), Lifecycle (Ideation
+> → Growth → Sunset), and a declarative `company.toml` manifest + deterministic
+> bootstrap — done. The **Operate loop** (epic #118, on the shared
+> [`lex-ctl`](https://github.com/alpibrusl/lex-ctl) kernel — the same kernel
+> lex-soft consumes independently) is at v1: sensing → incident → capability-
+> gated actuation → effect verification, with an auto-tier decision layer
+> behind a circuit breaker. Real monetization wiring (an actual Stripe/Gumroad
+> product) is deliberately, permanently human-gated by design — see
+> [`docs/design/agentic-company.md`](docs/design/agentic-company.md) for the
+> full layer inventory and [`docs/design/operate-loop.md`](docs/design/operate-loop.md)
+> for the Operate loop.
 
 ---
 
@@ -108,7 +128,73 @@ OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3-coder:30b \
 
 ---
 
-## Running a sprint
+## Running a company
+
+A **company** is a *persistent goal* that produces a *series of iterating
+sprints* (`<company>/iter-N`) instead of a single one-off run. Tightened specs
+and agent memory carry forward between iterations, and the loop stops when a
+grounded condition holds or `MAX_ITERATIONS` is reached. This is the primary,
+recommended way to run loom — a single sprint (below) is the primitive it
+iterates, useful on its own mainly for testing one change in isolation.
+
+The fastest path is a declarative manifest — see
+[`docs/design/company-manifest.md`](docs/design/company-manifest.md) and the
+`create-company` skill:
+
+```bash
+bin/bootstrap-company.sh examples/linksnap.company.toml            # scaffold + run
+bin/bootstrap-company.sh examples/linksnap.company.toml --no-run   # scaffold only, free
+```
+
+Or drive it directly with env vars:
+
+```bash
+COMPANY_ID=acme \
+MODEL=deepseek-v4-pro \
+MAX_ITERATIONS=3 \
+STOP_WHEN='verdict-passed' \
+GOAL='Write a pure Lex function add(a :: Int, b :: Int) -> Int with an examples block.' \
+bin/run-company.sh
+```
+
+`STOP_WHEN` uses the company condition DSL (also usable as a node `activate_when`
+to gate a sub-loom to specific iterations):
+
+| Condition | True when |
+|---|---|
+| `iter ge N` / `iter lt N` / `iter eq N` | iteration index bound |
+| `verdict-passed` / `verdict-failed` | last iteration's verifier verdict |
+| `digest contains "<s>"` | substring in the digest summary |
+| `accepted ge N` / `bounced ge N` | node accept/bounce thresholds |
+| `spend ge N` | cumulative LLM/infra spend threshold |
+| `always` / `never` | constant |
+
+Each iteration is recorded in `company_iterations` (with parent lineage) and
+stays provable via the four-layer verifier (`verify_sprint_cmd`). See
+[`docs/design/agentic-company.md`](docs/design/agentic-company.md) for the full
+picture of what a company is beyond the build loop — Distribution, Monetization
+(deliberately human-gated), the Operate loop, Strategy, Board, Portfolio, and
+Lifecycle.
+
+> Against OpenCode Go, leave `OPENCODE_BASE_URL` unset (hit the API directly) —
+> the local reasoning-proxy breaks loom's streaming agent loop.
+
+### Optional sandboxing under lex-os
+
+Each sprint phase already carries a role-scoped capability grant
+(`src/manifests.lex` — e.g. Design is read-only with no exec, Build is
+read-write with sandboxed exec, QA gets sandboxed exec for running tests). That
+grant is shaped to run directly as a [lex-os](https://github.com/alpibrusl/lex-os)
+manifest, so a company's agents can execute inside lex-os's sealed, disposable
+boxes instead of ad hoc Docker isolation. lex-os is optional — loom runs fully
+without it today — and the wiring from a generated grant to an actual lex-os
+capsule install is still open; see
+[`docs/design/lex-os-isolation.md`](docs/design/lex-os-isolation.md) for the
+per-role grant table and rollout plan.
+
+---
+
+## Running a single sprint
 
 The server listens on `http://localhost:8880`. Sprint IDs are generated automatically.
 
@@ -148,42 +234,6 @@ curl http://localhost:8880/api/sprints/$SPRINT/artifact/<hash> | jq -r '.content
 # Digest: lessons learned + tightened specs + next sprint seed graph
 curl http://localhost:8880/api/sprints/$SPRINT/digest | jq .
 ```
-
----
-
-## Running a company
-
-A **company** is the layer above a single sprint (#53): a *persistent goal* that
-produces a *series of iterating looms*. Each iteration is a full sprint
-(`<company>/iter-N`); tightened specs and agent memory carry forward between
-iterations, and the loop stops when a grounded condition holds or
-`MAX_ITERATIONS` is reached.
-
-```bash
-COMPANY_ID=acme \
-MODEL=deepseek-v4-pro \
-MAX_ITERATIONS=3 \
-STOP_WHEN='verdict-passed' \
-GOAL='Write a pure Lex function add(a :: Int, b :: Int) -> Int with an examples block.' \
-bin/run-company.sh
-```
-
-`STOP_WHEN` uses the company condition DSL (also usable as a node `activate_when`
-to gate a sub-loom to specific iterations):
-
-| Condition | True when |
-|---|---|
-| `iter ge N` / `iter lt N` / `iter eq N` | iteration index bound |
-| `verdict-passed` / `verdict-failed` | last iteration's verifier verdict |
-| `digest contains "<s>"` | substring in the digest summary |
-| `accepted ge N` / `bounced ge N` | node accept/bounce thresholds |
-| `always` / `never` | constant |
-
-Each iteration is recorded in `company_iterations` (with parent lineage) and
-stays provable via the four-layer verifier (`verify_sprint_cmd`).
-
-> Against OpenCode Go, leave `OPENCODE_BASE_URL` unset (hit the API directly) —
-> the local reasoning-proxy breaks loom's streaming agent loop.
 
 ---
 
@@ -606,9 +656,9 @@ Loop it (cron / `while true; do … ; sleep 5; done`) to keep claiming sprints.
 
 ## Built on
 
-`lex-llm` · `lex-agent` · `lex-spec` · `lex-schema` · `lex-jobs` · `lex-mcp` · `lex-web`
+`lex-llm` · `lex-agent` · `lex-spec` · `lex-schema` · `lex-jobs` · `lex-mcp` · `lex-web` · `lex-orm` · `lex-trail` · `lex-log`
 
-Agent runtime (runner, trace, state store, registry, A2A) is vendored directly into `src/agent/` — loom is self-contained with no lex-soft dependency.
+Agent runtime (runner, trace, state store, registry, A2A) is vendored directly into `src/agent/` — loom is self-contained with no lex-soft runtime dependency. It does depend on two shared packages that place loom in the wider Lex ecosystem: `lex-ctl` (the Operate loop's mechanism kernel, also consumed independently by [lex-soft](https://github.com/alpibrusl/lex-soft) — loom's cross-org counterpart) and `lex-os-manifest` (the grant type optional [lex-os](https://github.com/alpibrusl/lex-os) sandboxing is built on).
 
 ---
 

@@ -14,6 +14,9 @@
 #             via stdin; stdout becomes the node output.
 #             Example: "proc_cmd: \"opencode chat -q\""
 #             model_name convention: "proc:<cmd>"
+#             With LEX_OS_ISOLATION set, the same command is mediated
+#             through `lex-os exec` under the phase's manifests.lex grant
+#             first (docs/design/lex-os-isolation.md) — unset, unchanged.
 #
 #   a2a_url (non-empty) — send an A2A tasks/send JSON-RPC call to a
 #             remote agent; extract the first text artifact as output.
@@ -58,6 +61,10 @@ import "lex-agent/src/memory" as mem
 import "lex-orm/src/connection" as conn
 
 import "./trace" as trace
+
+import "../manifests" as manifests
+
+import "std.env" as env
 
 # sprint_id scopes build-kind roles' shared work dir (see build_work_dir/
 # py_work_dir below) so two sprints never read/write each other's files (#156).
@@ -480,6 +487,76 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
   }
 }
 
+# ── lex-os mediated exec (opt-in) ────────────────────────────────────────────
+# When LEX_OS_ISOLATION is set, proc_cmd nodes route through `lex-os exec`
+# instead of a bare proc.run, so the phase's manifests.lex grant actually
+# gates whether the command may run at all (docs/design/lex-os-isolation.md).
+# The command construction below is byte-for-byte what proc_step already
+# builds — only the launcher changes, so unset this is a no-op: behavior is
+# identical to proc_step.
+fn lex_os_exec_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
+  let full_input := str.join([def.system_prompt, "\n\n", msg_json], "")
+  match proc.run("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
+    Err(msg) => str.concat("PROC_ERROR: mktemp failed: ", msg),
+    Ok(mk) => {
+      let path := str.trim(mk.stdout)
+      let __w := io.write(path, full_input)
+      match proc.run("bash", ["-c", "mktemp /tmp/loom-manifest.XXXXXXXX"]) {
+        Err(msg) => str.concat("PROC_ERROR: manifest mktemp failed: ", msg),
+        Ok(mm) => {
+          let manifest_path := str.trim(mm.stdout)
+          let __m := io.write(manifest_path, manifests.manifest_json_for_kind(def.kind, def.sprint_id))
+          let cmd := str.join([def.proc_cmd, " < ", path], "")
+          match proc.run("lex-os", ["--output", "json", "exec", "--simulated", "--manifest", manifest_path, "--", "bash", "-c", cmd]) {
+            Err(msg) => str.concat("PROC_ERROR: lex-os exec spawn failed: ", msg),
+            Ok(r) => parse_lex_os_exec_output(r.stdout),
+          }
+        },
+      }
+    },
+  }
+}
+
+# Parse `lex-os --output json exec`'s acli envelope:
+#   allowed:  {"ok":true,"data":{"exit_code":0,"stdout":"...","stderr":"...",...}}
+#   denied:   {"ok":false,"error":{"code":"...","message":"..."}}
+fn parse_lex_os_exec_output(stdout :: Str) -> Str {
+  match jv.parse(stdout) {
+    Err(_) => str.concat("PROC_ERROR: lex-os exec produced unparseable output: ", stdout),
+    Ok(j) => match jv.get_field(j, "ok") {
+      Some(JBool(false)) => match jv.get_field(j, "error") {
+        Some(err) => match jv.get_field(err, "message") {
+          Some(JStr(m)) => str.concat("PROC_ERROR: lex-os exec denied: ", m),
+          _ => "PROC_ERROR: lex-os exec denied (no message)",
+        },
+        None => "PROC_ERROR: lex-os exec denied (no error field)",
+      },
+      _ => match jv.get_field(j, "data") {
+        None => "PROC_ERROR: lex-os exec: success envelope has no data",
+        Some(data) => extract_exec_data(data),
+      },
+    },
+  }
+}
+
+fn extract_exec_data(data :: jv.Json) -> Str {
+  let exit_ok := match jv.get_field(data, "exit_code") {
+    Some(JInt(0)) => true,
+    _ => false,
+  }
+  if exit_ok {
+    match jv.get_field(data, "stdout") {
+      Some(JStr(s)) => str.trim(s),
+      _ => "",
+    }
+  } else {
+    match jv.get_field(data, "stderr") {
+      Some(JStr(s)) => str.join(["PROC_ERROR: exit non-zero. stderr: ", s], ""),
+      _ => "PROC_ERROR: exit non-zero (no stderr captured)",
+    }
+  }
+}
+
 # ── A2A executor ───────────────────────────────────────────────────────────────
 # Sends the prompt to a remote agent via the A2A tasks/send JSON-RPC protocol.
 # Returns the first text part of the first artifact in the response.
@@ -607,7 +684,15 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) 
   } else {
     if str.len(def.proc_cmd) > 0 {
       let _t2 := trace.record(db, run_id, def.id, "proc_start", str.concat("{\"cmd\":\"", str.concat(def.proc_cmd, "\"}")))
-      let out := proc_step(def, msg_json)
+      let use_lex_os := match env.get("LEX_OS_ISOLATION") {
+        Some(_) => true,
+        None => false,
+      }
+      let out := if use_lex_os {
+        lex_os_exec_step(def, msg_json)
+      } else {
+        proc_step(def, msg_json)
+      }
       let _t3 := trace.record(db, run_id, def.id, "proc_done", jv.stringify(JStr(out)))
       out
     } else {

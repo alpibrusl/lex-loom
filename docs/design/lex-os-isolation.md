@@ -1,6 +1,6 @@
 # Issue — run loom worker agents inside lex-os capsules (replace Docker isolation)
 
-Status: open, design only. Filed 2026-06-22.
+Status: Phase 0 wiring started 2026-08-03. Filed 2026-06-22.
 
 ## Motivation
 loom worker agents (build, py_build, qa, py_qa, devops, docs, security, scribe,
@@ -26,15 +26,34 @@ Grant dimensions: `filesystem` (None|ReadOnly|ReadWrite), `network`
 Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
 
 ## Plan
-- **Phase 0 (now): simulated.** Write one manifest per role under
-  `manifests/`. Wire the proc executor so a node's worker is spawned as
-  `lex-os run --simulated --agent guest --manifest manifests/<role>.json`.
-  Zero kernel overhead; gives us the grant declarations as ground truth and
-  audit trails locally. `qa` gets `filesystem: ReadOnly, exec: None`; `build`
-  gets `filesystem: ReadWrite, network: Allowlist [litellm host], exec: Sandboxed`.
-- **Phase 1 (Linux/CI/prod): real Firecracker.** Same manifests, drop
-  `--simulated`, requires `/dev/kvm`. Docker for per-agent isolation goes away
-  entirely; the loom service itself just needs `lex run src/main.lex`.
+- **Phase 0 (started): simulated.** Manifests live in `src/manifests.lex`
+  (`manifest_json_for_kind`), not the originally-sketched `manifests/`
+  directory — one JSON grant generated per role, verified wire-compatible
+  with lex-os's real `Manifest::from_json`. The proc executor
+  (`src/agent/runner.lex`) is wired, but not via `lex-os run --agent guest`
+  as first sketched: that command drives its own LLM reasoning loop, which
+  would replace loom's tuned per-role prompts rather than just sandbox them.
+  Instead it routes through
+  [`lex-os exec`](https://github.com/alpibrusl/lex-os#mediate-one-external-command-exec)
+  (added for this), a smaller primitive built specifically for "run this
+  exact external command, mediated" — the command construction stays
+  byte-for-byte what `proc_step` already built, only the launcher changes.
+  Gated behind `LEX_OS_ISOLATION` (opt-in, off by default) so unset behavior
+  is unchanged. `qa` gets `filesystem: ReadOnly, exec: Sandboxed`; `build`
+  gets `filesystem: ReadWrite, network: Allowlist, exec: Sandboxed` (see
+  `manifest_json_for_kind` for the full per-role table — it's a superset of
+  the sketch below, covering every `kind` `proc_cmd` can appear on, with an
+  unmapped role defaulting to no exec authority rather than failing open).
+  Not yet done: the LLM and A2A executors stay unmediated (only `proc_cmd`
+  nodes route through lex-os today), and there's no live end-to-end test in
+  loom's own CI (it doesn't install the `lex-os` binary yet) — only a
+  dependency-free unit test on the grant-generation side
+  (`tests/test_manifest_for_kind.lex`).
+- **Phase 1 (Linux/CI/prod): real Firecracker.** Same manifests, `lex-os
+  exec` drops `--simulated` once it supports the real backend (today it
+  refuses non-`--simulated` outright — see lex-os's `exec` module docs).
+  Docker for per-agent isolation goes away entirely; the loom service itself
+  just needs `lex run src/main.lex`.
 
 ## Per-role grant sketch
 | role      | fs        | net               | exec      | notes |

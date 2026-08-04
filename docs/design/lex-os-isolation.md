@@ -49,9 +49,14 @@ Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
   loom's own CI (it doesn't install the `lex-os` binary yet) — only a
   dependency-free unit test on the grant-generation side
   (`tests/test_manifest_for_kind.lex`).
-- **Phase 1 (Linux/CI/prod): real Firecracker.** Same manifests, `lex-os
-  exec` drops `--simulated` once it supports the real backend (today it
-  refuses non-`--simulated` outright — see lex-os's `exec` module docs).
+- **Phase 1 (Linux/CI/prod): real Firecracker.** `lex-os exec` itself already
+  supports the real backend (same selection as `lex-os run`: real by
+  default on a KVM host, `--simulated` an explicit opt-in) — it boots
+  `lex-os-guest` in a one-shot mode and the command runs genuinely inside
+  the microVM, not just behind a swapped-out policy check. What's still
+  loom-side work: `lex_os_exec_step` (`runner.lex`) hardcodes `--simulated`
+  today, and loom's own CI has no KVM runner to exercise the real path —
+  dropping the flag and adding that coverage is what Phase 1 actually is.
   Docker for per-agent isolation goes away entirely; the loom service itself
   just needs `lex run src/main.lex`.
 

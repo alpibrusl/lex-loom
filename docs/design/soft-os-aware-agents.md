@@ -1,6 +1,7 @@
 # Soft-aware and os-aware loom agents
 
-Status: design, epic filed. Written 2026-08-04, following the ecosystem
+Status: design, epic filed (`lex-loom#177`); SA1 in progress (`lex-loom#178`).
+Written 2026-08-04, following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring

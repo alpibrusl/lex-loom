@@ -118,7 +118,19 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
           if a.stop_when == b.stop_when {
             if a.pmf_when == b.pmf_when {
               if a.maintenance_when == b.maintenance_when {
-                a.wake_when == b.wake_when
+                if a.wake_when == b.wake_when {
+                  if a.soft_mesh_url == b.soft_mesh_url {
+                    if a.soft_org_id == b.soft_org_id {
+                      a.soft_roles == b.soft_roles
+                    } else {
+                      false
+                    }
+                  } else {
+                    false
+                  }
+                } else {
+                  false
+                }
               } else {
                 false
               }
@@ -149,7 +161,7 @@ fn test_company_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("co-rt")
-        let cfg := { id: id, goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5", wake_when: "verdict-failed" }
+        let cfg := { id: id, goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5", wake_when: "verdict-failed", soft_mesh_url: "https://mesh.example.com", soft_org_id: "acme-co", soft_roles: "distribution,cx" }
         match company.save_company(db, cfg) {
           Err(e) => Err(str.concat("save_company: ", e)),
           Ok(_) => match company.load_company(db, id) {
@@ -189,6 +201,69 @@ fn run_iter_roundtrip(db :: conn.ConnDb, id :: Str) -> [sql, fs_write, time] Res
   }
 }
 
+# SA1 (lex-loom#178): a company.toml with [soft] round-trips through
+# save_company/load_company and shows up in board_report — schema +
+# persistence only, no mesh behavior.
+fn test_board_report_shows_soft_section_when_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("soft-rt")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "https://mesh.example.com", soft_org_id: "widget-co", soft_roles: "distribution,cx" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let report := company.board_report(db, id)
+            if str.contains(report, "Soft (cross-org mesh):") {
+              if str.contains(report, "https://mesh.example.com") {
+                if str.contains(report, "widget-co") {
+                  if str.contains(report, "distribution,cx") {
+                    Ok(())
+                  } else {
+                    Err(str.concat("report missing soft roles: ", report))
+                  }
+                } else {
+                  Err(str.concat("report missing soft org_id: ", report))
+                }
+              } else {
+                Err(str.concat("report missing soft mesh_url: ", report))
+              }
+            } else {
+              Err(str.concat("report missing Soft section header: ", report))
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_board_report_soft_section_defaults_not_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let id := rand_id("soft-unset")
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
+        match company.save_company(db, cfg) {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let report := company.board_report(db, id)
+            if str.contains(report, "not soft-aware") {
+              Ok(())
+            } else {
+              Err(str.concat("expected the default not-soft-aware line, got: ", report))
+            }
+          },
+        }
+      },
+    },
+  }
+}
+
 # The one genuinely new query the Company-view UI needs (#149) — everything
 # else the new /api/companies* endpoints use is an existing per-company
 # function called once per id from this list.
@@ -201,7 +276,7 @@ fn test_list_companies_returns_seeded_ids() -> [sql, fs_write, time, crypto, ran
         let id_a := rand_id("list-a")
         let id_b := rand_id("list-b")
         let cfg := fn (id :: Str) -> company.CompanyCfg {
-          { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+          { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         }
         match company.save_company(db, cfg(id_a)) {
           Err(e) => Err(e),
@@ -251,7 +326,7 @@ fn test_save_company_registers_in_registry() -> [sql, fs_write, fs_read, time, c
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("reg-co")
-        match company.save_company(db, { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => match registry.find_by_id(db, id) {
             Err(e) => Err(e),
@@ -275,7 +350,7 @@ fn test_add_contact_and_resolve_returns_human() -> [sql, fs_write, fs_read, time
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -304,7 +379,7 @@ fn test_add_pool_agent_contact_and_resolve_returns_pool_agent() -> [sql, fs_writ
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("pool-contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => match seed_pool_agent(db, "strict-qa-v1", "py_qa", "[\"lex\",\"qa\"]", 12) {
             Err(e) => Err(e),
@@ -336,7 +411,7 @@ fn test_resolve_oracle_contacts_empty_when_none_configured() -> [sql, fs_write, 
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("no-contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => if list.is_empty(company.resolve_oracle_contacts(db, cid, "security")) {
             Ok(())
@@ -356,7 +431,7 @@ fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read,
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("section-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe-2", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -384,7 +459,7 @@ fn test_all_contacts_returns_oracle_and_resolved_contact() -> [sql, fs_write, fs
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("all-contacts-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe-3", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -577,7 +652,7 @@ fn stage_cfg(pmf :: Str, maint :: Str) -> company.CompanyCfg {
 }
 
 fn stage_cfg_id(id :: Str, pmf :: Str, maint :: Str) -> company.CompanyCfg {
-  { id: id, goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint, wake_when: "" }
+  { id: id, goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint, wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
 }
 
 fn test_stage_advances_on_pmf() -> Result[Unit, Str] {
@@ -933,7 +1008,7 @@ fn test_run_portfolio_advances_and_completes_a_sunset_track() -> [env, sql, fs_w
         let pid := rand_id("portfolio-sunset")
         let tid := "t1"
         let cid := company.track_company_id(pid, tid)
-        let seed_ccfg := { id: cid, goal: "a sunset goal", model: "test-model", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let seed_ccfg := { id: cid, goal: "a sunset goal", model: "test-model", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, seed_ccfg) {
           Err(e) => Err(e),
           Ok(_) => match company.save_stage(db, cid, Sunset) {
@@ -1082,7 +1157,7 @@ fn test_board_report_contains_sections() -> [sql, fs_write, fs_read, time, crypt
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("board-rt")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "Add the first widget" }) {
@@ -1717,7 +1792,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, fs_read, time, c
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-report")
-        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.record_operate_signal(db, id, 1, "liveness", "down") {
@@ -1752,7 +1827,7 @@ fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, f
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("dossier-report")
-        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match oledger.open_incident(db, id, "errors", "2026-01-01T00:00:01", "[\"errors\"]", 1000) {
@@ -2291,7 +2366,7 @@ fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, cry
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let company_id := rand_id("strategist-cost")
-        let cfg := { id: company_id, goal: "g", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: company_id, goal: "g", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match insert_test_usage(db, company.strategist_cost_owner(company_id, 1), 1000) {
@@ -2363,7 +2438,7 @@ fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-cost")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => {
@@ -2407,7 +2482,7 @@ fn test_board_report_shows_spend() -> [sql, fs_write, fs_read, time, crypto, ran
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-cost-report")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.add_company_cost_cents(db, id, 530) {
@@ -2692,7 +2767,7 @@ fn test_operate_sweep_noop_on_empty_company() -> [sql, fs_write, time, crypto, r
 }
 
 fn suite() -> [env, sql, fs_read, fs_write, time, crypto, random, io, proc, net, concurrent, llm, vcs] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_list_companies_returns_seeded_ids(), test_save_company_registers_in_registry(), test_add_contact_and_resolve_returns_human(), test_add_pool_agent_contact_and_resolve_returns_pool_agent(), test_resolve_oracle_contacts_empty_when_none_configured(), test_contacts_section_lists_configured_contacts(), test_all_contacts_returns_oracle_and_resolved_contact(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_run_portfolio_advances_and_completes_a_sunset_track(), test_run_portfolio_empty_seed_advances_nothing(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_strategist_prompt_includes_product_signals(), test_product_signals_section_no_signal_yet(), test_product_signals_section_reads_latest_recorded_signal(), test_fetch_product_usage_reports_unreachable_cleanly(), test_strategist_prompt_includes_real_economics(), test_real_economics_section_no_revenue_configured(), test_real_economics_section_reads_latest_recorded_signal(), test_real_economics_section_reports_unreachable_without_inventing_zero(), test_check_and_record_revenue_noop_when_unset(), test_fetch_revenue_signal_reports_unreachable_cleanly(), test_strategist_prompt_includes_distribution(), test_distribution_section_no_content_published_yet(), test_distribution_section_sums_posts_and_views(), test_distribution_section_reports_unreachable(), test_fetch_distribution_signal_reports_unreachable_cleanly(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_board_report_shows_soft_section_when_configured(), test_board_report_soft_section_defaults_not_configured(), test_list_companies_returns_seeded_ids(), test_save_company_registers_in_registry(), test_add_contact_and_resolve_returns_human(), test_add_pool_agent_contact_and_resolve_returns_pool_agent(), test_resolve_oracle_contacts_empty_when_none_configured(), test_contacts_section_lists_configured_contacts(), test_all_contacts_returns_oracle_and_resolved_contact(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_run_portfolio_advances_and_completes_a_sunset_track(), test_run_portfolio_empty_seed_advances_nothing(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_strategist_prompt_includes_product_signals(), test_product_signals_section_no_signal_yet(), test_product_signals_section_reads_latest_recorded_signal(), test_fetch_product_usage_reports_unreachable_cleanly(), test_strategist_prompt_includes_real_economics(), test_real_economics_section_no_revenue_configured(), test_real_economics_section_reads_latest_recorded_signal(), test_real_economics_section_reports_unreachable_without_inventing_zero(), test_check_and_record_revenue_noop_when_unset(), test_fetch_revenue_signal_reports_unreachable_cleanly(), test_strategist_prompt_includes_distribution(), test_distribution_section_no_content_published_yet(), test_distribution_section_sums_posts_and_views(), test_distribution_section_reports_unreachable(), test_fetch_distribution_signal_reports_unreachable_cleanly(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
 }
 
 fn run_all() -> [env, sql, fs_read, fs_write, time, crypto, random, io, proc, net, concurrent, llm, vcs] Unit {

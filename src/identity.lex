@@ -13,6 +13,18 @@
 # an attestation OUTSIDE the issuing loom — the same portability rule as
 # lex-games' arena registry (reputation accrues solely from sessions whose
 # trail replays clean).
+#
+# NAMING COLLISION (SA1, lex-loom#178): lex-soft has its own `src/identity.lex`
+# — a DIFFERENT thing at a DIFFERENT scope. This file is INTERNAL to one loom
+# company: a did:lex is minted per pool agent, scoped to that company's own
+# Cast, and reputation is this company's own attestation history. lex-soft's
+# identity.lex is the verified CROSS-ORG identity a company presents to other
+# companies on the mesh (accounts/credentials, keyed on `org`). A pool agent's
+# did:lex is not a soft org identity and the two are never interchangeable —
+# `[soft].org_id` in company.toml (see docs/design/company-manifest.md) names
+# the company on soft's mesh, and has nothing to do with any agent's did:lex
+# here. Kept as two same-named-but-different-scope files rather than renamed,
+# per docs/design/soft-os-aware-agents.md's "border between loom and soft".
 
 import "std.str" as str
 

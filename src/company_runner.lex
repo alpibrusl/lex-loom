@@ -344,7 +344,7 @@ type PortfolioRunResult = { portfolio_id :: Str, tracks :: List[TrackRunResult] 
 
 fn run_one_track(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] TrackRunResult {
   let cid := company.track_company_id(portfolio_id, t.track_id)
-  let ccfg := { id: cid, goal: t.goal, model: model, max_iterations: max_iterations, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "" }
+  let ccfg := { id: cid, goal: t.goal, model: model, max_iterations: max_iterations, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "" }
   let __p := io.print(str.join(["[portfolio] track ", t.track_id, " -> ", cid], ""))
   let res := run_company(db, ccfg, api_max, evolve)
   let __done := if company.load_stage(db, cid) == Sunset {

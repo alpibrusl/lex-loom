@@ -52,11 +52,21 @@ budg  = get("policy", "budget_eur", None)
 repo  = get("infra", "repo", "")
 revenue_url = get("finance", "revenue_url", "")
 
+# [soft] (SA1, lex-loom#178): declarative only -- a mesh node URL, this
+# company's org identity on it (defaults to the company id), and which role
+# kinds may register there once SA2 actually wires registration up. Nothing
+# here dials out to soft; bootstrap only threads it through as env vars.
+soft_mesh_url = get("soft", "mesh_url", "")
+soft_org_id   = get("soft", "org_id", cid) if get("soft", "mesh_url", "") else ""
+soft_roles_list = get("soft", "roles", [])
+soft_roles    = ",".join(soft_roles_list) if isinstance(soft_roles_list, list) else str(soft_roles_list)
+
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
     "CBUDGET": "" if budg is None else str(budg),
     "CREVENUE_URL": revenue_url,
+    "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -168,6 +178,9 @@ STOP_WHEN=""
 
 echo "[bootstrap] company='$CID' path='$CPATH' workspace='$DIR' (${copied} skeleton files laid down)"
 echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<none>}' MODEL=$CMODEL"
+if [ -n "$CSOFT_MESH_URL" ]; then
+  echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} (declarative only — SA2 wires real registration)"
+fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
@@ -179,4 +192,5 @@ fi
 export LOOM_WORKSPACE="$WS"
 COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN" \
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
+  SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   bin/run-company.sh

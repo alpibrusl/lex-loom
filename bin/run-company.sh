@@ -55,8 +55,15 @@ fi
 # never touches a payment rail itself -- unset means no real economics
 # signal is tracked, not that revenue is zero.
 : "${REVENUE_URL:=}"
+# Optional, declarative-only for now (SA1, lex-loom#178): the company's
+# [soft] mesh identity. Nothing reads or dials out to it yet -- it's stored
+# and shown in board_report so SA2 (registering a role in soft's mesh) has
+# a real declarative surface to build on. Unset means "not soft-aware".
+: "${SOFT_MESH_URL:=}"
+: "${SOFT_ORG_ID:=}"
+: "${SOFT_ROLES:=}"
 
-export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS REVENUE_URL
+export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS REVENUE_URL SOFT_MESH_URL SOFT_ORG_ID SOFT_ROLES
 
 WORKER_PIDS=()
 WORKER_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loom-company-workers.XXXXXX")"

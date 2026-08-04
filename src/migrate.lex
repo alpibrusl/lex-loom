@@ -254,6 +254,9 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __18 := try_ddl(db, "ALTER TABLE operate_effects ADD COLUMN contracted_at_idx INTEGER NOT NULL DEFAULT 0")
   let __19 := try_ddl(db, "ALTER TABLE operate_effects ADD COLUMN deadline_idx INTEGER NOT NULL DEFAULT 0")
   let __20 := try_ddl(db, "ALTER TABLE operate_effects ADD COLUMN expected_state_hash TEXT NOT NULL DEFAULT ''")
+  let __21 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_mesh_url TEXT NOT NULL DEFAULT ''")
+  let __22 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_org_id TEXT NOT NULL DEFAULT ''")
+  let __23 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_roles TEXT NOT NULL DEFAULT ''")
   ()
 }
 

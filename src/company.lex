@@ -61,7 +61,13 @@ import "./agent/registry" as reg
 # `wake_when` (C10, #62) is the dormancy trigger: while the company is in the
 # Maintenance stage, an iteration only runs if wake_when holds against the last
 # result (empty => never dormant, always iterate — back-compat).
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
+# `soft_mesh_url`/`soft_org_id`/`soft_roles` (SA1, lex-loom#178) are the
+# declarative `[soft]` surface — a mesh node URL, this company's org identity
+# on it, and a comma-separated list of role kinds allowed to register there.
+# Schema + persistence only: nothing reads or calls out to soft's mesh yet
+# (that starts at SA2). Empty means "not soft-aware" — the same back-compat
+# default every other optional CompanyCfg field already uses.
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 # `goal` (#80) is the goal this iteration actually ran — kept so the strategist
@@ -72,7 +78,7 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int, spend_cents :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
 
@@ -85,7 +91,7 @@ type ContentRow = { content :: Str }
 # it left off instead of resetting to Ideation every time it's re-run.
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when, soft_mesh_url=excluded.soft_mesh_url, soft_org_id=excluded.soft_org_id, soft_roles=excluded.soft_roles", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr(c.soft_mesh_url), PStr(c.soft_org_id), PStr(c.soft_roles), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => reg.register(db, c.id, "loom-company", c.id, "", []),
@@ -206,13 +212,13 @@ fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str 
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when, soft_mesh_url: r.soft_mesh_url, soft_org_id: r.soft_org_id, soft_roles: r.soft_roles }),
     },
   }
 }
@@ -2158,6 +2164,28 @@ fn escalation_dossiers_for_company(db :: conn.ConnDb, company_id :: Str) -> [sql
   escalation_dossiers(db, latest_iteration_idx(db, company_id), oledger.pending_effects_for_company(db, company_id))
 }
 
+# SA1 (lex-loom#178): the declarative `[soft]` surface, schema + persistence
+# only — no mesh registration, discovery, or settlement behavior reads this
+# yet (that starts at SA2). Purely reflects what was last saved via
+# save_company, the same way the mission/model lines above it do.
+fn soft_section(cfg :: CompanyCfg) -> Str {
+  if str.is_empty(str.trim(cfg.soft_mesh_url)) {
+    "(not soft-aware — set [soft].mesh_url in company.toml to declare a mesh node)"
+  } else {
+    let org_id := if str.is_empty(str.trim(cfg.soft_org_id)) {
+      cfg.id
+    } else {
+      cfg.soft_org_id
+    }
+    let roles := if str.is_empty(str.trim(cfg.soft_roles)) {
+      "(none)"
+    } else {
+      cfg.soft_roles
+    }
+    str.join(["  mesh_url: ", cfg.soft_mesh_url, "\n", "  org_id: ", org_id, "\n", "  opt-in roles: ", roles], "")
+  }
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
@@ -2167,7 +2195,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

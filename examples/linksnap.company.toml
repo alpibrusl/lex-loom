@@ -29,3 +29,12 @@ checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/us
 max_iterations = 12           # [enforced] → MAX_ITERATIONS
 budget_eur     = 25           # [enforced] → STOP_WHEN="spend ge 25.00" (rough estimate guard)
 human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants
+
+[soft]
+# SA1 (lex-loom#178): declares this company's identity on a lex-soft mesh
+# node. Schema + persistence only — round-trips through bootstrap into
+# board_report, but nothing registers into the mesh or reaches soft yet
+# (that's SA2, docs/design/soft-os-aware-agents.md).
+mesh_url = "https://mesh.example.com"   # [schema-only] → SOFT_MESH_URL
+org_id   = "linksnap"                   # [schema-only] → SOFT_ORG_ID (defaults to [identity].id if omitted)
+roles    = ["distribution"]             # [schema-only] → SOFT_ROLES; role kinds allowed to register once SA2 lands

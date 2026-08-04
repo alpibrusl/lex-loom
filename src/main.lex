@@ -673,6 +673,9 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let pmf_when := get_env("PMF_WHEN", "")
   let maintenance_when := get_env("MAINTENANCE_WHEN", "")
   let wake_when := get_env("WAKE_WHEN", "")
+  let soft_mesh_url := get_env("SOFT_MESH_URL", "")
+  let soft_org_id := get_env("SOFT_ORG_ID", "")
+  let soft_roles := get_env("SOFT_ROLES", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
   let evolve_flag := get_env("EVOLVE", "1")
   let evolve := if evolve_flag == "0" {
@@ -684,7 +687,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
-      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when }
+      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles }
       let __res := company_runner.run_company(db, ccfg, api_max, evolve)
       ()
     },

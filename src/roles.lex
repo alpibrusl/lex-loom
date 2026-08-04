@@ -261,6 +261,31 @@ fn make_publish_content_tool() -> t.Tool {
 # rather than publish_content's real-write pattern, since a wrong response
 # to a real customer is a much higher-stakes mistake than an unpublished
 # blog post.
+# The actual fetch, factored out so a caller outside the LLM tool
+# machinery (SA2's A2A-mounted CX skill, `src/server/cx_a2a.lex`) can
+# reuse the exact same tested logic instead of re-implementing it.
+fn fetch_support_items(url :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(url) {
+    JObj([("items", JList([])), ("error", JStr("url is required"))])
+  } else {
+    let script := str.join(["curl -s --max-time 10 '", url, "/loom/support' 2>/dev/null || echo CURL_FAILED"], "")
+    match proc.run("bash", ["-c", script]) {
+      Err(msg) => JObj([("items", JList([])), ("error", JStr(str.concat("fetch failed to run: ", msg)))]),
+      Ok(r) => {
+        let out := str.trim(r.stdout)
+        if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+          JObj([("items", JList([])), ("error", JStr(str.concat("could not reach ", url)))])
+        } else {
+          match jv.parse(out) {
+            Err(_) => JObj([("items", JList([])), ("error", JStr(str.slice(out, 0, 300)))]),
+            Ok(j) => j,
+          }
+        }
+      },
+    }
+  }
+}
+
 fn make_fetch_support_tool() -> t.Tool {
   let params := { title: "FetchSupportItems", description: "Read items needing a human response from the live product's own /loom/support endpoint", fields: [s.required_str("url", [])] }
   t.define("fetch_support_items", "GET `url` + \"/loom/support\" (url is the product's live base URL, from a Launch or Deploy node's output — e.g. http://localhost:8081, no trailing slash). Returns {items:[{id,text,status}]} or {error}. Read-only — this never sends a response anywhere; you draft replies in your own output for a human to send.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -268,25 +293,7 @@ fn make_fetch_support_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(url) {
-      Ok(JObj([("items", JList([])), ("error", JStr("url is required"))]))
-    } else {
-      let script := str.join(["curl -s --max-time 10 '", url, "/loom/support' 2>/dev/null || echo CURL_FAILED"], "")
-      match proc.run("bash", ["-c", script]) {
-        Err(msg) => Ok(JObj([("items", JList([])), ("error", JStr(str.concat("fetch failed to run: ", msg)))])),
-        Ok(r) => {
-          let out := str.trim(r.stdout)
-          if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-            Ok(JObj([("items", JList([])), ("error", JStr(str.concat("could not reach ", url)))]))
-          } else {
-            match jv.parse(out) {
-              Err(_) => Ok(JObj([("items", JList([])), ("error", JStr(str.slice(out, 0, 300)))])),
-              Ok(j) => Ok(j),
-            }
-          }
-        },
-      }
-    }
+    Ok(fetch_support_items(url))
   })
 }
 

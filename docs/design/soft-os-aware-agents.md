@@ -1,7 +1,7 @@
 # Soft-aware and os-aware loom agents
 
-Status: design, epic filed (`lex-loom#177`); SA1 in progress (`lex-loom#178`).
-Written 2026-08-04, following the ecosystem
+Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
+done (`lex-loom#179`). Written 2026-08-04, following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring
@@ -86,13 +86,28 @@ before this work makes the collision load-bearing.
   everything else.
   *Promotion criterion:* a company.toml with `[soft]` round-trips through
   bootstrap and the field is visible in `board_report`.
-- **SA2 — register one outward-facing role in soft's mesh.** Pick the
-  single lowest-risk candidate (monetization-handoff — already
-  `human <oracle>`-gated, or CX — already real and tested) and register it
-  via soft's `mesh.mount`-shaped API, discoverable and reachable over A2A
-  from a real soft node.
+- **SA2 — register one outward-facing role in soft's mesh. Done.** Picked
+  CX (real, tested tool; monetization-handoff has no tool at all and
+  nothing external would meaningfully call it over A2A). There is no
+  literal `mesh.mount` in lex-soft — the real self-onboard surface is
+  `POST /peers` on a `federation.mount_federation`-mounted node, which
+  ships no runnable binary either; `lex-soft` gained one
+  (`src/federation_node.lex`) so "a real soft node" has something to
+  stand up against. loom's own A2A server was likewise never mounted over
+  real HTTP before this (only exposed via MCP stdio) — `src/server/cx_a2a.lex`
+  wraps CX's existing `fetch_support_items` tool (factored out of
+  `roles.lex`, same tested logic, not a smarter one) as a real A2A
+  `Skill`, mounted with `lex-agent/src/mount.lex`. `src/soft_register.lex`
+  reads a company's `[soft]` config (SA1) and POSTs the registration;
+  unknown roles / missing config are clean errors before any network call.
   *Promotion criterion:* a second, independent soft node discovers and
-  successfully A2A-messages the registered role end to end.
+  successfully A2A-messages the registered role end to end. **Verified
+  live** — `demo/sa2-mesh-roundtrip.sh` stands up a fresh federation node,
+  registers CX into it, confirms discovery via that node's own `GET
+  /peers`, and sends real `tasks/send` JSON-RPC requests straight to the
+  registered `inbox_url`, both the happy path (a real fetched item) and
+  the clean-error path (product unreachable) — reproduced from a clean
+  state, not a one-off.
 - **SA3 — evidence-gated settlement for one real money signal.** Route the
   Operate loop's revenue tracking through soft's `verdict`/`settlement`
   instead of polling `revenue_url` directly, for one company.

@@ -1,7 +1,8 @@
 # Soft-aware and os-aware loom agents
 
 Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
-done (`lex-loom#179`). Written 2026-08-04, following the ecosystem
+done (`lex-loom#179`), SA3 done (`lex-loom#180`). Written 2026-08-04,
+following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring
@@ -108,12 +109,30 @@ before this work makes the collision load-bearing.
   registered `inbox_url`, both the happy path (a real fetched item) and
   the clean-error path (product unreachable) — reproduced from a clean
   state, not a one-off.
-- **SA3 — evidence-gated settlement for one real money signal.** Route the
-  Operate loop's revenue tracking through soft's `verdict`/`settlement`
-  instead of polling `revenue_url` directly, for one company.
+- **SA3 — evidence-gated settlement for one real money signal. Done.**
+  lex-soft's `verdict`/`settlement`/`ledger` turned out to be a
+  library-level Lex API with no deployed write/verify HTTP surface (the
+  only mounted settlement route anywhere is a read-only `GET /trails/:id`)
+  — so `lex-soft` became a real `lex.toml` package dependency of this repo
+  rather than something reached over HTTP the way SA2's mesh registration
+  is. `[soft].settlement = true` routes a company's per-iteration
+  `REVENUE_URL` reading through `src/soft_settlement.lex`: the claim is
+  recorded as a hash-chained trail event (in this company's own db — no
+  second database or network hop) and immediately re-derived via
+  `verdict.verify` against a real legality spec ("claimed revenue must be
+  non-negative"), not trusted at face value. `revenue_url` stays the data
+  source either way, exactly as scoped — this changes what happens to the
+  reading after it's fetched, not where it comes from.
   *Promotion criterion:* a settlement event soft produced is the one
   `board_report` cites, and it survives an independent re-verification
-  (soft's own evidence re-derivation).
+  (soft's own evidence re-derivation). **Verified live** —
+  `demo/sa3-settlement-roundtrip.sh` seeds a company, checks a real
+  fetched revenue reading through the settlement path, shows
+  `board_report` citing the resulting `trail_id` + `verified` status,
+  independently re-derives the same verdict from a freshly opened trail
+  handle (verified=true), then tampers with the underlying event and
+  re-derives again — correctly flipping to verified=false — reproduced
+  from a clean state.
 - **SA4 — expand to the rest of Distribution.** Only after SA2/SA3 are
   proven: research, content publishing, and any future distribution role
   register the same way by default.

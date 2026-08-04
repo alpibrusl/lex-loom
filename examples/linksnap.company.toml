@@ -35,6 +35,9 @@ human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] vi
 # node. Schema + persistence only — round-trips through bootstrap into
 # board_report, but nothing registers into the mesh or reaches soft yet
 # (that's SA2, docs/design/soft-os-aware-agents.md).
-mesh_url = "https://mesh.example.com"   # [schema-only] → SOFT_MESH_URL
-org_id   = "linksnap"                   # [schema-only] → SOFT_ORG_ID (defaults to [identity].id if omitted)
-roles    = ["distribution"]             # [schema-only] → SOFT_ROLES; role kinds allowed to register once SA2 lands
+mesh_url = "https://mesh.example.com"   # [enforced] → SOFT_MESH_URL
+org_id   = "linksnap"                   # [enforced] → SOFT_ORG_ID (defaults to [identity].id if omitted)
+roles    = ["distribution"]             # [enforced] → SOFT_ROLES; role kinds allowed to register (SA2)
+# settlement = true                     # [enforced] → SOFT_SETTLEMENT; routes revenue through soft's evidence-gated
+                                         # settlement instead of trusting REVENUE_URL at face value (SA3) — commented
+                                         # out here since linksnap has no [finance].revenue_url configured to settle

@@ -60,6 +60,11 @@ soft_mesh_url = get("soft", "mesh_url", "")
 soft_org_id   = get("soft", "org_id", cid) if get("soft", "mesh_url", "") else ""
 soft_roles_list = get("soft", "roles", [])
 soft_roles    = ",".join(soft_roles_list) if isinstance(soft_roles_list, list) else str(soft_roles_list)
+# SA3 (lex-loom#180): opt-in only -- "1" routes the per-iteration revenue
+# signal through soft's evidence-gated settlement (src/soft_settlement.lex)
+# instead of trusting the raw REVENUE_URL reading at face value; unset/false
+# keeps today's behavior (revenue_url stays the data source either way).
+soft_settlement = "1" if get("soft", "settlement", False) else ""
 
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
@@ -67,6 +72,7 @@ out = {
     "CBUDGET": "" if budg is None else str(budg),
     "CREVENUE_URL": revenue_url,
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
+    "CSOFT_SETTLEMENT": soft_settlement,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -179,7 +185,7 @@ STOP_WHEN=""
 echo "[bootstrap] company='$CID' path='$CPATH' workspace='$DIR' (${copied} skeleton files laid down)"
 echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<none>}' MODEL=$CMODEL"
 if [ -n "$CSOFT_MESH_URL" ]; then
-  echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} (declarative only — SA2 wires real registration)"
+  echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} settlement=${CSOFT_SETTLEMENT:-off}"
 fi
 
 if [ "$NORUN" = "--no-run" ]; then
@@ -193,4 +199,5 @@ export LOOM_WORKSPACE="$WS"
 COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN" \
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
+  SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" \
   bin/run-company.sh

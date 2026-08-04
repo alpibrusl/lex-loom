@@ -51,6 +51,42 @@ fn sprint_manifest_json(sprint_id :: Str) -> Str {
   manifest_json(str.concat("loom sprint ", sprint_id), "ReadWrite", "Allowlist", "Sandboxed", "Gvisor", 3600, 500, 5000, 200)
 }
 
+# Map an agent's role `kind` to the lex-os phase manifest that governs it
+# (docs/design/lex-os-isolation.md's per-role table). Unmapped roles fall
+# back to demo_manifest_json's ReadOnly/no-exec grant — the safe default,
+# since an unrecognised role must never be handed exec authority by omission.
+fn manifest_json_for_kind(kind :: Str, sprint_id :: Str) -> Str {
+  if kind == "build" {
+    implementation_manifest_json(sprint_id)
+  } else {
+    if kind == "py_build" {
+      implementation_manifest_json(sprint_id)
+    } else {
+      if kind == "fe_build" {
+        implementation_manifest_json(sprint_id)
+      } else {
+        if kind == "qa" {
+          qa_manifest_json(sprint_id)
+        } else {
+          if kind == "py_qa" {
+            qa_manifest_json(sprint_id)
+          } else {
+            if kind == "security" {
+              qa_manifest_json(sprint_id)
+            } else {
+              if kind == "scribe" {
+                retro_manifest_json(sprint_id)
+              } else {
+                demo_manifest_json(sprint_id)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 # Compact grant summary for trail events — human-readable, not full JSON.
 fn grant_summary_for_phase(phase :: Str) -> Str {
   if phase == "Design" {

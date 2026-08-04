@@ -307,6 +307,41 @@ fn make_fetch_support_tool() -> t.Tool {
 # Titles+snippets are extracted with a plain grep/sed pipeline (no JS
 # rendering, no login wall to fight) and returned as text; loom never
 # interprets the content, only forwards it, same as every other fetch_* tool.
+# The actual search, factored out so a caller outside the LLM tool
+# machinery (SA4's A2A-mounted research skill, `src/server/research_a2a.lex`)
+# can reuse the exact same tested logic instead of re-implementing it —
+# same reasoning as fetch_support_items above.
+fn fetch_web_search(query :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(query) {
+    JObj([("results", JStr("")), ("error", JStr("query is required"))])
+  } else {
+    match proc.run("bash", ["-c", "mktemp /tmp/loom-search-query.XXXXXXXX"]) {
+      Err(msg) => JObj([("results", JStr("")), ("error", JStr(str.concat("mktemp failed: ", msg)))]),
+      Ok(mk) => {
+        let query_path := str.trim(mk.stdout)
+        let __w := io.write(query_path, query)
+        let clean_html := "sed -E 's/<[^>]*>//g; s/&amp;/\\&/g; s/&#x27;|&#39;/'\"'\"'/g; s/&quot;/\"/g; s/&lt;/</g; s/&gt;/>/g'"
+        let script := str.join(["html=$(curl -s --max-time 15 -A 'Mozilla/5.0' -G --data-urlencode \"q@", query_path, "\" 'https://html.duckduckgo.com/html/' 2>/dev/null) || { echo CURL_FAILED; exit 0; }\n", "titles=$(echo \"$html\" | grep -oP 'class=\"result__a\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "snips=$(echo \"$html\" | grep -oP 'class=\"result__snippet\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "if [ -z \"$titles\" ]; then echo NO_RESULTS; exit 0; fi\n", "paste -d'|' <(echo \"$titles\") <(echo \"$snips\") | awk -F'|' '{printf \"%d. %s -- %s\\n\", NR, $1, $2}'\n"], "")
+        match proc.run("bash", ["-c", script]) {
+          Err(msg) => JObj([("results", JStr("")), ("error", JStr(str.concat("search failed to run: ", msg)))]),
+          Ok(r) => {
+            let out := str.trim(r.stdout)
+            if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+              JObj([("results", JStr("")), ("error", JStr("could not reach the search endpoint"))])
+            } else {
+              if str.contains(out, "NO_RESULTS") {
+                JObj([("results", JStr("")), ("error", JStr("no results found"))])
+              } else {
+                JObj([("results", JStr(str.slice(out, 0, 2000))), ("error", JStr(""))])
+              }
+            }
+          },
+        }
+      },
+    }
+  }
+}
+
 fn make_web_search_tool() -> t.Tool {
   let params := { title: "WebSearch", description: "Search the public web (DuckDuckGo) and return result titles + snippets", fields: [s.required_str("query", [])] }
   t.define("web_search", "Search the web for `query`. Returns {results: \"<numbered titles+snippets>\"} or {error}. Use for competitive/market research — comparable products, typical pricing, positioning — never for anything the codebase itself can answer.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -314,34 +349,7 @@ fn make_web_search_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(query) {
-      Ok(JObj([("results", JStr("")), ("error", JStr("query is required"))]))
-    } else {
-      match proc.run("bash", ["-c", "mktemp /tmp/loom-search-query.XXXXXXXX"]) {
-        Err(msg) => Ok(JObj([("results", JStr("")), ("error", JStr(str.concat("mktemp failed: ", msg)))])),
-        Ok(mk) => {
-          let query_path := str.trim(mk.stdout)
-          let __w := io.write(query_path, query)
-          let clean_html := "sed -E 's/<[^>]*>//g; s/&amp;/\\&/g; s/&#x27;|&#39;/'\"'\"'/g; s/&quot;/\"/g; s/&lt;/</g; s/&gt;/>/g'"
-          let script := str.join(["html=$(curl -s --max-time 15 -A 'Mozilla/5.0' -G --data-urlencode \"q@", query_path, "\" 'https://html.duckduckgo.com/html/' 2>/dev/null) || { echo CURL_FAILED; exit 0; }\n", "titles=$(echo \"$html\" | grep -oP 'class=\"result__a\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "snips=$(echo \"$html\" | grep -oP 'class=\"result__snippet\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "if [ -z \"$titles\" ]; then echo NO_RESULTS; exit 0; fi\n", "paste -d'|' <(echo \"$titles\") <(echo \"$snips\") | awk -F'|' '{printf \"%d. %s -- %s\\n\", NR, $1, $2}'\n"], "")
-          match proc.run("bash", ["-c", script]) {
-            Err(msg) => Ok(JObj([("results", JStr("")), ("error", JStr(str.concat("search failed to run: ", msg)))])),
-            Ok(r) => {
-              let out := str.trim(r.stdout)
-              if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-                Ok(JObj([("results", JStr("")), ("error", JStr("could not reach the search endpoint"))]))
-              } else {
-                if str.contains(out, "NO_RESULTS") {
-                  Ok(JObj([("results", JStr("")), ("error", JStr("no results found"))]))
-                } else {
-                  Ok(JObj([("results", JStr(str.slice(out, 0, 2000))), ("error", JStr(""))]))
-                }
-              }
-            },
-          }
-        },
-      }
-    }
+    Ok(fetch_web_search(query))
   })
 }
 

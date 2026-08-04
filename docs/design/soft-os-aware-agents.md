@@ -1,7 +1,9 @@
 # Soft-aware and os-aware loom agents
 
 Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
-done (`lex-loom#179`), SA3 done (`lex-loom#180`). Written 2026-08-04,
+done (`lex-loom#179`), SA3 done (`lex-loom#180`), SA4 partially done
+(`lex-loom#181` — read-only Distribution roles covered, `content_creator`'s
+write-capable `publish_content` deliberately deferred). Written 2026-08-04,
 following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
@@ -133,9 +135,28 @@ before this work makes the collision load-bearing.
   handle (verified=true), then tampers with the underlying event and
   re-derives again — correctly flipping to verified=false — reproduced
   from a clean state.
-- **SA4 — expand to the rest of Distribution.** Only after SA2/SA3 are
-  proven: research, content publishing, and any future distribution role
-  register the same way by default.
+- **SA4 — expand to the rest of Distribution. Partially done.** `research`
+  (`web_search`) registers the same way `cx` did in SA2 —
+  `src/server/research_a2a.lex` mirrors `src/server/cx_a2a.lex` field for
+  field, `soft_register.lex`'s `known_capabilities` gained one entry, and
+  it's proven live the same way (`demo/sa4-research-roundtrip.sh`). That
+  confirms SA2's pattern actually generalizes, which was SA4's real
+  question.
+  **`content_creator`'s `publish_content` is deliberately NOT wired.**
+  Unlike every role registered so far, `publish_content` is a real write —
+  it POSTs a blog post to the product's live site. Wrapping it as an A2A
+  skill the same way would mean any mesh peer who discovers the
+  registration can trigger a real publish, with no authorization on that
+  path today (`POST /peers` self-registration is itself unauthenticated by
+  default). That's exactly the "stop and reconsider" signal this issue's
+  own promotion criterion calls for: the pattern generalizes cleanly for
+  *read* roles, not silently for *write* roles. Needs its own design pass
+  (a shared-secret/token gate on the skill, or routing writes through
+  SA3's evidence-gated settlement path instead of a bare tool call) before
+  it's mesh-exposed — tracked as a follow-up, not folded into this phase.
+  *Promotion criterion (for the roles covered here — `cx`, `research`):*
+  every one is discoverable and reachable through soft's mesh; no bespoke
+  per-role integration code remains for them. **Met.**
 
 ## Plan — Track OA (os-aware)
 

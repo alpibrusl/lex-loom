@@ -1,14 +1,15 @@
 # soft_register.lex — register one of a company's [soft].roles into lex-soft's
-# mesh (SA2, lex-loom#179 — docs/design/soft-os-aware-agents.md).
+# mesh (SA2, lex-loom#179; SA4, lex-loom#181 — docs/design/soft-os-aware-agents.md).
 #
 # SA1 (#178) gave company.toml a `[soft]` section (mesh_url/org_id/roles) —
 # schema and persistence only, nothing read it. This is the first thing that
 # does: for each declared role this company has BOTH opted in (via
-# `[soft].roles`) AND actually stands up an A2A server for (today: only
-# `cx`, `src/server/cx_a2a.lex`), POST a registration into the mesh node at
-# `[soft].mesh_url`'s `/peers` route (lex-soft's `federation.lex`; there is
-# no literal `mesh.mount` — `/peers` is the real self-onboard surface, see
-# lex-soft's own docs/building-a-domain-agent.md §3 "registry-only" path).
+# `[soft].roles`) AND actually stands up an A2A server for (`cx`,
+# `src/server/cx_a2a.lex`; `research`, `src/server/research_a2a.lex`), POST
+# a registration into the mesh node at `[soft].mesh_url`'s `/peers` route
+# (lex-soft's `federation.lex`; there is no literal `mesh.mount` — `/peers`
+# is the real self-onboard surface, see lex-soft's own
+# docs/building-a-domain-agent.md §3 "registry-only" path).
 #
 # Deliberately the minimum viable registration, not the credentialed
 # `/connections` onboarding flow — that's a real design decision for a later
@@ -43,7 +44,11 @@ fn known_capabilities(role :: Str) -> List[Str] {
   if role == "cx" {
     ["support.fetch_items"]
   } else {
-    []
+    if role == "research" {
+      ["research.web_search"]
+    } else {
+      []
+    }
   }
 }
 
@@ -196,11 +201,13 @@ fn find_inbox(inboxes :: List[RoleRegistration], role :: Str) -> Option[Str] {
 #
 # Reads the company's saved [soft] config (COMPANY_ID) and, for each
 # `<ROLE>_A2A_URL` env var present matching a role this company declared
-# in [soft].roles, registers it. Only `cx` is wired to an env var today
-# (CX_A2A_URL) — extend known_capabilities + this list together when a
-# second role gets a real A2A server.
+# in [soft].roles, registers it. Extend known_capabilities + this list
+# together whenever a role gets a real A2A server (SA4, lex-loom#181:
+# `research` added the same way `cx` was in SA2 — `content_creator` is
+# deliberately not here yet, its `publish_content` tool is a real write
+# with no authorization design for mesh exposure).
 fn known_role_env_vars() -> List[(Str, Str)] {
-  [("cx", "CX_A2A_URL")]
+  [("cx", "CX_A2A_URL"), ("research", "RESEARCH_A2A_URL")]
 }
 
 fn collect_inboxes() -> [env] List[RoleRegistration] {

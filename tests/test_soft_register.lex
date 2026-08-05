@@ -41,6 +41,18 @@ fn test_research_is_a_known_role() -> Result[Unit, Str] {
   }
 }
 
+fn test_content_creator_is_a_known_role() -> Result[Unit, Str] {
+  if sr.is_known_role("content_creator") {
+    if sr.known_capabilities("content_creator") == ["content.publish"] {
+      Ok(())
+    } else {
+      Err("expected content_creator's known capability to be content.publish")
+    }
+  } else {
+    Err("expected content_creator to be a known role (lex-loom#187)")
+  }
+}
+
 fn test_unknown_role_is_not_known() -> Result[Unit, Str] {
   if sr.is_known_role("monetization_handoff") {
     Err("monetization_handoff has no A2A server wired yet — should not be known")
@@ -225,7 +237,7 @@ fn test_register_configured_roles_only_registers_configured() -> [net] Result[Un
 }
 
 fn suite() -> [net] List[Result[Unit, Str]] {
-  [test_cx_is_a_known_role(), test_research_is_a_known_role(), test_unknown_role_is_not_known(), test_split_roles_trims_and_drops_empty(), test_split_roles_empty_string_is_empty_list(), test_peer_payload_carries_id_inbox_org_and_capabilities(), test_interpret_peers_response_ok_true_is_ok(), test_interpret_peers_response_error_body_is_err(), test_interpret_peers_response_garbage_is_err(), test_register_role_missing_mesh_url_is_clean_error(), test_register_role_missing_org_id_is_clean_error(), test_register_role_unknown_role_is_clean_error(), test_register_role_missing_inbox_url_is_clean_error(), test_register_role_unreachable_mesh_is_clean_error(), test_register_configured_roles_skips_unconfigured_role(), test_register_configured_roles_only_registers_configured()]
+  [test_cx_is_a_known_role(), test_research_is_a_known_role(), test_content_creator_is_a_known_role(), test_unknown_role_is_not_known(), test_split_roles_trims_and_drops_empty(), test_split_roles_empty_string_is_empty_list(), test_peer_payload_carries_id_inbox_org_and_capabilities(), test_interpret_peers_response_ok_true_is_ok(), test_interpret_peers_response_error_body_is_err(), test_interpret_peers_response_garbage_is_err(), test_register_role_missing_mesh_url_is_clean_error(), test_register_role_missing_org_id_is_clean_error(), test_register_role_unknown_role_is_clean_error(), test_register_role_missing_inbox_url_is_clean_error(), test_register_role_unreachable_mesh_is_clean_error(), test_register_configured_roles_skips_unconfigured_role(), test_register_configured_roles_only_registers_configured()]
 }
 
 fn run_all() -> [net] Unit {

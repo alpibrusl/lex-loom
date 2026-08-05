@@ -1,11 +1,11 @@
 # Soft-aware and os-aware loom agents
 
 Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
-done (`lex-loom#179`), SA3 done (`lex-loom#180`), SA4 partially done
-(`lex-loom#181` — read-only Distribution roles covered, `content_creator`'s
-write-capable `publish_content` deliberately deferred, split out as
-`lex-loom#187`), OA1 done (`lex-loom#182`). Written 2026-08-04, following
-the ecosystem
+done (`lex-loom#179`), SA3 done (`lex-loom#180`), SA4 done (`lex-loom#181`
+read-only roles + follow-up `lex-loom#187` for `content_creator`'s write),
+OA1 done (`lex-loom#182`), OA2 done (`lex-loom#183`), OA3 partial
+(`lex-loom#184`, mechanical change shipped, real-KVM validation blocked on
+infrastructure, left open). Written 2026-08-04, following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring
@@ -143,21 +143,46 @@ before this work makes the collision load-bearing.
   it's proven live the same way (`demo/sa4-research-roundtrip.sh`). That
   confirms SA2's pattern actually generalizes, which was SA4's real
   question.
-  **`content_creator`'s `publish_content` is deliberately NOT wired.**
-  Unlike every role registered so far, `publish_content` is a real write —
-  it POSTs a blog post to the product's live site. Wrapping it as an A2A
-  skill the same way would mean any mesh peer who discovers the
-  registration can trigger a real publish, with no authorization on that
-  path today (`POST /peers` self-registration is itself unauthenticated by
-  default). That's exactly the "stop and reconsider" signal this issue's
-  own promotion criterion calls for: the pattern generalizes cleanly for
-  *read* roles, not silently for *write* roles. Needs its own design pass
-  (a shared-secret/token gate on the skill, or routing writes through
-  SA3's evidence-gated settlement path instead of a bare tool call) before
-  it's mesh-exposed — tracked as a follow-up, not folded into this phase.
+  **`content_creator`'s `publish_content` was deliberately NOT wired
+  here** — split out to `lex-loom#187`, now done (see below).
   *Promotion criterion (for the roles covered here — `cx`, `research`):*
   every one is discoverable and reachable through soft's mesh; no bespoke
   per-role integration code remains for them. **Met.**
+- **SA4 follow-up (`lex-loom#187`) — authorization for
+  `content_creator`'s `publish_content`. Done.** Unlike every role
+  registered above, `publish_content` is a real write — it POSTs a blog
+  post to the product's live site — so wrapping it the same way SA4 did
+  for `cx`/`research` would let any mesh peer who discovers the
+  registration trigger a real publish, with no authorization on that path
+  (`POST /peers` self-registration is itself unauthenticated). Went with a
+  shared-secret bearer-token gate (`src/server/content_a2a.lex`): since
+  `lex-agent/src/mount.lex`'s `mount()` never threads HTTP headers down
+  into a `Skill.handle` (only the parsed A2A message body reaches it), the
+  gate sits one layer up, in a custom `POST /` route that checks
+  `Authorization: Bearer <CONTENT_PUBLISH_TOKEN>` via
+  `crypto.constant_time_eq` (the same primitive `lex-web`'s own
+  `auth_basic.lex`/`auth_apikey.lex` already use) *before* ever calling
+  `srv.dispatch_request` — an unauthorized caller never reaches
+  `publish_content_core` (factored out of `make_publish_content_tool`, the
+  same discipline SA2/SA4 used for `fetch_support_items`/`web_search`), so
+  it can never reach the live site. `CONTENT_PUBLISH_TOKEN` unset refuses
+  to serve at all — never fail-open into an unauthenticated write.
+  Considered and deferred: routing the write through SA3-style
+  record+verify settlement — a real complementary idea, but the auth gate
+  alone already satisfies the promotion criterion, and settlement-routing
+  needs its own sequencing design (gating the live POST on a verdict, not
+  just recording after the fact) — noted as a documented future
+  enhancement, not built now.
+  *Promotion criterion:* `content_creator` registers into soft's mesh and
+  is reachable over A2A the same way `cx`/`research` are, AND a mesh peer
+  without the authorization this issue adds cannot trigger
+  `publish_content` end-to-end (a real negative test). **Met** —
+  `demo/content-a2a-roundtrip.sh` registers `content_creator` into a live
+  mesh node, confirms discovery, then proves both directions against a
+  real fake product server with a hit counter: no-token and wrong-token
+  requests both get a real `401` and the product server's hit count stays
+  `0`; a correctly-authorized request gets `200` and the hit count becomes
+  exactly `1`.
 
 ## Plan — Track OA (os-aware)
 

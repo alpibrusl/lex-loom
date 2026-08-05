@@ -208,6 +208,41 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
 # later. Content is written to a temp file and posted with `curl -d @file`
 # so LLM-generated title/body text (quotes, newlines) never has to survive
 # shell-argument escaping.
+# The actual publish, factored out so a caller outside the LLM tool
+# machinery (lex-loom#187's token-gated A2A skill,
+# `src/server/content_a2a.lex`) can reuse the exact same tested logic
+# instead of re-implementing it — the same factoring SA2/SA4 already did
+# for `fetch_support_items`/`fetch_web_search`.
+fn publish_content_core(url :: Str, title :: Str, body :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
+    JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr("url, title, and body are all required"))])
+  } else {
+    match proc.run("bash", ["-c", "mktemp /tmp/loom-publish.XXXXXXXX"]) {
+      Err(msg) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("mktemp failed: ", msg)))]),
+      Ok(mk) => {
+        let payload_path := str.trim(mk.stdout)
+        let payload := jv.stringify(JObj([("title", JStr(title)), ("body", JStr(body))]))
+        let __w := io.write(payload_path, payload)
+        let script := str.join(["curl -s --max-time 10 -X POST -H 'Content-Type: application/json' -d @'", payload_path, "' '", url, "/loom/content' 2>/dev/null || echo CURL_FAILED"], "")
+        match proc.run("bash", ["-c", script]) {
+          Err(msg) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("publish failed to run: ", msg)))]),
+          Ok(r) => {
+            let out := str.trim(r.stdout)
+            if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+              JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("could not reach ", url)))])
+            } else {
+              match jv.parse(out) {
+                Err(_) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.slice(out, 0, 300)))]),
+                Ok(j) => j,
+              }
+            }
+          },
+        }
+      },
+    }
+  }
+}
+
 fn make_publish_content_tool() -> t.Tool {
   let params := { title: "PublishContent", description: "Publish a blog post to the live product's own /loom/content endpoint", fields: [s.required_str("url", []), s.required_str("title", []), s.required_str("body", [])] }
   t.define("publish_content", "POST {title, body} to `url` + \"/loom/content\" (url is the product's live base URL, from a Launch or Deploy node's output — e.g. http://localhost:8081, no trailing slash). Returns {ok, post_count, error}. Only call this once you actually have a live url; if none is available yet, say so in your output instead of guessing one.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -223,33 +258,7 @@ fn make_publish_content_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
-      Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr("url, title, and body are all required"))]))
-    } else {
-      match proc.run("bash", ["-c", "mktemp /tmp/loom-publish.XXXXXXXX"]) {
-        Err(msg) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("mktemp failed: ", msg)))])),
-        Ok(mk) => {
-          let payload_path := str.trim(mk.stdout)
-          let payload := jv.stringify(JObj([("title", JStr(title)), ("body", JStr(body))]))
-          let __w := io.write(payload_path, payload)
-          let script := str.join(["curl -s --max-time 10 -X POST -H 'Content-Type: application/json' -d @'", payload_path, "' '", url, "/loom/content' 2>/dev/null || echo CURL_FAILED"], "")
-          match proc.run("bash", ["-c", script]) {
-            Err(msg) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("publish failed to run: ", msg)))])),
-            Ok(r) => {
-              let out := str.trim(r.stdout)
-              if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-                Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("could not reach ", url)))]))
-              } else {
-                match jv.parse(out) {
-                  Err(_) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.slice(out, 0, 300)))])),
-                  Ok(j) => Ok(j),
-                }
-              }
-            },
-          }
-        },
-      }
-    }
+    Ok(publish_content_core(url, title, body))
   })
 }
 

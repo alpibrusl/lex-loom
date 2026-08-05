@@ -47,7 +47,11 @@ fn known_capabilities(role :: Str) -> List[Str] {
     if role == "research" {
       ["research.web_search"]
     } else {
-      []
+      if role == "content_creator" {
+        ["content.publish"]
+      } else {
+        []
+      }
     }
   }
 }
@@ -202,12 +206,15 @@ fn find_inbox(inboxes :: List[RoleRegistration], role :: Str) -> Option[Str] {
 # Reads the company's saved [soft] config (COMPANY_ID) and, for each
 # `<ROLE>_A2A_URL` env var present matching a role this company declared
 # in [soft].roles, registers it. Extend known_capabilities + this list
-# together whenever a role gets a real A2A server (SA4, lex-loom#181:
-# `research` added the same way `cx` was in SA2 — `content_creator` is
-# deliberately not here yet, its `publish_content` tool is a real write
-# with no authorization design for mesh exposure).
+# together whenever a role gets a real A2A server. SA4 (lex-loom#181)
+# added `research` the same way `cx` was in SA2; `content_creator`
+# (lex-loom#187) is the first WRITE role registered here — its
+# `content.publish` capability points at `src/server/content_a2a.lex`,
+# which requires `CONTENT_PUBLISH_TOKEN` and refuses to serve at all
+# without it (unlike cx/research, a real write can't be exposed
+# unauthenticated the way a read-only role safely can be).
 fn known_role_env_vars() -> List[(Str, Str)] {
-  [("cx", "CX_A2A_URL"), ("research", "RESEARCH_A2A_URL")]
+  [("cx", "CX_A2A_URL"), ("research", "RESEARCH_A2A_URL"), ("content_creator", "CONTENT_CREATOR_A2A_URL")]
 }
 
 fn collect_inboxes() -> [env] List[RoleRegistration] {

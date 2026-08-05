@@ -57,14 +57,22 @@ Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
   scope (kernel-level per-tool-call sandboxing, and a real lex-os-audited
   `CommandRegistry` entry per tool, are still open — that's a heavier
   future phase, not this one). The A2A executor remains unmediated.
-- **Phase 1 (Linux/CI/prod): real Firecracker.** `lex-os exec` itself already
-  supports the real backend (same selection as `lex-os run`: real by
-  default on a KVM host, `--simulated` an explicit opt-in) — it boots
+- **Phase 1 / OA3 (`lex-loom#184`) — real Firecracker.** `lex-os exec` itself
+  already supports the real backend (same selection as `lex-os run`: real
+  by default on a KVM host, `--simulated` an explicit opt-in) — it boots
   `lex-os-guest` in a one-shot mode and the command runs genuinely inside
-  the microVM, not just behind a swapped-out policy check. What's still
-  loom-side work: `lex_os_exec_step` (`runner.lex`) hardcodes `--simulated`
-  today, and loom's own CI has no KVM runner to exercise the real path —
-  dropping the flag and adding that coverage is what Phase 1 actually is.
+  the microVM, not just behind a swapped-out policy check. Loom-side work
+  is done: `lex_os_exec_step`'s hardcoded `--simulated` is gone —
+  `lex_os_exec_args` (pure, unit-tested in
+  `tests/test_lex_os_exec_args.lex`) only adds `--simulated` when
+  `LEX_OS_SIMULATED=1` is set; unset defers entirely to lex-os's own
+  selection. **Not done: validation on real hardware.** This session's
+  environment has no `/dev/kvm` and no `vmx`/`svm` CPU flags — it cannot
+  run a real Firecracker microVM at all, so the actual promotion criterion
+  (the QA-deny/Build-allow proof reproduced against real Firecracker,
+  not `--simulated`) is **unvalidated**. That still needs a KVM CI
+  runner, which loom doesn't have — tracked as the remaining half of
+  `lex-loom#184`, left open.
   Docker for per-agent isolation goes away entirely; the loom service itself
   just needs `lex run src/main.lex`.
 

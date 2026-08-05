@@ -203,12 +203,17 @@ before this work makes the collision load-bearing.
   have, end to end, with the LLM loop still completing the sprint via its
   remaining permitted tools — proven first under `--simulated`.
 - **OA3 — drop the hardcoded `--simulated` in `lex_os_exec_step`,
-  validate on real KVM.** Tracked as open since the Phase 0 PR
-  (`docs/design/lex-os-isolation.md`); needs a KVM CI runner, which loom
-  doesn't have yet.
+  validate on real KVM. Half done.** The code change shipped:
+  `lex_os_exec_step` no longer hardcodes `--simulated` — a new
+  `LEX_OS_SIMULATED=1` env var forces it, unset defers entirely to
+  lex-os's own real-by-default-on-KVM selection (`lex_os_exec_args`, pure,
+  unit-tested). **Still open:** this session's environment has no
+  `/dev/kvm` / `vmx`/`svm` CPU flags, so real Firecracker cannot be
+  validated here — needs a KVM CI runner, which loom doesn't have yet.
   *Promotion criterion:* the same QA-deny/Build-allow proof from Phase 0,
   reproduced against lex-os's real Firecracker backend, not the
-  simulated one.
+  simulated one. **Not met** — genuinely blocked on infrastructure, not
+  proven, not claimed proven.
 
 ## Verification
 

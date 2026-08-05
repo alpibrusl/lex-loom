@@ -490,6 +490,35 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
 }
 
 # ── lex-os mediated exec (opt-in) ────────────────────────────────────────────
+# Pure — the env read (LEX_OS_SIMULATED) lives in lex_os_exec_step, not here,
+# so this stays dependency-free and directly unit-testable
+# (tests/test_lex_os_exec_args.lex).
+fn lex_os_exec_args(simulated :: Bool, manifest_path :: Str, cmd :: Str) -> List[Str] {
+  let base := ["--output", "json", "exec"]
+  let sim_flag := if simulated {
+    ["--simulated"]
+  } else {
+    []
+  }
+  list.concat(base, list.concat(sim_flag, ["--manifest", manifest_path, "--", "bash", "-c", cmd]))
+}
+
+# simulated=true forces the in-process `--simulated` perimeter (OA3,
+# lex-loom#184: LEX_OS_SIMULATED=1). false defers entirely to lex-os's own
+# selection — real Firecracker by default on a KVM host, the same rule
+# `lex-os run` already documents; off a KVM host with this unset, lex-os
+# refuses rather than silently downgrading (lex-os's own "refuse, don't
+# downgrade" principle). Loom has no opinion of its own on
+# real-vs-simulated; before OA3 this hardcoded --simulated
+# unconditionally, which is exactly the choice that belongs to lex-os and
+# the host it's running on, not to loom.
+fn lex_os_simulated_requested() -> [env] Bool {
+  match env.get("LEX_OS_SIMULATED") {
+    Some(_) => true,
+    None => false,
+  }
+}
+
 # When LEX_OS_ISOLATION is set, proc_cmd nodes route through `lex-os exec`
 # instead of a bare proc.run, so the phase's manifests.lex grant actually
 # gates whether the command may run at all (docs/design/lex-os-isolation.md).
@@ -502,7 +531,7 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
 # company's declared override now actually changes what gets mediated
 # (OA1's own scope note: "wiring an override into what actually gets
 # mediated is OA2").
-fn lex_os_exec_step(def :: AgentDef, msg_json :: Str, policy_isolation :: Str) -> [proc, io] Str {
+fn lex_os_exec_step(def :: AgentDef, msg_json :: Str, policy_isolation :: Str) -> [proc, io, env] Str {
   let full_input := str.join([def.system_prompt, "\n\n", msg_json], "")
   match proc.run("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
     Err(msg) => str.concat("PROC_ERROR: mktemp failed: ", msg),
@@ -516,7 +545,7 @@ fn lex_os_exec_step(def :: AgentDef, msg_json :: Str, policy_isolation :: Str) -
           let overrides := manifests.parse_isolation_overrides(policy_isolation)
           let __m := io.write(manifest_path, manifests.manifest_json_for_kind_with_overrides(def.kind, def.sprint_id, overrides))
           let cmd := str.join([def.proc_cmd, " < ", path], "")
-          match proc.run("lex-os", ["--output", "json", "exec", "--simulated", "--manifest", manifest_path, "--", "bash", "-c", cmd]) {
+          match proc.run("lex-os", lex_os_exec_args(lex_os_simulated_requested(), manifest_path, cmd)) {
             Err(msg) => str.concat("PROC_ERROR: lex-os exec spawn failed: ", msg),
             Ok(r) => parse_lex_os_exec_output(r.stdout),
           }

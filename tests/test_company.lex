@@ -122,7 +122,11 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
                   if a.soft_mesh_url == b.soft_mesh_url {
                     if a.soft_org_id == b.soft_org_id {
                       if a.soft_roles == b.soft_roles {
-                        a.soft_settlement == b.soft_settlement
+                        if a.soft_settlement == b.soft_settlement {
+                          a.policy_isolation == b.policy_isolation
+                        } else {
+                          false
+                        }
                       } else {
                         false
                       }
@@ -165,7 +169,7 @@ fn test_company_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("co-rt")
-        let cfg := { id: id, goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5", wake_when: "verdict-failed", soft_mesh_url: "https://mesh.example.com", soft_org_id: "acme-co", soft_roles: "distribution,cx", soft_settlement: "1" }
+        let cfg := { id: id, goal: "build the thing", model: "test", max_iterations: 3, stop_when: "iter ge 3", pmf_when: "verdict-passed", maintenance_when: "iter ge 5", wake_when: "verdict-failed", soft_mesh_url: "https://mesh.example.com", soft_org_id: "acme-co", soft_roles: "distribution,cx", soft_settlement: "1", policy_isolation: "qa:Demo,devops:Implementation" }
         match company.save_company(db, cfg) {
           Err(e) => Err(str.concat("save_company: ", e)),
           Ok(_) => match company.load_company(db, id) {
@@ -215,7 +219,7 @@ fn test_board_report_shows_soft_section_when_configured() -> [sql, fs_write, fs_
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("soft-rt")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "https://mesh.example.com", soft_org_id: "widget-co", soft_roles: "distribution,cx", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "https://mesh.example.com", soft_org_id: "widget-co", soft_roles: "distribution,cx", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => {
@@ -251,7 +255,7 @@ fn test_board_report_soft_section_defaults_not_configured() -> [sql, fs_write, f
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("soft-unset")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => {
@@ -280,7 +284,7 @@ fn test_list_companies_returns_seeded_ids() -> [sql, fs_write, time, crypto, ran
         let id_a := rand_id("list-a")
         let id_b := rand_id("list-b")
         let cfg := fn (id :: Str) -> company.CompanyCfg {
-          { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+          { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         }
         match company.save_company(db, cfg(id_a)) {
           Err(e) => Err(e),
@@ -330,7 +334,7 @@ fn test_save_company_registers_in_registry() -> [sql, fs_write, fs_read, time, c
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("reg-co")
-        match company.save_company(db, { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: id, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => match registry.find_by_id(db, id) {
             Err(e) => Err(e),
@@ -354,7 +358,7 @@ fn test_add_contact_and_resolve_returns_human() -> [sql, fs_write, fs_read, time
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -383,7 +387,7 @@ fn test_add_pool_agent_contact_and_resolve_returns_pool_agent() -> [sql, fs_writ
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("pool-contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => match seed_pool_agent(db, "strict-qa-v1", "py_qa", "[\"lex\",\"qa\"]", 12) {
             Err(e) => Err(e),
@@ -415,7 +419,7 @@ fn test_resolve_oracle_contacts_empty_when_none_configured() -> [sql, fs_write, 
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("no-contact-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => if list.is_empty(company.resolve_oracle_contacts(db, cid, "security")) {
             Ok(())
@@ -435,7 +439,7 @@ fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read,
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("section-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe-2", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -463,7 +467,7 @@ fn test_all_contacts_returns_oracle_and_resolved_contact() -> [sql, fs_write, fs
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let cid := rand_id("all-contacts-co")
-        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
           Err(e) => Err(e),
           Ok(_) => match company.add_contact(db, cid, "legal-counsel", "jane-doe-3", "Jane Doe", "mailto:jane@example.com") {
             Err(e) => Err(e),
@@ -656,7 +660,7 @@ fn stage_cfg(pmf :: Str, maint :: Str) -> company.CompanyCfg {
 }
 
 fn stage_cfg_id(id :: Str, pmf :: Str, maint :: Str) -> company.CompanyCfg {
-  { id: id, goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint, wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+  { id: id, goal: "g", model: "m", max_iterations: 10, stop_when: "", pmf_when: pmf, maintenance_when: maint, wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
 }
 
 fn test_stage_advances_on_pmf() -> Result[Unit, Str] {
@@ -1012,7 +1016,7 @@ fn test_run_portfolio_advances_and_completes_a_sunset_track() -> [env, sql, fs_w
         let pid := rand_id("portfolio-sunset")
         let tid := "t1"
         let cid := company.track_company_id(pid, tid)
-        let seed_ccfg := { id: cid, goal: "a sunset goal", model: "test-model", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let seed_ccfg := { id: cid, goal: "a sunset goal", model: "test-model", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, seed_ccfg) {
           Err(e) => Err(e),
           Ok(_) => match company.save_stage(db, cid, Sunset) {
@@ -1161,7 +1165,7 @@ fn test_board_report_contains_sections() -> [sql, fs_write, fs_read, time, crypt
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("board-rt")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.record_iteration(db, { company_id: id, idx: 1, sprint_id: str.concat(id, "/iter-1"), parent_sprint_id: "", status: "success", goal: "Add the first widget" }) {
@@ -1796,7 +1800,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, fs_read, time, c
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-report")
-        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.record_operate_signal(db, id, 1, "liveness", "down") {
@@ -1831,7 +1835,7 @@ fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, f
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("dossier-report")
-        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a live API", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match oledger.open_incident(db, id, "errors", "2026-01-01T00:00:01", "[\"errors\"]", 1000) {
@@ -2370,7 +2374,7 @@ fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, cry
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let company_id := rand_id("strategist-cost")
-        let cfg := { id: company_id, goal: "g", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: company_id, goal: "g", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match insert_test_usage(db, company.strategist_cost_owner(company_id, 1), 1000) {
@@ -2442,7 +2446,7 @@ fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-cost")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => {
@@ -2486,7 +2490,7 @@ fn test_board_report_shows_spend() -> [sql, fs_write, fs_read, time, crypto, ran
       Err(e) => Err(str.concat("migrate failed: ", e)),
       Ok(_) => {
         let id := rand_id("op-cost-report")
-        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }
+        let cfg := { id: id, goal: "Build a widget factory", model: "test", max_iterations: 3, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
         match company.save_company(db, cfg) {
           Err(e) => Err(e),
           Ok(_) => match company.add_company_cost_cents(db, id, 530) {

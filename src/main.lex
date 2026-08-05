@@ -677,6 +677,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   let soft_org_id := get_env("SOFT_ORG_ID", "")
   let soft_roles := get_env("SOFT_ROLES", "")
   let soft_settlement := get_env("SOFT_SETTLEMENT", "")
+  let policy_isolation := get_env("POLICY_ISOLATION", "")
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
   let evolve_flag := get_env("EVOLVE", "1")
   let evolve := if evolve_flag == "0" {
@@ -688,7 +689,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
-      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement }
+      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
       let __res := company_runner.run_company(db, ccfg, api_max, evolve)
       ()
     },
@@ -747,6 +748,42 @@ fn board_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[board] FATAL: ", e)),
     Ok(db) => io.print(company.board_report(db, company_id)),
+  }
+}
+
+# ── roster_grant_report_cmd (OA1, lex-loom#182) ──────────────────────────────
+# For the company's latest iteration, report which lex-os grant preset each
+# roster role would run under -- the declared [policy.isolation] override if
+# set, else manifests.lex's own default mapping. Builds a real roster via
+# cast.select_roster but doesn't execute anything -- purely informational.
+#
+# Usage:
+#   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write \
+#     src/main.lex roster_grant_report_cmd
+fn roster_grant_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[loom] FATAL: ", e)),
+    Ok(db) => match company.load_company(db, company_id) {
+      None => io.print(str.join(["[loom] no company found for ", company_id], "")),
+      Some(ccfg) => {
+        let idx := company.latest_iteration_idx(db, company_id)
+        if idx == 0 {
+          io.print(str.join(["[loom] no iterations recorded yet for company ", company_id], ""))
+        } else {
+          let sprint_id := company.iteration_sprint_id(company_id, idx)
+          match dg.load_seed_graph(db, sprint_id) {
+            None => io.print(str.join(["[loom] no seed graph found for sprint ", sprint_id], "")),
+            Some(g) => {
+              let roster := cast.select_roster(db, g, ccfg.goal, ccfg.model, sprint_id)
+              let __h := io.print(str.join(["Grant report for ", company_id, " (", sprint_id, "):"], ""))
+              io.print(cast.grant_report_text(roster, ccfg.policy_isolation))
+            },
+          }
+        }
+      },
+    },
   }
 }
 

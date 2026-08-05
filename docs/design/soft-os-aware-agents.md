@@ -3,8 +3,9 @@
 Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
 done (`lex-loom#179`), SA3 done (`lex-loom#180`), SA4 partially done
 (`lex-loom#181` — read-only Distribution roles covered, `content_creator`'s
-write-capable `publish_content` deliberately deferred). Written 2026-08-04,
-following the ecosystem
+write-capable `publish_content` deliberately deferred, split out as
+`lex-loom#187`), OA1 done (`lex-loom#182`). Written 2026-08-04, following
+the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring
@@ -160,14 +161,25 @@ before this work makes the collision load-bearing.
 
 ## Plan — Track OA (os-aware)
 
-- **OA1 — `[policy]` grant declaration in `company.toml`.** Extend the
-  existing `[policy]` table so a company can declare (or accept
-  `manifest_json_for_kind`'s defaults for) per-role isolation up front;
-  `cast.lex` reads it at role-assignment time. Additive only — no
-  enforcement change, `LEX_OS_ISOLATION`'s existing behavior is untouched.
+- **OA1 — `[policy]` grant declaration in `company.toml`. Done.** Extended
+  the existing `[policy]` table with a `[policy.isolation]` role-kind →
+  preset override map (`manifests.lex` refactored to expose its 5 named
+  presets — `Design`/`Implementation`/`QA`/`Demo`/`Retro` — plus
+  `preset_for_kind_with_overrides`/`parse_isolation_overrides`, both unit
+  tested; a mistyped preset name falls back to `Demo`, the same safe
+  default an unmapped role kind already gets). `cast.lex`'s new
+  `roster_grant_report`/`grant_report_text` read it at role-assignment
+  time and are exposed via `src/main.lex`'s `roster_grant_report_cmd`.
+  Additive only — no enforcement change, `LEX_OS_ISOLATION`'s existing
+  behavior (`manifest_json_for_kind`, still called unmodified by the real
+  `proc_cmd` mediation path) is untouched.
   *Promotion criterion:* `cast.lex` can report, for a given roster, which
   roles would run under which grant, without anything executing
-  differently yet.
+  differently yet. **Met** — `demo/oa1-grant-report-roundtrip.sh` seeds a
+  company with a `build:Demo` override and a 3-node roster (`build`, `qa`,
+  `docs`), runs the real `roster_grant_report_cmd`, and checks the
+  override wins for `build`, `qa` keeps its own default, and the unmapped
+  `docs` role falls back to `Demo` — all without executing anything.
 - **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.**
   The consequential path: build/qa agents calling a real model with real
   tool access. Needs its own careful design (a separate doc section or

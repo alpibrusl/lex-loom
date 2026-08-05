@@ -65,6 +65,14 @@ soft_roles    = ",".join(soft_roles_list) if isinstance(soft_roles_list, list) e
 # instead of trusting the raw REVENUE_URL reading at face value; unset/false
 # keeps today's behavior (revenue_url stays the data source either way).
 soft_settlement = "1" if get("soft", "settlement", False) else ""
+# OA1 (lex-loom#182): declarative-and-reportable only -- a role kind ->
+# lex-os grant preset override table (values must name one of
+# manifests.lex's 5 presets: Design/Implementation/QA/Demo/Retro; an
+# unrecognised name safely falls back to Demo). No enforcement change:
+# cast.roster_grant_report reads this, the real proc_cmd mediation path
+# (LEX_OS_ISOLATION) does not, until OA2.
+policy_isolation_table = get("policy", "isolation", {})
+policy_isolation = ",".join(f"{k}:{v}" for k, v in policy_isolation_table.items()) if isinstance(policy_isolation_table, dict) else ""
 
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
@@ -73,6 +81,7 @@ out = {
     "CREVENUE_URL": revenue_url,
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
     "CSOFT_SETTLEMENT": soft_settlement,
+    "CPOLICY_ISOLATION": policy_isolation,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -187,6 +196,9 @@ echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<non
 if [ -n "$CSOFT_MESH_URL" ]; then
   echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} settlement=${CSOFT_SETTLEMENT:-off}"
 fi
+if [ -n "$CPOLICY_ISOLATION" ]; then
+  echo "[bootstrap] policy.isolation → ${CPOLICY_ISOLATION} (reportable via cast.roster_grant_report; not yet enforced — OA2)"
+fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
@@ -199,5 +211,5 @@ export LOOM_WORKSPACE="$WS"
 COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN" \
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
-  SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" \
+  SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   bin/run-company.sh

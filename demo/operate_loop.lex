@@ -64,7 +64,7 @@ fn seed_company_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
   let company_id := get_env("COMPANY_ID", "operate-demo")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[operate-demo] FATAL: ", e)),
-    Ok(db) => match company.save_company(db, { id: company_id, goal: "toy target for the Operate loop v1 demo", model: "none", max_iterations: 0, stop_when: "never", pmf_when: "never", maintenance_when: "never", wake_when: "never", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "" }) {
+    Ok(db) => match company.save_company(db, { id: company_id, goal: "toy target for the Operate loop v1 demo", model: "none", max_iterations: 0, stop_when: "never", pmf_when: "never", maintenance_when: "never", wake_when: "never", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
       Err(e) => io.print(str.concat("[operate-demo] FATAL save_company: ", e)),
       Ok(_) => io.print(str.join(["[operate-demo] company seeded: ", company_id], "")),
     },

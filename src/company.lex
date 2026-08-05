@@ -72,7 +72,14 @@ import "./agent/registry" as reg
 # at face value; empty keeps today's behavior unchanged. Empty means "not
 # soft-aware" — the same back-compat default every other optional CompanyCfg
 # field already uses.
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str }
+# `policy_isolation` (OA1, lex-loom#182) is the declarative `[policy.isolation]`
+# surface — a comma-joined "kind:preset,kind:preset" string overriding
+# `manifests.manifest_json_for_kind`'s default lex-os grant preset for
+# specific role kinds (see `manifests.parse_isolation_overrides`). Additive
+# and report-only for now: `cast.roster_grant_report` reads it, nothing in
+# the real execution path (`src/agent/runner.lex`) does yet — that starts
+# at OA2. Empty means every role keeps its default preset.
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str, policy_isolation :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 # `goal` (#80) is the goal this iteration actually ran — kept so the strategist
@@ -83,7 +90,7 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int, spend_cents :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str, policy_isolation :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
 
@@ -96,7 +103,7 @@ type ContentRow = { content :: Str }
 # it left off instead of resetting to Ideation every time it's re-run.
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when, soft_mesh_url=excluded.soft_mesh_url, soft_org_id=excluded.soft_org_id, soft_roles=excluded.soft_roles, soft_settlement=excluded.soft_settlement", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr(c.soft_mesh_url), PStr(c.soft_org_id), PStr(c.soft_roles), PStr(c.soft_settlement), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, policy_isolation, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when, soft_mesh_url=excluded.soft_mesh_url, soft_org_id=excluded.soft_org_id, soft_roles=excluded.soft_roles, soft_settlement=excluded.soft_settlement, policy_isolation=excluded.policy_isolation", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr(c.soft_mesh_url), PStr(c.soft_org_id), PStr(c.soft_roles), PStr(c.soft_settlement), PStr(c.policy_isolation), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => reg.register(db, c.id, "loom-company", c.id, "", []),
@@ -217,13 +224,13 @@ fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str 
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, policy_isolation FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when, soft_mesh_url: r.soft_mesh_url, soft_org_id: r.soft_org_id, soft_roles: r.soft_roles, soft_settlement: r.soft_settlement }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when, soft_mesh_url: r.soft_mesh_url, soft_org_id: r.soft_org_id, soft_roles: r.soft_roles, soft_settlement: r.soft_settlement, policy_isolation: r.policy_isolation }),
     },
   }
 }

@@ -28,6 +28,8 @@ import "./roles" as roles
 
 import "./graph" as graph
 
+import "./manifests" as manifests
+
 import "lex-orm/src/query" as ormq
 
 # ── Types ─────────────────────────────────────────────────────────────────────
@@ -192,6 +194,37 @@ fn check_and_retire(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time]
 fn record_bounce(db :: conn.ConnDb, agent_id :: Str) -> [sql, fs_write, time] Unit {
   let __d := decrement_attestation(db, agent_id)
   check_and_retire(db, agent_id)
+}
+
+# ── Grant reporting (OA1, lex-loom#182) ──────────────────────────────────────
+# For a given roster, which lex-os grant preset each node's role would run
+# under — the company's declared [policy.isolation] override if one exists
+# for that role kind, else manifests.lex's own default mapping. Purely
+# informational: doesn't call anything execution-affecting, and nothing
+# else in this file (cast_node/select_roster, above) reads it — the real
+# proc_cmd mediation path stays exactly as it is until OA2.
+type GrantReportEntry = { node_id :: Str, role :: Str, preset :: Str }
+
+fn roster_grant_report(roster :: Roster, policy_isolation :: Str) -> List[GrantReportEntry] {
+  let overrides := manifests.parse_isolation_overrides(policy_isolation)
+  list.map(roster, fn (e :: RosterEntry) -> GrantReportEntry {
+    { node_id: e.node_id, role: e.agent_config.kind, preset: manifests.preset_for_kind_with_overrides(e.agent_config.kind, overrides) }
+  })
+}
+
+fn grant_report_line(e :: GrantReportEntry) -> Str {
+  str.join(["  ", e.node_id, " (", e.role, ") -> ", e.preset], "")
+}
+
+# Human-readable rendering of roster_grant_report — what a CLI command or
+# board_report-style view would actually print.
+fn grant_report_text(roster :: Roster, policy_isolation :: Str) -> Str {
+  let entries := roster_grant_report(roster, policy_isolation)
+  if list.is_empty(entries) {
+    "(empty roster)"
+  } else {
+    str.join(list.map(entries, grant_report_line), "\n")
+  }
 }
 
 fn update_pool_from_sprint(db :: conn.ConnDb, roster :: Roster, accepted_node_ids :: List[Str]) -> [sql, fs_write, time] Unit {

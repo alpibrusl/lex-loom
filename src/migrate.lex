@@ -258,6 +258,7 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __22 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_org_id TEXT NOT NULL DEFAULT ''")
   let __23 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_roles TEXT NOT NULL DEFAULT ''")
   let __24 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_settlement TEXT NOT NULL DEFAULT ''")
+  let __25 := try_ddl(db, "ALTER TABLE companies ADD COLUMN policy_isolation TEXT NOT NULL DEFAULT ''")
   ()
 }
 

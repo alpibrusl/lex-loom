@@ -47,6 +47,8 @@ import "./effects" as effects
 
 import "./actuation" as act
 
+import "./soft_settlement" as soft_settlement
+
 import "lex-agent/src/memory" as mem
 
 import "./agent/relationships" as rel
@@ -64,10 +66,20 @@ import "./agent/registry" as reg
 # `soft_mesh_url`/`soft_org_id`/`soft_roles` (SA1, lex-loom#178) are the
 # declarative `[soft]` surface — a mesh node URL, this company's org identity
 # on it, and a comma-separated list of role kinds allowed to register there.
-# Schema + persistence only: nothing reads or calls out to soft's mesh yet
-# (that starts at SA2). Empty means "not soft-aware" — the same back-compat
-# default every other optional CompanyCfg field already uses.
-type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str }
+# `soft_settlement` (SA3, lex-loom#180) is a separate opt-in: "1" routes the
+# per-iteration revenue signal through soft's evidence-gated settlement
+# (`soft_settlement.lex`) instead of trusting the raw `REVENUE_URL` reading
+# at face value; empty keeps today's behavior unchanged. Empty means "not
+# soft-aware" — the same back-compat default every other optional CompanyCfg
+# field already uses.
+# `policy_isolation` (OA1, lex-loom#182) is the declarative `[policy.isolation]`
+# surface — a comma-joined "kind:preset,kind:preset" string overriding
+# `manifests.manifest_json_for_kind`'s default lex-os grant preset for
+# specific role kinds (see `manifests.parse_isolation_overrides`). Additive
+# and report-only for now: `cast.roster_grant_report` reads it, nothing in
+# the real execution path (`src/agent/runner.lex`) does yet — that starts
+# at OA2. Empty means every role keeps its default preset.
+type CompanyCfg = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str, policy_isolation :: Str }
 
 # One realized iteration of a company — a sprint with lineage to its parent.
 # `goal` (#80) is the goal this iteration actually ran — kept so the strategist
@@ -78,7 +90,7 @@ type CompanyIteration = { company_id :: Str, idx :: Int, sprint_id :: Str, paren
 # just finished. `last_verdict` is normalized by the runner to "passed"/"failed".
 type IterCtx = { idx :: Int, last_verdict :: Str, digest_summary :: Str, accepted_count :: Int, bounced_count :: Int, spend_cents :: Int }
 
-type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str }
+type CompanyRow = { id :: Str, goal :: Str, model :: Str, max_iterations :: Int, stop_when :: Str, pmf_when :: Str, maintenance_when :: Str, wake_when :: Str, soft_mesh_url :: Str, soft_org_id :: Str, soft_roles :: Str, soft_settlement :: Str, policy_isolation :: Str }
 
 type IterRow = { idx :: Int, sprint_id :: Str, parent_sprint_id :: Str, status :: Str, goal :: Str }
 
@@ -91,7 +103,7 @@ type ContentRow = { content :: Str }
 # it left off instead of resetting to Ideation every time it's re-run.
 fn save_company(db :: conn.ConnDb, c :: CompanyCfg) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when, soft_mesh_url=excluded.soft_mesh_url, soft_org_id=excluded.soft_org_id, soft_roles=excluded.soft_roles", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr(c.soft_mesh_url), PStr(c.soft_org_id), PStr(c.soft_roles), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO companies (id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, policy_isolation, status, stage, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, model=excluded.model, max_iterations=excluded.max_iterations, stop_when=excluded.stop_when, pmf_when=excluded.pmf_when, maintenance_when=excluded.maintenance_when, wake_when=excluded.wake_when, soft_mesh_url=excluded.soft_mesh_url, soft_org_id=excluded.soft_org_id, soft_roles=excluded.soft_roles, soft_settlement=excluded.soft_settlement, policy_isolation=excluded.policy_isolation", params: [PStr(c.id), PStr(c.goal), PStr(c.model), PInt(c.max_iterations), PStr(c.stop_when), PStr(c.pmf_when), PStr(c.maintenance_when), PStr(c.wake_when), PStr(c.soft_mesh_url), PStr(c.soft_org_id), PStr(c.soft_roles), PStr(c.soft_settlement), PStr(c.policy_isolation), PStr("active"), PStr("ideation"), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => reg.register(db, c.id, "loom-company", c.id, "", []),
@@ -212,13 +224,13 @@ fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str 
 }
 
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
-  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, policy_isolation FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,
     Ok(rs) => match list.head(rs) {
       None => None,
-      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when, soft_mesh_url: r.soft_mesh_url, soft_org_id: r.soft_org_id, soft_roles: r.soft_roles }),
+      Some(r) => Some({ id: r.id, goal: r.goal, model: r.model, max_iterations: r.max_iterations, stop_when: r.stop_when, pmf_when: r.pmf_when, maintenance_when: r.maintenance_when, wake_when: r.wake_when, soft_mesh_url: r.soft_mesh_url, soft_org_id: r.soft_org_id, soft_roles: r.soft_roles, soft_settlement: r.soft_settlement, policy_isolation: r.policy_isolation }),
     },
   }
 }
@@ -2073,17 +2085,85 @@ fn fetch_revenue_signal(url :: Str) -> [proc] Str {
   }
 }
 
+# A revenue_cents field, if the raw reading is a parseable, reachable
+# claim -- None for "(unreachable)" or malformed JSON, since there's no
+# real number to settle a claim about in either case. Shared by the
+# settlement path below and could be reused anywhere else that needs the
+# same "is this reading actually a number" check.
+fn parse_revenue_cents(raw :: Str) -> Option[Int] {
+  if str.contains(raw, "unreachable") {
+    None
+  } else {
+    match jv.parse(raw) {
+      Err(_) => None,
+      Ok(j) => match jv.get_field(j, "revenue_cents") {
+        Some(JInt(n)) => Some(n),
+        _ => None,
+      },
+    }
+  }
+}
+
 # Reads REVENUE_URL from the environment and, if set, fetches + records the
 # revenue signal alongside liveness/product_usage. A no-op (never records
 # anything) when unset, so real_economics_section can tell "never configured"
 # apart from "configured, currently unreachable or zero" (#160).
+#
+# SA3 (lex-loom#180): when this company's [soft].settlement is on, a
+# parseable reading is routed through soft_settlement.settle_revenue —
+# recorded as a hash-chained trail event and immediately re-verified —
+# before being stored, so board_report can cite a re-checkable settlement
+# event instead of a bare number. revenue_url stays the data source either
+# way (SA3's own scope note: superseded, not removed); an unreachable
+# reading, a settlement write failure, or settlement being off all fall
+# back to storing the raw reading exactly as before this change.
 fn check_and_record_revenue(db :: conn.ConnDb, company_id :: Str, idx :: Int) -> [env, sql, time, proc] Result[Unit, Str] {
   match env.get("REVENUE_URL") {
     None => Ok(()),
     Some(url) => if str.is_empty(url) {
       Ok(())
     } else {
-      record_operate_signal(db, company_id, idx, "revenue_cents", fetch_revenue_signal(url))
+      let raw := fetch_revenue_signal(url)
+      let settlement_on := match load_company(db, company_id) {
+        None => false,
+        Some(cfg) => cfg.soft_settlement == "1",
+      }
+      if settlement_on {
+        match parse_revenue_cents(raw) {
+          None => record_operate_signal(db, company_id, idx, "revenue_cents", raw),
+          Some(cents) => match soft_settlement.settle_revenue(db, company_id, cents, "revenue_url") {
+            Ok(settled) => record_operate_signal(db, company_id, idx, "revenue_cents", soft_settlement.settled_signal_json(settled, cents)),
+            Err(e) => match record_operate_signal(db, company_id, idx, "revenue_cents", raw) {
+              Err(e2) => Err(e2),
+              Ok(_) => Err(str.concat("settlement failed, recorded the raw reading instead: ", e)),
+            },
+          },
+        }
+      } else {
+        record_operate_signal(db, company_id, idx, "revenue_cents", raw)
+      }
+    },
+  }
+}
+
+# When a reading carries a trail_id (settlement was on for that iteration),
+# cite the re-verifiable settlement event rather than leaving the reading a
+# bare, un-checkable number — SA3's promotion criterion: "a settlement
+# event soft produced is the one board_report cites."
+fn settlement_citation(reading :: Str) -> Str {
+  match jv.parse(reading) {
+    Err(_) => "",
+    Ok(j) => match jv.get_field(j, "trail_id") {
+      Some(JStr(tid)) => if str.is_empty(tid) {
+        ""
+      } else {
+        let verified := match jv.get_field(j, "verified") {
+          Some(JBool(true)) => "verified",
+          _ => "NOT verified",
+        }
+        str.join([" (settled, trail_id=", tid, ", ", verified, ")"], "")
+      },
+      _ => "",
     },
   }
 }
@@ -2105,7 +2185,7 @@ fn real_economics_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
     if str.contains(reading, "unreachable") {
       str.join(["Revenue source configured but unreachable on the last check. Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
     } else {
-      str.join(["Revenue so far: ", format_cents(revenue_cents), ". Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
+      str.join(["Revenue so far: ", format_cents(revenue_cents), settlement_citation(reading), ". Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
     }
   }
 }

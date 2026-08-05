@@ -152,7 +152,7 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
   let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
   let prompt := improvement_prompt(role, current_prompt, lesson, specs)
   let __log := io.print(str.join(["[loom/improver] improving role=", role, " sprint=", sprint_id], ""))
-  let improved_prompt := runner.step(db, improver_def, prompt, sprint_id)
+  let improved_prompt := runner.step(db, improver_def, prompt, sprint_id, "")
   if str.is_empty(improved_prompt) {
     let __log2 := io.print(str.join(["[loom/improver] empty output for role=", role, " — skipping"], ""))
     None

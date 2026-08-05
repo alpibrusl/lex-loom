@@ -271,8 +271,105 @@ fn test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected() -> [env,
   }
 }
 
+# ── Grant reporting (OA1, lex-loom#182) ──────────────────────────────────────
+fn test_roster_grant_report_uses_default_preset_without_override() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let g := { id: "g1", phase: graph.Intake, nodes: [node("a", "build"), node("b", "qa")], edges: [] }
+      let roster := cast.select_roster(db, g, "some request", "gemma4:latest", "test-sprint")
+      let entries := cast.roster_grant_report(roster, "")
+      if list.len(entries) == 2 {
+        Ok(())
+      } else {
+        Err(str.concat("expected 2 grant report entries, got ", int.to_str(list.len(entries))))
+      }
+    },
+  }
+}
+
+fn find_entry(entries :: List[cast.GrantReportEntry], node_id :: Str) -> Option[cast.GrantReportEntry] {
+  list.fold(entries, None, fn (acc :: Option[cast.GrantReportEntry], e :: cast.GrantReportEntry) -> Option[cast.GrantReportEntry] {
+    match acc {
+      Some(_) => acc,
+      None => if e.node_id == node_id {
+        Some(e)
+      } else {
+        None
+      },
+    }
+  })
+}
+
+fn test_roster_grant_report_honors_policy_isolation_override() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let g := { id: "g1", phase: graph.Intake, nodes: [node("a", "build")], edges: [] }
+      let roster := cast.select_roster(db, g, "some request", "gemma4:latest", "test-sprint")
+      let entries := cast.roster_grant_report(roster, "build:Demo")
+      match find_entry(entries, "a") {
+        None => Err("expected a grant report entry for node 'a'"),
+        Some(e) => if e.preset == "Demo" {
+          Ok(())
+        } else {
+          Err(str.concat("expected the build:Demo override to win over build's own default (Implementation), got ", e.preset))
+        },
+      }
+    },
+  }
+}
+
+fn test_roster_grant_report_defaults_unoverridden_role() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let g := { id: "g1", phase: graph.Intake, nodes: [node("a", "build"), node("b", "qa")], edges: [] }
+      let roster := cast.select_roster(db, g, "some request", "gemma4:latest", "test-sprint")
+      let entries := cast.roster_grant_report(roster, "build:Demo")
+      match find_entry(entries, "b") {
+        None => Err("expected a grant report entry for node 'b'"),
+        Some(e) => if e.preset == "QA" {
+          Ok(())
+        } else {
+          Err(str.concat("expected qa's own default (QA) since only build is overridden, got ", e.preset))
+        },
+      }
+    },
+  }
+}
+
+fn test_grant_report_text_empty_roster() -> Result[Unit, Str] {
+  let text := cast.grant_report_text([], "")
+  if text == "(empty roster)" {
+    Ok(())
+  } else {
+    Err(str.concat("expected the empty-roster sentinel, got ", text))
+  }
+}
+
+fn test_grant_report_text_lists_every_node() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let g := { id: "g1", phase: graph.Intake, nodes: [node("a", "build"), node("b", "qa")], edges: [] }
+      let roster := cast.select_roster(db, g, "some request", "gemma4:latest", "test-sprint")
+      let text := cast.grant_report_text(roster, "")
+      if str.contains(text, "a (build) -> Implementation") {
+        if str.contains(text, "b (qa) -> QA") {
+          Ok(())
+        } else {
+          Err(str.concat("missing 'b (qa) -> QA' line in ", text))
+        }
+      } else {
+        Err(str.concat("missing 'a (build) -> Implementation' line in ", text))
+      }
+    },
+  }
+}
+
 fn suite() -> [env, random, sql, fs_read, fs_write, time] List[Result[Unit, Str]] {
-  [test_domain_bonus_matches_tag_in_request(), test_domain_bonus_no_match_is_zero(), test_score_agent_weights_reputation_above_attestation(), test_score_agent_domain_match_beats_generalist_reputation(), test_cast_node_falls_back_when_pool_empty(), test_cast_node_picks_seeded_pool_agent(), test_select_roster_covers_every_node(), test_increment_attestation_raises_count(), test_record_bounce_lowers_count_and_retires_after_three(), test_retired_agent_excluded_from_pool(), test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected()]
+  [test_domain_bonus_matches_tag_in_request(), test_domain_bonus_no_match_is_zero(), test_score_agent_weights_reputation_above_attestation(), test_score_agent_domain_match_beats_generalist_reputation(), test_cast_node_falls_back_when_pool_empty(), test_cast_node_picks_seeded_pool_agent(), test_select_roster_covers_every_node(), test_increment_attestation_raises_count(), test_record_bounce_lowers_count_and_retires_after_three(), test_retired_agent_excluded_from_pool(), test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected(), test_roster_grant_report_uses_default_preset_without_override(), test_roster_grant_report_honors_policy_isolation_override(), test_roster_grant_report_defaults_unoverridden_role(), test_grant_report_text_empty_roster(), test_grant_report_text_lists_every_node()]
 }
 
 fn run_all() -> [io, env, random, sql, fs_read, fs_write, time] Unit {

@@ -77,7 +77,7 @@ fn demo_depth_cap() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
   match open_db(db_path) {
     Err(e) => io.print(str.concat("FATAL: ", e)),
     Ok(db) => {
-      let cfg := { id: "demo-depthcap", request: "parent request", model: get_env("MODEL", "gemma4:latest"), db: db, api_calls_max: 50, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 3, iter_ctx: None, exec_mode: "inline" }
+      let cfg := { id: "demo-depthcap", request: "parent request", model: get_env("MODEL", "gemma4:latest"), db: db, api_calls_max: 50, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 3, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
       let node := { id: "expander", role: "build", gate: "spec json", expand: Some("Decompose and build the sub-feature"), activate_when: "" }
       let __i := io.print("Invoking an expand node at depth 3 (== max). Expect refusal, no child sprint.")
       let outcome := orch.invoke_node(node, "", cfg, None)
@@ -94,7 +94,7 @@ fn demo_live_child() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     Err(e) => io.print(str.concat("FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
-      let cfg := { id: "demo-live", request: "Build a tiny math utility", model: get_env("MODEL", "qwen3-coder:30b"), db: db, api_calls_max: 60, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline" }
+      let cfg := { id: "demo-live", request: "Build a tiny math utility", model: get_env("MODEL", "qwen3-coder:30b"), db: db, api_calls_max: 60, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
       let node := { id: "math_feature", role: "build", gate: "spec json", expand: Some("Write a pure Lex function add(a :: Int, b :: Int) -> Int that returns a + b, with an examples block."), activate_when: "" }
       let __i := io.print("Invoking an expand node at depth 0. Expect a full child sprint to run and attest.")
       let outcome := orch.invoke_node(node, "", cfg, None)

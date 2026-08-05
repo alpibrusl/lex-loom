@@ -18,3 +18,4 @@ lex-os-manifest = { git = "https://github.com/alpibrusl/lex-os-manifest" }
 lex-orm         = { git = "https://github.com/alpibrusl/lex-orm" }
 lex-ctl         = { git = "https://github.com/alpibrusl/lex-ctl" }
 lex-log         = { git = "https://github.com/alpibrusl/lex-log" }
+lex-soft        = { git = "https://github.com/alpibrusl/lex-soft" }

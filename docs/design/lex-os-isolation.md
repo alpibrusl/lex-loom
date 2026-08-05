@@ -44,19 +44,35 @@ Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
   `manifest_json_for_kind` for the full per-role table — it's a superset of
   the sketch below, covering every `kind` `proc_cmd` can appear on, with an
   unmapped role defaulting to no exec authority rather than failing open).
-  Not yet done: the LLM and A2A executors stay unmediated (only `proc_cmd`
-  nodes route through lex-os today), and there's no live end-to-end test in
-  loom's own CI (it doesn't install the `lex-os` binary yet) — only a
-  dependency-free unit test on the grant-generation side
-  (`tests/test_manifest_for_kind.lex`).
-- **Phase 1 (Linux/CI/prod): real Firecracker.** `lex-os exec` itself already
-  supports the real backend (same selection as `lex-os run`: real by
-  default on a KVM host, `--simulated` an explicit opt-in) — it boots
+  Not yet done (at Phase 0 time): the LLM and A2A executors stay
+  unmediated, and there's no live end-to-end test in loom's own CI (it
+  doesn't install the `lex-os` binary yet) — only a dependency-free unit
+  test on the grant-generation side (`tests/test_manifest_for_kind.lex`).
+  **Update (OA2, `lex-loom#183`):** the LLM executor's tool calls are now
+  gated too — not via the real `lex-os` binary (there's no per-call box to
+  mediate; every tool runs in-process), but via a Lex-side re-evaluation of
+  the SAME Grant (`src/tool_grant.lex`), filtering which of a role's tools
+  are even offered to the model. See
+  `docs/design/oa2-tool-call-mediation.md` for the full design and honest
+  scope (kernel-level per-tool-call sandboxing, and a real lex-os-audited
+  `CommandRegistry` entry per tool, are still open — that's a heavier
+  future phase, not this one). The A2A executor remains unmediated.
+- **Phase 1 / OA3 (`lex-loom#184`) — real Firecracker.** `lex-os exec` itself
+  already supports the real backend (same selection as `lex-os run`: real
+  by default on a KVM host, `--simulated` an explicit opt-in) — it boots
   `lex-os-guest` in a one-shot mode and the command runs genuinely inside
-  the microVM, not just behind a swapped-out policy check. What's still
-  loom-side work: `lex_os_exec_step` (`runner.lex`) hardcodes `--simulated`
-  today, and loom's own CI has no KVM runner to exercise the real path —
-  dropping the flag and adding that coverage is what Phase 1 actually is.
+  the microVM, not just behind a swapped-out policy check. Loom-side work
+  is done: `lex_os_exec_step`'s hardcoded `--simulated` is gone —
+  `lex_os_exec_args` (pure, unit-tested in
+  `tests/test_lex_os_exec_args.lex`) only adds `--simulated` when
+  `LEX_OS_SIMULATED=1` is set; unset defers entirely to lex-os's own
+  selection. **Not done: validation on real hardware.** This session's
+  environment has no `/dev/kvm` and no `vmx`/`svm` CPU flags — it cannot
+  run a real Firecracker microVM at all, so the actual promotion criterion
+  (the QA-deny/Build-allow proof reproduced against real Firecracker,
+  not `--simulated`) is **unvalidated**. That still needs a KVM CI
+  runner, which loom doesn't have — tracked as the remaining half of
+  `lex-loom#184`, left open.
   Docker for per-agent isolation goes away entirely; the loom service itself
   just needs `lex run src/main.lex`.
 

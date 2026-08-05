@@ -1,7 +1,11 @@
 # Soft-aware and os-aware loom agents
 
-Status: design, epic filed (`lex-loom#177`); SA1 in progress (`lex-loom#178`).
-Written 2026-08-04, following the ecosystem
+Status: design, epic filed (`lex-loom#177`); SA1 done (`lex-loom#178`), SA2
+done (`lex-loom#179`), SA3 done (`lex-loom#180`), SA4 done (`lex-loom#181`
+read-only roles + follow-up `lex-loom#187` for `content_creator`'s write),
+OA1 done (`lex-loom#182`), OA2 done (`lex-loom#183`), OA3 partial
+(`lex-loom#184`, mechanical change shipped, real-KVM validation blocked on
+infrastructure, left open). Written 2026-08-04, following the ecosystem
 model in `lex-lang/docs/design/ecosystem-model.md` (loom = a company,
 soft = interactions between companies, os = optional sandboxed runtime —
 two peer axes plus one orthogonal one) and the Phase 0 lex-os wiring
@@ -86,49 +90,155 @@ before this work makes the collision load-bearing.
   everything else.
   *Promotion criterion:* a company.toml with `[soft]` round-trips through
   bootstrap and the field is visible in `board_report`.
-- **SA2 — register one outward-facing role in soft's mesh.** Pick the
-  single lowest-risk candidate (monetization-handoff — already
-  `human <oracle>`-gated, or CX — already real and tested) and register it
-  via soft's `mesh.mount`-shaped API, discoverable and reachable over A2A
-  from a real soft node.
+- **SA2 — register one outward-facing role in soft's mesh. Done.** Picked
+  CX (real, tested tool; monetization-handoff has no tool at all and
+  nothing external would meaningfully call it over A2A). There is no
+  literal `mesh.mount` in lex-soft — the real self-onboard surface is
+  `POST /peers` on a `federation.mount_federation`-mounted node, which
+  ships no runnable binary either; `lex-soft` gained one
+  (`src/federation_node.lex`) so "a real soft node" has something to
+  stand up against. loom's own A2A server was likewise never mounted over
+  real HTTP before this (only exposed via MCP stdio) — `src/server/cx_a2a.lex`
+  wraps CX's existing `fetch_support_items` tool (factored out of
+  `roles.lex`, same tested logic, not a smarter one) as a real A2A
+  `Skill`, mounted with `lex-agent/src/mount.lex`. `src/soft_register.lex`
+  reads a company's `[soft]` config (SA1) and POSTs the registration;
+  unknown roles / missing config are clean errors before any network call.
   *Promotion criterion:* a second, independent soft node discovers and
-  successfully A2A-messages the registered role end to end.
-- **SA3 — evidence-gated settlement for one real money signal.** Route the
-  Operate loop's revenue tracking through soft's `verdict`/`settlement`
-  instead of polling `revenue_url` directly, for one company.
+  successfully A2A-messages the registered role end to end. **Verified
+  live** — `demo/sa2-mesh-roundtrip.sh` stands up a fresh federation node,
+  registers CX into it, confirms discovery via that node's own `GET
+  /peers`, and sends real `tasks/send` JSON-RPC requests straight to the
+  registered `inbox_url`, both the happy path (a real fetched item) and
+  the clean-error path (product unreachable) — reproduced from a clean
+  state, not a one-off.
+- **SA3 — evidence-gated settlement for one real money signal. Done.**
+  lex-soft's `verdict`/`settlement`/`ledger` turned out to be a
+  library-level Lex API with no deployed write/verify HTTP surface (the
+  only mounted settlement route anywhere is a read-only `GET /trails/:id`)
+  — so `lex-soft` became a real `lex.toml` package dependency of this repo
+  rather than something reached over HTTP the way SA2's mesh registration
+  is. `[soft].settlement = true` routes a company's per-iteration
+  `REVENUE_URL` reading through `src/soft_settlement.lex`: the claim is
+  recorded as a hash-chained trail event (in this company's own db — no
+  second database or network hop) and immediately re-derived via
+  `verdict.verify` against a real legality spec ("claimed revenue must be
+  non-negative"), not trusted at face value. `revenue_url` stays the data
+  source either way, exactly as scoped — this changes what happens to the
+  reading after it's fetched, not where it comes from.
   *Promotion criterion:* a settlement event soft produced is the one
   `board_report` cites, and it survives an independent re-verification
-  (soft's own evidence re-derivation).
-- **SA4 — expand to the rest of Distribution.** Only after SA2/SA3 are
-  proven: research, content publishing, and any future distribution role
-  register the same way by default.
+  (soft's own evidence re-derivation). **Verified live** —
+  `demo/sa3-settlement-roundtrip.sh` seeds a company, checks a real
+  fetched revenue reading through the settlement path, shows
+  `board_report` citing the resulting `trail_id` + `verified` status,
+  independently re-derives the same verdict from a freshly opened trail
+  handle (verified=true), then tampers with the underlying event and
+  re-derives again — correctly flipping to verified=false — reproduced
+  from a clean state.
+- **SA4 — expand to the rest of Distribution. Partially done.** `research`
+  (`web_search`) registers the same way `cx` did in SA2 —
+  `src/server/research_a2a.lex` mirrors `src/server/cx_a2a.lex` field for
+  field, `soft_register.lex`'s `known_capabilities` gained one entry, and
+  it's proven live the same way (`demo/sa4-research-roundtrip.sh`). That
+  confirms SA2's pattern actually generalizes, which was SA4's real
+  question.
+  **`content_creator`'s `publish_content` was deliberately NOT wired
+  here** — split out to `lex-loom#187`, now done (see below).
+  *Promotion criterion (for the roles covered here — `cx`, `research`):*
+  every one is discoverable and reachable through soft's mesh; no bespoke
+  per-role integration code remains for them. **Met.**
+- **SA4 follow-up (`lex-loom#187`) — authorization for
+  `content_creator`'s `publish_content`. Done.** Unlike every role
+  registered above, `publish_content` is a real write — it POSTs a blog
+  post to the product's live site — so wrapping it the same way SA4 did
+  for `cx`/`research` would let any mesh peer who discovers the
+  registration trigger a real publish, with no authorization on that path
+  (`POST /peers` self-registration is itself unauthenticated). Went with a
+  shared-secret bearer-token gate (`src/server/content_a2a.lex`): since
+  `lex-agent/src/mount.lex`'s `mount()` never threads HTTP headers down
+  into a `Skill.handle` (only the parsed A2A message body reaches it), the
+  gate sits one layer up, in a custom `POST /` route that checks
+  `Authorization: Bearer <CONTENT_PUBLISH_TOKEN>` via
+  `crypto.constant_time_eq` (the same primitive `lex-web`'s own
+  `auth_basic.lex`/`auth_apikey.lex` already use) *before* ever calling
+  `srv.dispatch_request` — an unauthorized caller never reaches
+  `publish_content_core` (factored out of `make_publish_content_tool`, the
+  same discipline SA2/SA4 used for `fetch_support_items`/`web_search`), so
+  it can never reach the live site. `CONTENT_PUBLISH_TOKEN` unset refuses
+  to serve at all — never fail-open into an unauthenticated write.
+  Considered and deferred: routing the write through SA3-style
+  record+verify settlement — a real complementary idea, but the auth gate
+  alone already satisfies the promotion criterion, and settlement-routing
+  needs its own sequencing design (gating the live POST on a verdict, not
+  just recording after the fact) — noted as a documented future
+  enhancement, not built now.
+  *Promotion criterion:* `content_creator` registers into soft's mesh and
+  is reachable over A2A the same way `cx`/`research` are, AND a mesh peer
+  without the authorization this issue adds cannot trigger
+  `publish_content` end-to-end (a real negative test). **Met** —
+  `demo/content-a2a-roundtrip.sh` registers `content_creator` into a live
+  mesh node, confirms discovery, then proves both directions against a
+  real fake product server with a hit counter: no-token and wrong-token
+  requests both get a real `401` and the product server's hit count stays
+  `0`; a correctly-authorized request gets `200` and the hit count becomes
+  exactly `1`.
 
 ## Plan — Track OA (os-aware)
 
-- **OA1 — `[policy]` grant declaration in `company.toml`.** Extend the
-  existing `[policy]` table so a company can declare (or accept
-  `manifest_json_for_kind`'s defaults for) per-role isolation up front;
-  `cast.lex` reads it at role-assignment time. Additive only — no
-  enforcement change, `LEX_OS_ISOLATION`'s existing behavior is untouched.
+- **OA1 — `[policy]` grant declaration in `company.toml`. Done.** Extended
+  the existing `[policy]` table with a `[policy.isolation]` role-kind →
+  preset override map (`manifests.lex` refactored to expose its 5 named
+  presets — `Design`/`Implementation`/`QA`/`Demo`/`Retro` — plus
+  `preset_for_kind_with_overrides`/`parse_isolation_overrides`, both unit
+  tested; a mistyped preset name falls back to `Demo`, the same safe
+  default an unmapped role kind already gets). `cast.lex`'s new
+  `roster_grant_report`/`grant_report_text` read it at role-assignment
+  time and are exposed via `src/main.lex`'s `roster_grant_report_cmd`.
+  Additive only — no enforcement change, `LEX_OS_ISOLATION`'s existing
+  behavior (`manifest_json_for_kind`, still called unmodified by the real
+  `proc_cmd` mediation path) is untouched.
   *Promotion criterion:* `cast.lex` can report, for a given roster, which
   roles would run under which grant, without anything executing
-  differently yet.
-- **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.**
-  The consequential path: build/qa agents calling a real model with real
-  tool access. Needs its own careful design (a separate doc section or
-  follow-up design doc before implementation — this is the riskiest,
-  highest-blast-radius piece of the whole epic, touching the tool-calling
-  hot path every real sprint runs through).
+  differently yet. **Met** — `demo/oa1-grant-report-roundtrip.sh` seeds a
+  company with a `build:Demo` override and a 3-node roster (`build`, `qa`,
+  `docs`), runs the real `roster_grant_report_cmd`, and checks the
+  override wins for `build`, `qa` keeps its own default, and the unmapped
+  `docs` role falls back to `Demo` — all without executing anything.
+- **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.
+  Done.** Design reviewed and approved (`docs/design/oa2-tool-call-
+  mediation.md`), then implemented: `src/tool_grant.lex` re-evaluates the
+  same Grant `manifest_json_for_kind_with_overrides` (OA1) already
+  computes — a small, hand-maintained tool→(Dimension,Level) table, pure
+  Lex, no new lex-os surface — and `src/agent/runner.lex`'s LLM branch
+  filters a role's tool list through it before the model ever sees them.
+  `lex_os_exec_step` (the existing `proc_cmd` path) was also switched from
+  the unconditional grant to the override-aware one, so OA1's
+  `[policy.isolation]` now changes real behavior on both executors, not
+  just what gets reported.
+  *Promotion criterion:* a QA-shaped grant denies a tool call it shouldn't
+  have, end to end, with the LLM loop still completing the sprint via its
+  remaining permitted tools — proven first under `--simulated`. **Met** —
+  `demo/oa2-tool-filter-roundtrip.sh` shows `build`'s own default grant
+  keeping both its tools, a `build:Demo` override denying `lex_check`
+  while `lex_guidelines` survives, and then actually *calls* the surviving
+  tool for real to prove it's still genuinely functional, not just a name
+  left in a list.
   *Promotion criterion:* a QA-shaped grant denies a tool call it shouldn't
   have, end to end, with the LLM loop still completing the sprint via its
   remaining permitted tools — proven first under `--simulated`.
 - **OA3 — drop the hardcoded `--simulated` in `lex_os_exec_step`,
-  validate on real KVM.** Tracked as open since the Phase 0 PR
-  (`docs/design/lex-os-isolation.md`); needs a KVM CI runner, which loom
-  doesn't have yet.
+  validate on real KVM. Half done.** The code change shipped:
+  `lex_os_exec_step` no longer hardcodes `--simulated` — a new
+  `LEX_OS_SIMULATED=1` env var forces it, unset defers entirely to
+  lex-os's own real-by-default-on-KVM selection (`lex_os_exec_args`, pure,
+  unit-tested). **Still open:** this session's environment has no
+  `/dev/kvm` / `vmx`/`svm` CPU flags, so real Firecracker cannot be
+  validated here — needs a KVM CI runner, which loom doesn't have yet.
   *Promotion criterion:* the same QA-deny/Build-allow proof from Phase 0,
   reproduced against lex-os's real Firecracker backend, not the
-  simulated one.
+  simulated one. **Not met** — genuinely blocked on infrastructure, not
+  proven, not claimed proven.
 
 ## Verification
 

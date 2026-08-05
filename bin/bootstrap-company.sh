@@ -60,6 +60,19 @@ soft_mesh_url = get("soft", "mesh_url", "")
 soft_org_id   = get("soft", "org_id", cid) if get("soft", "mesh_url", "") else ""
 soft_roles_list = get("soft", "roles", [])
 soft_roles    = ",".join(soft_roles_list) if isinstance(soft_roles_list, list) else str(soft_roles_list)
+# SA3 (lex-loom#180): opt-in only -- "1" routes the per-iteration revenue
+# signal through soft's evidence-gated settlement (src/soft_settlement.lex)
+# instead of trusting the raw REVENUE_URL reading at face value; unset/false
+# keeps today's behavior (revenue_url stays the data source either way).
+soft_settlement = "1" if get("soft", "settlement", False) else ""
+# OA1 (lex-loom#182): declarative-and-reportable only -- a role kind ->
+# lex-os grant preset override table (values must name one of
+# manifests.lex's 5 presets: Design/Implementation/QA/Demo/Retro; an
+# unrecognised name safely falls back to Demo). No enforcement change:
+# cast.roster_grant_report reads this, the real proc_cmd mediation path
+# (LEX_OS_ISOLATION) does not, until OA2.
+policy_isolation_table = get("policy", "isolation", {})
+policy_isolation = ",".join(f"{k}:{v}" for k, v in policy_isolation_table.items()) if isinstance(policy_isolation_table, dict) else ""
 
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
@@ -67,6 +80,8 @@ out = {
     "CBUDGET": "" if budg is None else str(budg),
     "CREVENUE_URL": revenue_url,
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
+    "CSOFT_SETTLEMENT": soft_settlement,
+    "CPOLICY_ISOLATION": policy_isolation,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -179,7 +194,10 @@ STOP_WHEN=""
 echo "[bootstrap] company='$CID' path='$CPATH' workspace='$DIR' (${copied} skeleton files laid down)"
 echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<none>}' MODEL=$CMODEL"
 if [ -n "$CSOFT_MESH_URL" ]; then
-  echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} (declarative only — SA2 wires real registration)"
+  echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} settlement=${CSOFT_SETTLEMENT:-off}"
+fi
+if [ -n "$CPOLICY_ISOLATION" ]; then
+  echo "[bootstrap] policy.isolation → ${CPOLICY_ISOLATION} (reportable via cast.roster_grant_report; not yet enforced — OA2)"
 fi
 
 if [ "$NORUN" = "--no-run" ]; then
@@ -193,4 +211,5 @@ export LOOM_WORKSPACE="$WS"
 COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN" \
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
+  SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   bin/run-company.sh

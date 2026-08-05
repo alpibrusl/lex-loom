@@ -31,7 +31,7 @@ fn demo_skip() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, c
     Err(e) => io.print(str.concat("FATAL: ", e)),
     Ok(db) => {
       let ctx1 := { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 }
-      let cfg := { id: "demo-activate", request: "r", model: "none", db: db, api_calls_max: 10, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: Some(ctx1), exec_mode: "inline" }
+      let cfg := { id: "demo-activate", request: "r", model: "none", db: db, api_calls_max: 10, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: Some(ctx1), exec_mode: "inline", policy_isolation: "" }
       let node := { id: "growth_subloom", role: "build", gate: "spec true", expand: None, activate_when: "iter ge 2" }
       let outcome := orch.invoke_node(node, "", cfg, None)
       let __r := io.print(str.join(["[demo] iter=1 node gated 'iter ge 2' -> sealed=", if outcome.sealed {

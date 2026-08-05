@@ -208,6 +208,41 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
 # later. Content is written to a temp file and posted with `curl -d @file`
 # so LLM-generated title/body text (quotes, newlines) never has to survive
 # shell-argument escaping.
+# The actual publish, factored out so a caller outside the LLM tool
+# machinery (lex-loom#187's token-gated A2A skill,
+# `src/server/content_a2a.lex`) can reuse the exact same tested logic
+# instead of re-implementing it — the same factoring SA2/SA4 already did
+# for `fetch_support_items`/`fetch_web_search`.
+fn publish_content_core(url :: Str, title :: Str, body :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
+    JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr("url, title, and body are all required"))])
+  } else {
+    match proc.run("bash", ["-c", "mktemp /tmp/loom-publish.XXXXXXXX"]) {
+      Err(msg) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("mktemp failed: ", msg)))]),
+      Ok(mk) => {
+        let payload_path := str.trim(mk.stdout)
+        let payload := jv.stringify(JObj([("title", JStr(title)), ("body", JStr(body))]))
+        let __w := io.write(payload_path, payload)
+        let script := str.join(["curl -s --max-time 10 -X POST -H 'Content-Type: application/json' -d @'", payload_path, "' '", url, "/loom/content' 2>/dev/null || echo CURL_FAILED"], "")
+        match proc.run("bash", ["-c", script]) {
+          Err(msg) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("publish failed to run: ", msg)))]),
+          Ok(r) => {
+            let out := str.trim(r.stdout)
+            if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+              JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("could not reach ", url)))])
+            } else {
+              match jv.parse(out) {
+                Err(_) => JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.slice(out, 0, 300)))]),
+                Ok(j) => j,
+              }
+            }
+          },
+        }
+      },
+    }
+  }
+}
+
 fn make_publish_content_tool() -> t.Tool {
   let params := { title: "PublishContent", description: "Publish a blog post to the live product's own /loom/content endpoint", fields: [s.required_str("url", []), s.required_str("title", []), s.required_str("body", [])] }
   t.define("publish_content", "POST {title, body} to `url` + \"/loom/content\" (url is the product's live base URL, from a Launch or Deploy node's output — e.g. http://localhost:8081, no trailing slash). Returns {ok, post_count, error}. Only call this once you actually have a live url; if none is available yet, say so in your output instead of guessing one.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -223,33 +258,7 @@ fn make_publish_content_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
-      Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr("url, title, and body are all required"))]))
-    } else {
-      match proc.run("bash", ["-c", "mktemp /tmp/loom-publish.XXXXXXXX"]) {
-        Err(msg) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("mktemp failed: ", msg)))])),
-        Ok(mk) => {
-          let payload_path := str.trim(mk.stdout)
-          let payload := jv.stringify(JObj([("title", JStr(title)), ("body", JStr(body))]))
-          let __w := io.write(payload_path, payload)
-          let script := str.join(["curl -s --max-time 10 -X POST -H 'Content-Type: application/json' -d @'", payload_path, "' '", url, "/loom/content' 2>/dev/null || echo CURL_FAILED"], "")
-          match proc.run("bash", ["-c", script]) {
-            Err(msg) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("publish failed to run: ", msg)))])),
-            Ok(r) => {
-              let out := str.trim(r.stdout)
-              if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-                Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.concat("could not reach ", url)))]))
-              } else {
-                match jv.parse(out) {
-                  Err(_) => Ok(JObj([("ok", JBool(false)), ("post_count", JInt(0)), ("error", JStr(str.slice(out, 0, 300)))])),
-                  Ok(j) => Ok(j),
-                }
-              }
-            },
-          }
-        },
-      }
-    }
+    Ok(publish_content_core(url, title, body))
   })
 }
 
@@ -261,6 +270,31 @@ fn make_publish_content_tool() -> t.Tool {
 # rather than publish_content's real-write pattern, since a wrong response
 # to a real customer is a much higher-stakes mistake than an unpublished
 # blog post.
+# The actual fetch, factored out so a caller outside the LLM tool
+# machinery (SA2's A2A-mounted CX skill, `src/server/cx_a2a.lex`) can
+# reuse the exact same tested logic instead of re-implementing it.
+fn fetch_support_items(url :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(url) {
+    JObj([("items", JList([])), ("error", JStr("url is required"))])
+  } else {
+    let script := str.join(["curl -s --max-time 10 '", url, "/loom/support' 2>/dev/null || echo CURL_FAILED"], "")
+    match proc.run("bash", ["-c", script]) {
+      Err(msg) => JObj([("items", JList([])), ("error", JStr(str.concat("fetch failed to run: ", msg)))]),
+      Ok(r) => {
+        let out := str.trim(r.stdout)
+        if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+          JObj([("items", JList([])), ("error", JStr(str.concat("could not reach ", url)))])
+        } else {
+          match jv.parse(out) {
+            Err(_) => JObj([("items", JList([])), ("error", JStr(str.slice(out, 0, 300)))]),
+            Ok(j) => j,
+          }
+        }
+      },
+    }
+  }
+}
+
 fn make_fetch_support_tool() -> t.Tool {
   let params := { title: "FetchSupportItems", description: "Read items needing a human response from the live product's own /loom/support endpoint", fields: [s.required_str("url", [])] }
   t.define("fetch_support_items", "GET `url` + \"/loom/support\" (url is the product's live base URL, from a Launch or Deploy node's output — e.g. http://localhost:8081, no trailing slash). Returns {items:[{id,text,status}]} or {error}. Read-only — this never sends a response anywhere; you draft replies in your own output for a human to send.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -268,25 +302,7 @@ fn make_fetch_support_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(url) {
-      Ok(JObj([("items", JList([])), ("error", JStr("url is required"))]))
-    } else {
-      let script := str.join(["curl -s --max-time 10 '", url, "/loom/support' 2>/dev/null || echo CURL_FAILED"], "")
-      match proc.run("bash", ["-c", script]) {
-        Err(msg) => Ok(JObj([("items", JList([])), ("error", JStr(str.concat("fetch failed to run: ", msg)))])),
-        Ok(r) => {
-          let out := str.trim(r.stdout)
-          if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-            Ok(JObj([("items", JList([])), ("error", JStr(str.concat("could not reach ", url)))]))
-          } else {
-            match jv.parse(out) {
-              Err(_) => Ok(JObj([("items", JList([])), ("error", JStr(str.slice(out, 0, 300)))])),
-              Ok(j) => Ok(j),
-            }
-          }
-        },
-      }
-    }
+    Ok(fetch_support_items(url))
   })
 }
 
@@ -300,6 +316,41 @@ fn make_fetch_support_tool() -> t.Tool {
 # Titles+snippets are extracted with a plain grep/sed pipeline (no JS
 # rendering, no login wall to fight) and returned as text; loom never
 # interprets the content, only forwards it, same as every other fetch_* tool.
+# The actual search, factored out so a caller outside the LLM tool
+# machinery (SA4's A2A-mounted research skill, `src/server/research_a2a.lex`)
+# can reuse the exact same tested logic instead of re-implementing it —
+# same reasoning as fetch_support_items above.
+fn fetch_web_search(query :: Str) -> [net, io, proc] jv.Json {
+  if str.is_empty(query) {
+    JObj([("results", JStr("")), ("error", JStr("query is required"))])
+  } else {
+    match proc.run("bash", ["-c", "mktemp /tmp/loom-search-query.XXXXXXXX"]) {
+      Err(msg) => JObj([("results", JStr("")), ("error", JStr(str.concat("mktemp failed: ", msg)))]),
+      Ok(mk) => {
+        let query_path := str.trim(mk.stdout)
+        let __w := io.write(query_path, query)
+        let clean_html := "sed -E 's/<[^>]*>//g; s/&amp;/\\&/g; s/&#x27;|&#39;/'\"'\"'/g; s/&quot;/\"/g; s/&lt;/</g; s/&gt;/>/g'"
+        let script := str.join(["html=$(curl -s --max-time 15 -A 'Mozilla/5.0' -G --data-urlencode \"q@", query_path, "\" 'https://html.duckduckgo.com/html/' 2>/dev/null) || { echo CURL_FAILED; exit 0; }\n", "titles=$(echo \"$html\" | grep -oP 'class=\"result__a\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "snips=$(echo \"$html\" | grep -oP 'class=\"result__snippet\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "if [ -z \"$titles\" ]; then echo NO_RESULTS; exit 0; fi\n", "paste -d'|' <(echo \"$titles\") <(echo \"$snips\") | awk -F'|' '{printf \"%d. %s -- %s\\n\", NR, $1, $2}'\n"], "")
+        match proc.run("bash", ["-c", script]) {
+          Err(msg) => JObj([("results", JStr("")), ("error", JStr(str.concat("search failed to run: ", msg)))]),
+          Ok(r) => {
+            let out := str.trim(r.stdout)
+            if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
+              JObj([("results", JStr("")), ("error", JStr("could not reach the search endpoint"))])
+            } else {
+              if str.contains(out, "NO_RESULTS") {
+                JObj([("results", JStr("")), ("error", JStr("no results found"))])
+              } else {
+                JObj([("results", JStr(str.slice(out, 0, 2000))), ("error", JStr(""))])
+              }
+            }
+          },
+        }
+      },
+    }
+  }
+}
+
 fn make_web_search_tool() -> t.Tool {
   let params := { title: "WebSearch", description: "Search the public web (DuckDuckGo) and return result titles + snippets", fields: [s.required_str("query", [])] }
   t.define("web_search", "Search the web for `query`. Returns {results: \"<numbered titles+snippets>\"} or {error}. Use for competitive/market research — comparable products, typical pricing, positioning — never for anything the codebase itself can answer.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -307,34 +358,7 @@ fn make_web_search_tool() -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    if str.is_empty(query) {
-      Ok(JObj([("results", JStr("")), ("error", JStr("query is required"))]))
-    } else {
-      match proc.run("bash", ["-c", "mktemp /tmp/loom-search-query.XXXXXXXX"]) {
-        Err(msg) => Ok(JObj([("results", JStr("")), ("error", JStr(str.concat("mktemp failed: ", msg)))])),
-        Ok(mk) => {
-          let query_path := str.trim(mk.stdout)
-          let __w := io.write(query_path, query)
-          let clean_html := "sed -E 's/<[^>]*>//g; s/&amp;/\\&/g; s/&#x27;|&#39;/'\"'\"'/g; s/&quot;/\"/g; s/&lt;/</g; s/&gt;/>/g'"
-          let script := str.join(["html=$(curl -s --max-time 15 -A 'Mozilla/5.0' -G --data-urlencode \"q@", query_path, "\" 'https://html.duckduckgo.com/html/' 2>/dev/null) || { echo CURL_FAILED; exit 0; }\n", "titles=$(echo \"$html\" | grep -oP 'class=\"result__a\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "snips=$(echo \"$html\" | grep -oP 'class=\"result__snippet\"[^>]*>\\K.*?(?=</a>)' | ", clean_html, " | head -8)\n", "if [ -z \"$titles\" ]; then echo NO_RESULTS; exit 0; fi\n", "paste -d'|' <(echo \"$titles\") <(echo \"$snips\") | awk -F'|' '{printf \"%d. %s -- %s\\n\", NR, $1, $2}'\n"], "")
-          match proc.run("bash", ["-c", script]) {
-            Err(msg) => Ok(JObj([("results", JStr("")), ("error", JStr(str.concat("search failed to run: ", msg)))])),
-            Ok(r) => {
-              let out := str.trim(r.stdout)
-              if str.is_empty(out) or str.contains(out, "CURL_FAILED") {
-                Ok(JObj([("results", JStr("")), ("error", JStr("could not reach the search endpoint"))]))
-              } else {
-                if str.contains(out, "NO_RESULTS") {
-                  Ok(JObj([("results", JStr("")), ("error", JStr("no results found"))]))
-                } else {
-                  Ok(JObj([("results", JStr(str.slice(out, 0, 2000))), ("error", JStr(""))]))
-                }
-              }
-            },
-          }
-        },
-      }
-    }
+    Ok(fetch_web_search(query))
   })
 }
 

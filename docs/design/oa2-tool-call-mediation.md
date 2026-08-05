@@ -1,10 +1,16 @@
 # OA2 — mediating the LLM executor's tool calls (design review)
 
-Status: **draft, pending review** (`lex-loom#183`, part of epic `lex-loom#177`,
-depends on OA1 `lex-loom#182`, done). Per #183's own scope note, this is the
-riskiest, highest-blast-radius piece of the epic — it touches the tool-calling
-hot path every real sprint runs through — so per the issue this section is
-written up and reviewed *before* any implementation starts.
+Status: **reviewed, approved, and implemented** (`lex-loom#183`, part of
+epic `lex-loom#177`, depends on OA1 `lex-loom#182`, done). Per #183's own
+scope note, this was the riskiest, highest-blast-radius piece of the
+epic — it touches the tool-calling hot path every real sprint runs
+through — so this section was written up and reviewed *before*
+implementation started, per the issue's own requirement. Implementation:
+`src/tool_grant.lex` (the table + comparison logic), `src/agent/runner.lex`
+(the filter, wired into the LLM branch; `lex_os_exec_step` switched to the
+override-aware grant too), `tests/test_tool_grant.lex`,
+`demo/oa2-tool-filter-roundtrip.sh` — all following the "Recommended
+design" section below exactly as reviewed.
 
 ## Recap: what's mediated today, what isn't
 
@@ -187,16 +193,15 @@ it's not a surprise later, not a hidden implementation trick.
 - **OA3** (real KVM/Firecracker validation) — proven under `--simulated`
   only, as `#183` itself scopes.
 
-## Open questions for review
+## Open questions for review — resolved
 
-1. Does the recommended approach (Lex-side Grant-derived filter, no new
-   lex-os surface) match the epic's intent for OA2, or should OA2 instead
-   commit to the heavier real-`CommandRegistry`-per-tool design now (cross-
-   repo, needs its own lex-os-side design pass first)?
-2. Is the per-tool `(Dimension, Level)` table above (§ Recommended design,
-   step 1) reasonable as a first pass, or are there specific tools whose
-   required level should be reconsidered before implementation?
-3. Is demonstrating the promotion criterion via an OA1 `[policy.isolation]`
-   override (rather than trying to find a built-in preset that already
-   denies something) acceptable, given the honest reason why a role's own
-   default preset never denies its own tools?
+1. **Resolved: Lex-side Grant-derived filter, no new lex-os surface.**
+   Reviewed and approved before implementation started. The heavier
+   real-`CommandRegistry`-per-tool design remains a documented future
+   direction (see Non-goals) if a real audited/budget-charged per-tool
+   mediation is ever needed.
+2. **Resolved: the table shipped as drafted** (`src/tool_grant.lex`'s
+   `tool_required_dimension`) — no changes requested during review.
+3. **Resolved: the promotion-criterion demo uses an OA1
+   `[policy.isolation]` override**, exactly as proposed —
+   `demo/oa2-tool-filter-roundtrip.sh` overrides `build` to `Demo`.

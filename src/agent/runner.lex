@@ -64,6 +64,8 @@ import "./trace" as trace
 
 import "../manifests" as manifests
 
+import "../tool_grant" as tool_grant
+
 import "std.env" as env
 
 # sprint_id scopes build-kind roles' shared work dir (see build_work_dir/
@@ -493,8 +495,14 @@ fn proc_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
 # gates whether the command may run at all (docs/design/lex-os-isolation.md).
 # The command construction below is byte-for-byte what proc_step already
 # builds — only the launcher changes, so unset this is a no-op: behavior is
-# identical to proc_step.
-fn lex_os_exec_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
+# identical to proc_step. `policy_isolation` is the company's raw
+# [policy.isolation] table (OA1) — "" for every non-company/no-override
+# caller — resolved here through the SAME override machinery cast.lex's
+# grant report already uses (manifest_json_for_kind_with_overrides), so a
+# company's declared override now actually changes what gets mediated
+# (OA1's own scope note: "wiring an override into what actually gets
+# mediated is OA2").
+fn lex_os_exec_step(def :: AgentDef, msg_json :: Str, policy_isolation :: Str) -> [proc, io] Str {
   let full_input := str.join([def.system_prompt, "\n\n", msg_json], "")
   match proc.run("bash", ["-c", "mktemp /tmp/loom-proc.XXXXXXXX"]) {
     Err(msg) => str.concat("PROC_ERROR: mktemp failed: ", msg),
@@ -505,7 +513,8 @@ fn lex_os_exec_step(def :: AgentDef, msg_json :: Str) -> [proc, io] Str {
         Err(msg) => str.concat("PROC_ERROR: manifest mktemp failed: ", msg),
         Ok(mm) => {
           let manifest_path := str.trim(mm.stdout)
-          let __m := io.write(manifest_path, manifests.manifest_json_for_kind(def.kind, def.sprint_id))
+          let overrides := manifests.parse_isolation_overrides(policy_isolation)
+          let __m := io.write(manifest_path, manifests.manifest_json_for_kind_with_overrides(def.kind, def.sprint_id, overrides))
           let cmd := str.join([def.proc_cmd, " < ", path], "")
           match proc.run("lex-os", ["--output", "json", "exec", "--simulated", "--manifest", manifest_path, "--", "bash", "-c", cmd]) {
             Err(msg) => str.concat("PROC_ERROR: lex-os exec spawn failed: ", msg),
@@ -673,7 +682,7 @@ fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
 # between-iteration call (e.g. the strategist) that has no sprint of its own.
 # Empty string means "don't record" (e.g. proc_cmd/a2a_url paths never touch
 # an LLM directly, so there is no usage to attribute).
-fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
+fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, policy_isolation :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
   let run_id := trace.new_run_id()
   let _t1 := trace.record(db, run_id, def.id, "received", msg_json)
   let answer := if str.len(def.a2a_url) > 0 {
@@ -689,7 +698,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) 
         None => false,
       }
       let out := if use_lex_os {
-        lex_os_exec_step(def, msg_json)
+        lex_os_exec_step(def, msg_json, policy_isolation)
       } else {
         proc_step(def, msg_json)
       }
@@ -700,7 +709,12 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str) 
       let entries := mem.recall_all(db, def.id)
       let sys := build_system_prompt(def, state, entries)
       let ops_path := ops_file(run_id)
-      let all_tools := list.map(def.tools, fn (tl :: t.Tool) -> t.Tool {
+      let overrides := manifests.parse_isolation_overrides(policy_isolation)
+      let manifest_json := manifests.manifest_json_for_kind_with_overrides(def.kind, def.sprint_id, overrides)
+      let granted_tools := list.filter(def.tools, fn (tl :: t.Tool) -> Bool {
+        tool_grant.tool_allowed_under_manifest(tl.name, manifest_json)
+      })
+      let all_tools := list.map(granted_tools, fn (tl :: t.Tool) -> t.Tool {
         wrap_tool(ops_path, tl)
       })
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)

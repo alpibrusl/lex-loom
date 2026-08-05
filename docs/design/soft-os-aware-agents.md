@@ -181,13 +181,24 @@ before this work makes the collision load-bearing.
   override wins for `build`, `qa` keeps its own default, and the unmapped
   `docs` role falls back to `Demo` — all without executing anything.
 - **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.
-  Design drafted, pending review** — see
-  `docs/design/oa2-tool-call-mediation.md`. The consequential path:
-  build/qa agents calling a real model with real tool access. Needs its
-  own careful design (a separate doc section or follow-up design doc
-  before implementation — this is the riskiest, highest-blast-radius piece
-  of the whole epic, touching the tool-calling hot path every real sprint
-  runs through).
+  Done.** Design reviewed and approved (`docs/design/oa2-tool-call-
+  mediation.md`), then implemented: `src/tool_grant.lex` re-evaluates the
+  same Grant `manifest_json_for_kind_with_overrides` (OA1) already
+  computes — a small, hand-maintained tool→(Dimension,Level) table, pure
+  Lex, no new lex-os surface — and `src/agent/runner.lex`'s LLM branch
+  filters a role's tool list through it before the model ever sees them.
+  `lex_os_exec_step` (the existing `proc_cmd` path) was also switched from
+  the unconditional grant to the override-aware one, so OA1's
+  `[policy.isolation]` now changes real behavior on both executors, not
+  just what gets reported.
+  *Promotion criterion:* a QA-shaped grant denies a tool call it shouldn't
+  have, end to end, with the LLM loop still completing the sprint via its
+  remaining permitted tools — proven first under `--simulated`. **Met** —
+  `demo/oa2-tool-filter-roundtrip.sh` shows `build`'s own default grant
+  keeping both its tools, a `build:Demo` override denying `lex_check`
+  while `lex_guidelines` survives, and then actually *calls* the surviving
+  tool for real to prove it's still genuinely functional, not just a name
+  left in a list.
   *Promotion criterion:* a QA-shaped grant denies a tool call it shouldn't
   have, end to end, with the LLM loop still completing the sprint via its
   remaining permitted tools — proven first under `--simulated`.

@@ -219,7 +219,7 @@ fn run_cloud_sprint(db :: conn.ConnDb, sprint_id :: Str, request :: Str, model :
     pool_seed.seed(db)
   }
   let trail_log_none :: Option[tlog.Log] := None
-  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline" }
+  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
   let result :: orch.SprintResult := orch.run_sprint(cfg)
   let ok_str := if result.success {
     "true"

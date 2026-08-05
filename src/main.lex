@@ -159,7 +159,7 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
       }
       let trail_log_none :: Option[tlog.Log] := None
       let exec_mode := get_env("EXEC_MODE", "inline")
-      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None, exec_mode: exec_mode }
+      let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None, exec_mode: exec_mode, policy_isolation: "" }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
         "SUCCESS"

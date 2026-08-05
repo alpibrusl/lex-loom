@@ -134,11 +134,13 @@ fn manifest_json_for_kind(kind :: Str, sprint_id :: Str) -> Str {
 # grant fields, so a company can only pick among the same 5 vetted presets
 # every role already runs under.
 #
-# Additive only (OA1's own scope): nothing here is called by the real
-# execution path yet (src/agent/runner.lex's lex_os_exec_step still calls
-# manifest_json_for_kind directly, unchanged) — these functions exist to
-# make an override REPORTABLE (cast.lex's roster_grant_report), not yet
-# enforced. Wiring an override into what actually gets mediated is OA2.
+# OA1 shipped these as reportable-only (cast.lex's roster_grant_report).
+# OA2 (lex-loom#183) wired them into the real execution path: both
+# src/agent/runner.lex's lex_os_exec_step (proc_cmd) and its LLM-tool
+# filter (src/tool_grant.lex) now call manifest_json_for_kind_with_overrides
+# instead of the unconditional manifest_json_for_kind, so a company's
+# declared [policy.isolation] override actually changes what a node's
+# agent can do, not just what gets reported.
 fn lookup_override(overrides :: List[(Str, Str)], kind :: Str) -> Option[Str] {
   list.fold(overrides, None, fn (acc :: Option[Str], pair :: (Str, Str)) -> Option[Str] {
     match acc {

@@ -44,11 +44,19 @@ Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
   `manifest_json_for_kind` for the full per-role table — it's a superset of
   the sketch below, covering every `kind` `proc_cmd` can appear on, with an
   unmapped role defaulting to no exec authority rather than failing open).
-  Not yet done: the LLM and A2A executors stay unmediated (only `proc_cmd`
-  nodes route through lex-os today), and there's no live end-to-end test in
-  loom's own CI (it doesn't install the `lex-os` binary yet) — only a
-  dependency-free unit test on the grant-generation side
-  (`tests/test_manifest_for_kind.lex`).
+  Not yet done (at Phase 0 time): the LLM and A2A executors stay
+  unmediated, and there's no live end-to-end test in loom's own CI (it
+  doesn't install the `lex-os` binary yet) — only a dependency-free unit
+  test on the grant-generation side (`tests/test_manifest_for_kind.lex`).
+  **Update (OA2, `lex-loom#183`):** the LLM executor's tool calls are now
+  gated too — not via the real `lex-os` binary (there's no per-call box to
+  mediate; every tool runs in-process), but via a Lex-side re-evaluation of
+  the SAME Grant (`src/tool_grant.lex`), filtering which of a role's tools
+  are even offered to the model. See
+  `docs/design/oa2-tool-call-mediation.md` for the full design and honest
+  scope (kernel-level per-tool-call sandboxing, and a real lex-os-audited
+  `CommandRegistry` entry per tool, are still open — that's a heavier
+  future phase, not this one). The A2A executor remains unmediated.
 - **Phase 1 (Linux/CI/prod): real Firecracker.** `lex-os exec` itself already
   supports the real backend (same selection as `lex-os run`: real by
   default on a KVM host, `--simulated` an explicit opt-in) — it boots

@@ -75,7 +75,11 @@ type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: 
 # blocks on await_node_results instead — a separate `worker.lex::run_worker`
 # process (or several) must be running against the same DB to drain them; a
 # "queue" sprint with no worker running will simply time out per layer.
-type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool, depth :: Int, iter_ctx :: Option[company.IterCtx], exec_mode :: Str }
+# policy_isolation (OA2, #183): the company's raw [policy.isolation] table
+# (OA1, #182), threaded down to runner.step so a company's declared grant
+# override actually changes what a node's agent can do — "" for every
+# standalone (non-company) sprint entry point.
+type SprintCfg = { id :: Str, request :: Str, model :: Str, db :: conn.ConnDb, api_calls_max :: Int, roster :: cast.Roster, trail_log :: Option[tlog.Log], review_transitions :: Bool, depth :: Int, iter_ctx :: Option[company.IterCtx], exec_mode :: Str, policy_isolation :: Str }
 
 # Artifact cache: maps node_id → artifact_hash for nodes already run.
 # Used for re-planning -- unchanged nodes reuse their prior artifact.
@@ -215,7 +219,7 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
     }
     let __te := tr.trail(cfg.db, cfg.id, "node_expand_started", str.join(["{\"node\":\"", n.id, "\",\"child_sprint\":\"", child_id, "\",\"depth\":", int.to_str(cfg.depth + 1), "}"], ""))
     let started_id := emit_node_started(cfg, parent, n.id, n.role, 1)
-    let child_cfg := { id: child_id, request: child_request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cast.empty_roster(), trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth + 1, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
+    let child_cfg := { id: child_id, request: child_request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cast.empty_roster(), trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth + 1, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode, policy_isolation: cfg.policy_isolation }
     let child_result :: SprintResult := run_sprint(child_cfg)
     let result_json := str.join(["{\"success\":", if child_result.success {
       "true"
@@ -279,7 +283,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
         } else {
           ()
         }
-        let output := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
+        let output := runner.step(cfg.db, agent_cfg, prompt, cfg.id, cfg.policy_isolation)
         if str.is_empty(output) {
           if attempt > max_node_retries() {
             { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
@@ -291,7 +295,7 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
           if gates.is_llm_judge(n.gate) {
             let criteria := gates.judge_criteria(n.gate)
             let judge_cfg := roles.judge_agent(cfg.model, criteria)
-            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), cfg.id)
+            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), cfg.id, cfg.policy_isolation)
             let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
               true
             } else {
@@ -484,7 +488,7 @@ fn parse_assessment(resp :: Str) -> Assessment {
 fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Assessment {
   match roles.assessor_agent(n.role, cfg.model) {
     assessor => {
-      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""), cfg.id)
+      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""), cfg.id, cfg.policy_isolation)
       parse_assessment(resp)
     },
   }
@@ -743,7 +747,7 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
       design_retry_prompt(prd, request, errors)
     }
     let agent_cfg := roles.architect_agent(cfg.model)
-    let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
+    let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id, cfg.policy_isolation)
     let tmp_path := roles.graph_tmp_path(cfg.id)
     let output := match io.read(tmp_path) {
       Ok(file_content) => {
@@ -948,7 +952,7 @@ fn run_extensions(base :: graph.SprintGraph, impl_result :: PhaseResult, impl_re
     } else {
       let agent_cfg := roles.architect_agent(cfg.model)
       let prompt := extension_prompt(cfg.request, resolve_input(cfg.db, impl_ref), graph.to_json_str(base))
-      let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id)
+      let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id, cfg.policy_isolation)
       let tmp_path := roles.graph_tmp_path(cfg.id)
       let output := match io.read(tmp_path) {
         Ok(file_content) => {
@@ -1022,7 +1026,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       Some(llog)
     },
   }
-  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
+  let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: cfg.roster, trail_log: llog_opt, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode, policy_isolation: cfg.policy_isolation }
   let intake_graph := { id: str.concat(cfg.id, "-intake"), phase: graph.Intake, nodes: [{ id: "intake", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [] }
   let intake_result := run_phase(intake_graph, graph.Intake, cfg.request, [], cfg)
   let intake_ref := first_accepted_artifact(intake_result.outcomes)
@@ -1040,7 +1044,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let design_ref := intake_ref
       let roster := cast.select_roster(cfg.db, sprint_graph, cfg.request, cfg.model, cfg.id)
       let __tc := tr.trail(cfg.db, cfg.id, "phase_cast", str.join(["{\"agents\":", int.to_str(list.len(roster)), "}"], ""))
-      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode }
+      let cfg := { id: cfg.id, request: cfg.request, model: cfg.model, db: cfg.db, api_calls_max: cfg.api_calls_max, roster: roster, trail_log: cfg.trail_log, review_transitions: cfg.review_transitions, depth: cfg.depth, iter_ctx: cfg.iter_ctx, exec_mode: cfg.exec_mode, policy_isolation: cfg.policy_isolation }
       let __ltgv := match llog_opt {
         None => (),
         Some(log) => {

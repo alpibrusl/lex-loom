@@ -180,12 +180,14 @@ before this work makes the collision load-bearing.
   `docs`), runs the real `roster_grant_report_cmd`, and checks the
   override wins for `build`, `qa` keeps its own default, and the unmapped
   `docs` role falls back to `Demo` — all without executing anything.
-- **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.**
-  The consequential path: build/qa agents calling a real model with real
-  tool access. Needs its own careful design (a separate doc section or
-  follow-up design doc before implementation — this is the riskiest,
-  highest-blast-radius piece of the whole epic, touching the tool-calling
-  hot path every real sprint runs through).
+- **OA2 — mediate the LLM executor's tool calls, not just `proc_cmd`.
+  Design drafted, pending review** — see
+  `docs/design/oa2-tool-call-mediation.md`. The consequential path:
+  build/qa agents calling a real model with real tool access. Needs its
+  own careful design (a separate doc section or follow-up design doc
+  before implementation — this is the riskiest, highest-blast-radius piece
+  of the whole epic, touching the tool-calling hot path every real sprint
+  runs through).
   *Promotion criterion:* a QA-shaped grant denies a tool call it shouldn't
   have, end to end, with the LLM loop still completing the sprint via its
   remaining permitted tools — proven first under `--simulated`.

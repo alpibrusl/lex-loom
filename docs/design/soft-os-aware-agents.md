@@ -183,6 +183,33 @@ before this work makes the collision load-bearing.
   requests both get a real `401` and the product server's hit count stays
   `0`; a correctly-authorized request gets `200` and the hit count becomes
   exactly `1`.
+- **SA4 follow-up (`lex-loom#193`) — auth parity for `cx`/`research`.
+  Done.** `cx_a2a.lex`/`research_a2a.lex` were deliberately left
+  unauthenticated when SA2/SA4 built them, on the reasoning that they're
+  read-only. Read-only isn't the same as harmless-to-expose — there's no
+  reason a caller with no mesh-relationship credentials should be able to
+  invoke them at all, and `cx_a2a.lex` specifically forwards a fully
+  caller-supplied `url` to a server-side `curl`, an unauthenticated
+  request-forgery surface on top of the missing auth. Gated both exactly
+  the way `content_a2a.lex` already is (`#187`): `CX_API_TOKEN` /
+  `RESEARCH_API_TOKEN`, required at startup (refuses to serve if unset),
+  `Authorization: Bearer <token>` checked via `crypto.constant_time_eq`
+  before ever reaching `srv.dispatch_request`/`dispatch_subscribe_str`,
+  discovery (`GET /.well-known/agent.json`) left open as public metadata.
+  `demo/sa2-mesh-roundtrip.sh`/`demo/sa4-research-roundtrip.sh` both gained
+  a real negative test (no-token `tasks/send` → `401`) alongside the
+  existing authorized happy path.
+  Deliberately **not** fixed here: `cx_a2a.lex`'s caller-supplied `url` is
+  still unscoped once a caller does hold a valid token — tracked
+  separately as `lex-loom#194`, since the obvious fix (block
+  loopback/private-network targets) would break the legitimate case this
+  project's own demos rely on (a company's `cx` role fetching from its own
+  `Launch`/`Deploy` node's `http://localhost:<port>` URL); a real fix
+  needs a way to scope a token to the one URL its own company is allowed
+  to target, which is a bigger design question than this issue's auth
+  parity fix.
+  *Promotion criterion:* `cx`/`research` are reachable over A2A only with
+  a valid bearer token, the same as `content_creator`. **Met.**
 
 ## Plan — Track OA (os-aware)
 

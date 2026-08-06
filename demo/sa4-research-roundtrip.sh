@@ -32,6 +32,7 @@ cd "$REPO_ROOT"
 FED_PORT="${FED_PORT:-9101}"
 RESEARCH_PORT="${RESEARCH_PORT:-9300}"
 ORG="acme"
+RESEARCH_TOKEN="demo-research-token-abc123"
 
 PIDS=()
 cleanup() {
@@ -45,8 +46,8 @@ echo "+ starting an independent federation node on :$FED_PORT"
     src/federation_node.lex serve_federation ) &
 PIDS+=("$!")
 
-echo "+ starting loom's research A2A server on :$RESEARCH_PORT"
-PORT="$RESEARCH_PORT" \
+echo "+ starting loom's research A2A server on :$RESEARCH_PORT (token-gated)"
+PORT="$RESEARCH_PORT" RESEARCH_API_TOKEN="$RESEARCH_TOKEN" \
   lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc \
   src/server/research_a2a.lex serve_research_a2a &
 PIDS+=("$!")
@@ -72,10 +73,39 @@ echo "+ confirming discovery via the federation node's own GET /peers"
 curl -s "http://localhost:$FED_PORT/peers?tenant=$ORG"
 echo
 
+RESEARCH_PAYLOAD='{"jsonrpc":"2.0","id":"task_1","method":"tasks/send","params":{"id":"task_1","contextId":"ctx_1","message":{"kind":"message","messageId":"m1","role":"user","parts":[{"type":"text","text":"{\"query\":\"lex-loom autonomous companies\"}"}]}}}'
+
 echo
-echo "+ real tasks/send against the registered inbox_url"
-curl -s -X POST "http://localhost:$RESEARCH_PORT/" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":"task_1","method":"tasks/send","params":{"id":"task_1","contextId":"ctx_1","message":{"kind":"message","messageId":"m1","role":"user","parts":[{"type":"text","text":"{\"query\":\"lex-loom autonomous companies\"}"}]}}}'
+echo "+ NEGATIVE TEST: tasks/send against the registered inbox_url with NO token — must be denied (lex-loom#193)"
+NO_AUTH_STATUS=$(curl -s -o /tmp/sa4-no-auth.json -w "%{http_code}" -X POST "http://localhost:$RESEARCH_PORT/" -H "Content-Type: application/json" -d "$RESEARCH_PAYLOAD")
+echo "  http_status=$NO_AUTH_STATUS body=$(cat /tmp/sa4-no-auth.json)"
+
+echo
+echo "+ real tasks/send against the registered inbox_url, authorized"
+HAPPY_STATUS=$(curl -s -o /tmp/sa4-happy.json -w "%{http_code}" -X POST "http://localhost:$RESEARCH_PORT/" -H "Content-Type: application/json" -H "Authorization: Bearer $RESEARCH_TOKEN" -d "$RESEARCH_PAYLOAD")
+cat /tmp/sa4-happy.json
 echo
 
 echo
-echo "+ done — SA4 promotion criterion demonstrated end to end (research role)"
+echo "+ checking everything against expectations"
+fail=0
+check() {
+  if [ "$1" = "$2" ]; then
+    echo "  ok: $3"
+  else
+    echo "  FAILED: expected $3 to be '$2', got '$1'" >&2
+    fail=1
+  fi
+}
+check "$NO_AUTH_STATUS" "401" "an unauthenticated tasks/send is denied with 401"
+check "$HAPPY_STATUS" "200" "an authorized tasks/send succeeds"
+rm -f /tmp/sa4-no-auth.json /tmp/sa4-happy.json
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "sa4-research-roundtrip: FAILED" >&2
+  exit 1
+fi
+
+echo
+echo "+ done — SA4 promotion criterion demonstrated end to end (research role, reachable only with the RESEARCH_API_TOKEN)"

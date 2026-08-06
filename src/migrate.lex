@@ -51,6 +51,18 @@ fn ddl_node_results_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_nr_sprint_phase ON node_results(sprint_id, phase)"
 }
 
+# AG-UI replay events (agui_store.lex): one row per LLM turn, keyed by the
+# same run_id runner.lex's trace events already use to correlate a step()
+# call. events_json is the pre-encoded AguiEvent list (lex-ag-ui's own
+# wire format) -- server.lex replays it as-is, it never re-derives it.
+fn ddl_node_agui_events() -> Str {
+  "CREATE TABLE IF NOT EXISTS node_agui_events (run_id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, agent_id TEXT NOT NULL, events_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+}
+
+fn ddl_node_agui_events_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_agui_sprint_created ON node_agui_events(sprint_id, created_at)"
+}
+
 fn ddl_agent_pool() -> Str {
   "CREATE TABLE IF NOT EXISTS agent_pool (id TEXT PRIMARY KEY, role TEXT NOT NULL, system_prompt TEXT NOT NULL, model_name TEXT NOT NULL DEFAULT '', domain_tags_json TEXT NOT NULL DEFAULT '[]', attestation_count INTEGER NOT NULL DEFAULT 0, bounce_count INTEGER NOT NULL DEFAULT 0, retired_at TEXT NOT NULL DEFAULT '', last_attested_at TEXT, created_at TEXT NOT NULL)"
 }
@@ -273,7 +285,7 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_node_agui_events(), ddl_node_agui_events_idx()]) {
     Err(e) => Err(e),
     Ok(_) => {
       let __jobs := jobs.init_schema(db)

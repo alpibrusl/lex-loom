@@ -128,6 +128,21 @@ echo "+ checking the fake product server: should now have exactly ONE hit"
 HITS_AFTER_POSITIVE=$(cat "$HITS_FILE")
 echo "  product server hit count: $HITS_AFTER_POSITIVE"
 
+SUBSCRIBE_PAYLOAD="{\"jsonrpc\":\"2.0\",\"id\":\"task_2\",\"method\":\"tasks/sendSubscribe\",\"params\":{\"id\":\"task_2\",\"contextId\":\"ctx_2\",\"message\":{\"kind\":\"message\",\"messageId\":\"m2\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"{\\\"url\\\":\\\"http://127.0.0.1:$PRODUCT_PORT\\\",\\\"title\\\":\\\"Streamed post\\\",\\\"body\\\":\\\"hello via sendSubscribe\\\"}\"}]}}}"
+
+echo
+echo "+ NEGATIVE TEST 3: tasks/sendSubscribe with NO token — must still be denied, not leak an SSE stream"
+SUB_NO_AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$CONTENT_PORT/" -H "Content-Type: application/json" -d "$SUBSCRIBE_PAYLOAD")
+echo "  http_status=$SUB_NO_AUTH_STATUS"
+
+echo
+echo "+ AG-UI parity check: tasks/sendSubscribe with the CORRECT token should stream over SSE, the same as cx_a2a.lex/research_a2a.lex already do"
+SUB_HEADERS=$(mktemp)
+SUB_OK_STATUS=$(curl -s -D "$SUB_HEADERS" -o /tmp/content-a2a-sub.txt -w "%{http_code}" -X POST "http://localhost:$CONTENT_PORT/" -H "Content-Type: application/json" -H "Authorization: Bearer $REAL_TOKEN" -d "$SUBSCRIBE_PAYLOAD")
+SUB_CONTENT_TYPE=$(grep -i "^content-type:" "$SUB_HEADERS" | tr -d '\r' | cut -d' ' -f2)
+echo "  http_status=$SUB_OK_STATUS content_type=$SUB_CONTENT_TYPE"
+rm -f "$SUB_HEADERS"
+
 echo
 echo "+ checking everything against expectations"
 fail=0
@@ -144,8 +159,11 @@ check "$WRONG_AUTH_STATUS" "401" "wrong-token request is denied with 401"
 check "$HITS_AFTER_NEGATIVE" "0" "the product server was never reached by either denied attempt"
 check "$OK_STATUS" "200" "correctly-authorized request succeeds with 200"
 check "$HITS_AFTER_POSITIVE" "1" "the product server was reached exactly once, by the authorized attempt"
+check "$SUB_NO_AUTH_STATUS" "401" "an unauthorized tasks/sendSubscribe is also denied with 401, not a leaked SSE stream"
+check "$SUB_OK_STATUS" "200" "an authorized tasks/sendSubscribe succeeds"
+check "$SUB_CONTENT_TYPE" "text/event-stream" "an authorized tasks/sendSubscribe streams over SSE, same as cx_a2a.lex/research_a2a.lex"
 
-rm -f /tmp/content-a2a-no-auth.json /tmp/content-a2a-wrong-auth.json /tmp/content-a2a-ok.json
+rm -f /tmp/content-a2a-no-auth.json /tmp/content-a2a-wrong-auth.json /tmp/content-a2a-ok.json /tmp/content-a2a-sub.txt
 
 if [ "$fail" -ne 0 ]; then
   echo

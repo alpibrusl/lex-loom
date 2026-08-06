@@ -66,6 +66,8 @@ import "../manifests" as manifests
 
 import "../tool_grant" as tool_grant
 
+import "../agui_store" as agui_store
+
 import "std.env" as env
 
 # sprint_id scopes build-kind roles' shared work dir (see build_work_dir/
@@ -760,6 +762,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, 
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
       let __usage := record_usage(db, run_id, cost_owner, steps)
       let __ops := flush_op_calls(db, run_id, def.id)
+      let __agui := agui_store.persist_agui_events(db, run_id, cost_owner, def.id, steps)
       let out0 := extract_answer(steps)
       let out := if is_build_kind(def.kind) {
         if has_fence(out0) {

@@ -38,6 +38,8 @@ import "std.crypto" as crypto
 
 import "std.bytes" as bytes
 
+import "std.map" as map
+
 import "lex-schema/json_value" as jv
 
 import "lex-schema/schema" as s
@@ -130,13 +132,27 @@ fn is_authorized(c :: ctx.Ctx, expected_token :: Str) -> Bool {
 }
 
 # The gated POST / route: checks the bearer token before ever touching
-# `srv.dispatch_request` — an unauthorized caller never reaches the skill,
-# never reaches `publish_content_core`, never reaches the live site.
+# `srv.dispatch_request`/`dispatch_subscribe_str` — an unauthorized caller
+# never reaches the skill, never reaches `publish_content_core`, never
+# reaches the live site. Mirrors mount.lex's own `rpc_route` exactly for
+# the `tasks/sendSubscribe` branch (same `is_subscribe_body` check, same
+# SSE headers) so this agent is AG-UI-streamable the same way
+# cx_a2a.lex/research_a2a.lex already are — an earlier version of this
+# route only ever called `dispatch_request`, silently dropping
+# sendSubscribe support relative to the two other A2A servers in this
+# repo; publish_content's own turn is single-shot (no reason a caller
+# would need to stream it), but there's no reason the gate itself should
+# be the thing that breaks parity.
 fn gated_rpc_route(agent :: srv.AgentDef, expected_token :: Str) -> (ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
   fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     if is_authorized(c, expected_token) {
       let body_str := wbody.raw_body(c)
-      resp.json(srv.dispatch_request(agent, body_str))
+      if srv.is_subscribe_body(body_str) {
+        let sse_body := srv.dispatch_subscribe_str(agent, body_str)
+        { status: 200, body: sse_body, headers: map.from_list([("content-type", "text/event-stream"), ("cache-control", "no-cache"), ("connection", "keep-alive")]) }
+      } else {
+        resp.json(srv.dispatch_request(agent, body_str))
+      }
     } else {
       resp.unauthorized("missing or invalid Authorization: Bearer <token>")
     }

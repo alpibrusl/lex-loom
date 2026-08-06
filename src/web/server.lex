@@ -52,6 +52,10 @@ import "lex-web/src/response" as resp
 
 import "lex-web/src/static_files" as sf
 
+import "lex-web/src/stream" as stream
+
+import "std.iter" as iter
+
 import "lex-schema/json_value" as jv
 
 import "lex-orm/src/connection" as conn
@@ -73,6 +77,8 @@ import "../series" as ser
 import "../company" as company
 
 import "../operate_ledger" as oledger
+
+import "../agui_store" as agui_store
 
 import "lex-trail/src/log" as tlog
 
@@ -168,6 +174,38 @@ fn handle_trail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql,
         let rows := dg.load_trail(db, sprint_id)
         let events_json := str.concat("[", str.concat(str.join(list.map(rows, trail_row_to_json), ","), "]"))
         resp.json(str.join(["{\"sprint_id\":", esc(sprint_id), ",\"events\":", events_json, "}"], ""))
+      },
+    },
+  }
+}
+
+# ── /api/sprint-agui/*id ─────────────────────────────────────────────────────
+# Replay AG-UI events for a sprint's most recently finished node turn, as
+# one SSE burst delivered right after that turn completes — not live
+# mid-generation streaming; see src/agui_store.lex's header comment for
+# why that's not achievable from lex-loom alone (the real blocker is
+# upstream, in lex-llm's eager per-round drain). Each stored event is
+# re-emitted as its own SSE `data:` frame, matching what a genuinely-live
+# stream's wire shape would have looked like.
+# `stream.event_stream` wraps every item with the SSE `data: ... \n\n`
+# frame itself — callers pass raw payload strings, never pre-wrap them
+# (an earlier version of this code double-wrapped via `sse_event`, caught
+# live by demo/agui-replay-roundtrip.sh emitting literal "data: data: ").
+fn agui_error_stream(msg :: Str) -> stream.StreamResponse {
+  stream.event_stream(iter.from_list([str.join(["{\"error\":\"", msg, "\"}"], "")]))
+}
+
+fn handle_sprint_agui(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] stream.StreamResponse {
+  match ctx.path_param(c, "id") {
+    None => agui_error_stream("missing sprint id"),
+    Some(sprint_id) => match open_loom_db(db_path) {
+      Err(_) => agui_error_stream("could not open db"),
+      Ok(db) => match agui_store.load_latest_agui_events(db, sprint_id) {
+        None => agui_error_stream("no agui events recorded yet for this sprint"),
+        Some(replay) => match jv.parse(replay.events_json) {
+          Ok(JList(items)) => stream.event_stream(iter.from_list(list.map(items, jv.stringify))),
+          _ => agui_error_stream("corrupt stored events"),
+        },
       },
     },
   }
@@ -676,8 +714,11 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r13 := router.route_effectful(r12, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_list_companies(db_path)
   })
-  router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r14 := router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
     handle_company_detail(db_path, c)
+  })
+  router.route_stream(r14, "GET", "/api/sprint-agui/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] stream.StreamResponse {
+    handle_sprint_agui(db_path, c)
   })
 }
 
@@ -711,8 +752,10 @@ fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypt
           { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
         } else {
           let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
-          let rsp := router.dispatch(r, raw)
-          { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+          match router.dispatch_outcome(r, raw) {
+            DPlain(rsp) => { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers },
+            DStream(sr) => { status: sr.status, body: BodyStream(sr.body), headers: sr.headers },
+          }
         }
       }
     }

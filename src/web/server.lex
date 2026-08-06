@@ -44,6 +44,10 @@ import "std.sql" as sql
 
 import "std.crypto" as crypto
 
+import "std.bytes" as bytes
+
+import "std.map" as map
+
 import "lex-web/src/router" as router
 
 import "lex-web/src/ctx" as ctx
@@ -722,43 +726,98 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   })
 }
 
+# ── Auth gate (lex-loom#190) ──────────────────────────────────────────────────
+# Every /api/* route requires LOOM_API_TOKEN — checked via
+# `Authorization: Bearer <token>` OR a `?token=` query param. The query
+# param exists because EventSource (the standard way a browser consumes
+# SSE) cannot set custom headers at all — without it, the AG-UI replay
+# endpoint would be curl/script-only. `GET /` (the dashboard shell) stays
+# unauthenticated: it's static markup with no data in it, not an API
+# response — every `/api/*` call the dashboard itself makes is gated
+# exactly like any other caller's (dashboard.html carries its own token
+# prompt + fetch wrapper). Same posture as `content_a2a.lex`'s
+# `CONTENT_PUBLISH_TOKEN`: unset refuses to serve at all rather than
+# silently falling back to the old fully-open behavior.
+fn token_matches(presented :: Str, expected :: Str) -> Bool {
+  if str.is_empty(presented) or str.is_empty(expected) {
+    false
+  } else {
+    crypto.constant_time_eq(bytes.from_str(presented), bytes.from_str(expected))
+  }
+}
+
+fn presented_token(c :: ctx.Ctx) -> Str {
+  match ctx.bearer_token(c) {
+    Some(t) => t,
+    None => match ctx.query_param(c, "token") {
+      Some(t) => t,
+      None => "",
+    },
+  }
+}
+
+fn is_authorized(c :: ctx.Ctx, expected_token :: Str) -> Bool {
+  token_matches(presented_token(c), expected_token)
+}
+
+fn unauthorized_response() -> Response {
+  { status: 401, body: BodyStr("{\"error\":\"unauthorized\",\"detail\":\"missing or invalid Authorization: Bearer <token> or ?token=\"}"), headers: map.from_list([("content-type", "application/json")]) }
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypto, random, concurrent, vcs] Unit {
-  let port := parse_int_or_l(get_env_l("PORT", "8880"), 8880)
-  let db_url := get_env_l("DB_URL", "")
-  let db_path := if str.is_empty(db_url) {
-    get_env_l("DB_PATH", "loom.db")
+  let api_token := get_env_l("LOOM_API_TOKEN", "")
+  if str.is_empty(api_token) {
+    io.print("[lex-loom] FATAL: LOOM_API_TOKEN is required — refusing to serve an unauthenticated web API")
   } else {
-    db_url
-  }
-  let web_dir := get_env_l("WEB_DIR", "src/web")
-  let __seed := match open_loom_db(db_path) {
-    Err(_) => (),
-    Ok(db) => pool_seed.seed(db),
-  }
-  let r := build_loom_router(web_dir, db_path)
-  let __p := io.print(str.join(["[lex-loom] web on :", int.to_str(port), "  db=", db_path], ""))
-  net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Response {
-    if req.method == "POST" and req.path == "/api/sprints" {
-      let rsp := handle_launch_body(req.body, db_path)
-      { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+    let port := parse_int_or_l(get_env_l("PORT", "8880"), 8880)
+    let db_url := get_env_l("DB_URL", "")
+    let db_path := if str.is_empty(db_url) {
+      get_env_l("DB_PATH", "loom.db")
     } else {
-      if req.method == "POST" and req.path == "/api/agents" {
-        let rsp := handle_create_agent(req.body, db_path)
-        { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+      db_url
+    }
+    let web_dir := get_env_l("WEB_DIR", "src/web")
+    let __seed := match open_loom_db(db_path) {
+      Err(_) => (),
+      Ok(db) => pool_seed.seed(db),
+    }
+    let r := build_loom_router(web_dir, db_path)
+    let __p := io.print(str.join(["[lex-loom] web on :", int.to_str(port), "  db=", db_path], ""))
+    net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Response {
+      let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
+      if req.path == "/" {
+        match router.dispatch_outcome(r, raw) {
+          DPlain(rsp) => { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers },
+          DStream(sr) => { status: sr.status, body: BodyStream(sr.body), headers: sr.headers },
+        }
       } else {
-        if req.method == "GET" and req.path == "/api/providers" {
-          let rsp := handle_providers()
-          { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
-        } else {
-          let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
-          match router.dispatch_outcome(r, raw) {
-            DPlain(rsp) => { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers },
-            DStream(sr) => { status: sr.status, body: BodyStream(sr.body), headers: sr.headers },
+        let c := ctx.from_request(raw, map.new())
+        if is_authorized(c, api_token) {
+          if req.method == "POST" and req.path == "/api/sprints" {
+            let rsp := handle_launch_body(req.body, db_path)
+            { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+          } else {
+            if req.method == "POST" and req.path == "/api/agents" {
+              let rsp := handle_create_agent(req.body, db_path)
+              { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+            } else {
+              if req.method == "GET" and req.path == "/api/providers" {
+                let rsp := handle_providers()
+                { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+              } else {
+                match router.dispatch_outcome(r, raw) {
+                  DPlain(rsp) => { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers },
+                  DStream(sr) => { status: sr.status, body: BodyStream(sr.body), headers: sr.headers },
+                }
+              }
+            }
           }
+        } else {
+          unauthorized_response()
         }
       }
-    }
-  })
+    })
+  }
 }
 

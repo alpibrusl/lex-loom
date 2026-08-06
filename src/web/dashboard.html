@@ -261,6 +261,31 @@ tr.agent-row:hover td{background:#1c2128}
 </div>
 
 <script>
+// Every /api/* route requires LOOM_API_TOKEN (lex-loom#190) -- this shell
+// itself (GET /) stays unauthenticated (static markup, not data), but every
+// fetch() call below hits a gated endpoint. Prompt once, cache in
+// localStorage, and attach it to every /api/* request as a ?token= query
+// param (not a header: this same token also has to work for a future
+// EventSource-based consumer of /api/sprint-agui/*, and EventSource cannot
+// set custom headers at all -- the API accepts either form for exactly that
+// reason, see src/web/server.lex's presented_token).
+(function () {
+  const TOKEN_KEY = 'loom_api_token';
+  let token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    token = window.prompt('Loom API token (LOOM_API_TOKEN on the server):') || '';
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+  }
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    if (typeof input === 'string' && input.startsWith('/api/')) {
+      const sep = input.includes('?') ? '&' : '?';
+      input = input + sep + 'token=' + encodeURIComponent(token);
+    }
+    return nativeFetch(input, init);
+  };
+})();
+
 const PHASES = ['Intake','Design','Cast','Implementation','QA','Demo','Digest','Improve'];
 
 const ROLE_CAPS = {

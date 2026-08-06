@@ -35,6 +35,7 @@ FED_PORT="${FED_PORT:-9100}"
 CX_PORT="${CX_PORT:-9200}"
 SUPPORT_PORT="${SUPPORT_PORT:-8081}"
 ORG="acme"
+CX_TOKEN="demo-cx-token-abc123"
 
 PIDS=()
 cleanup() {
@@ -68,8 +69,8 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
 PIDS+=("$!")
 
-echo "+ starting loom's CX A2A server on :$CX_PORT"
-( cd "$REPO_ROOT" && PORT="$CX_PORT" \
+echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated)"
+( cd "$REPO_ROOT" && PORT="$CX_PORT" CX_API_TOKEN="$CX_TOKEN" \
     lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc \
     src/server/cx_a2a.lex serve_cx_a2a ) &
 PIDS+=("$!")
@@ -96,15 +97,44 @@ echo "+ confirming discovery via the federation node's own GET /peers"
 curl -s "http://localhost:$FED_PORT/peers?tenant=$ORG"
 echo
 
+HAPPY_PAYLOAD="{\"jsonrpc\":\"2.0\",\"id\":\"task_1\",\"method\":\"tasks/send\",\"params\":{\"id\":\"task_1\",\"contextId\":\"ctx_1\",\"message\":{\"kind\":\"message\",\"messageId\":\"m1\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"{\\\"url\\\":\\\"http://127.0.0.1:$SUPPORT_PORT\\\"}\"}]}}}"
+
 echo
-echo "+ real tasks/send against the registered inbox_url (happy path)"
-curl -s -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":\"task_1\",\"method\":\"tasks/send\",\"params\":{\"id\":\"task_1\",\"contextId\":\"ctx_1\",\"message\":{\"kind\":\"message\",\"messageId\":\"m1\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"{\\\"url\\\":\\\"http://127.0.0.1:$SUPPORT_PORT\\\"}\"}]}}}"
+echo "+ NEGATIVE TEST: tasks/send against the registered inbox_url with NO token — must be denied (lex-loom#193)"
+NO_AUTH_STATUS=$(curl -s -o /tmp/sa2-no-auth.json -w "%{http_code}" -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -d "$HAPPY_PAYLOAD")
+echo "  http_status=$NO_AUTH_STATUS body=$(cat /tmp/sa2-no-auth.json)"
+
+echo
+echo "+ real tasks/send against the registered inbox_url, authorized (happy path)"
+HAPPY_STATUS=$(curl -s -o /tmp/sa2-happy.json -w "%{http_code}" -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -H "Authorization: Bearer $CX_TOKEN" -d "$HAPPY_PAYLOAD")
+cat /tmp/sa2-happy.json
 echo
 
 echo
-echo "+ real tasks/send against the registered inbox_url (unreachable-product error path)"
-curl -s -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":"task_2","method":"tasks/send","params":{"id":"task_2","contextId":"ctx_2","message":{"kind":"message","messageId":"m2","role":"user","parts":[{"type":"text","text":"{\"url\":\"http://127.0.0.1:1\"}"}]}}}'
+echo "+ real tasks/send against the registered inbox_url, authorized (unreachable-product error path)"
+curl -s -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -H "Authorization: Bearer $CX_TOKEN" -d '{"jsonrpc":"2.0","id":"task_2","method":"tasks/send","params":{"id":"task_2","contextId":"ctx_2","message":{"kind":"message","messageId":"m2","role":"user","parts":[{"type":"text","text":"{\"url\":\"http://127.0.0.1:1\"}"}]}}}'
 echo
 
 echo
-echo "+ done — SA2 promotion criterion demonstrated end to end"
+echo "+ checking everything against expectations"
+fail=0
+check() {
+  if [ "$1" = "$2" ]; then
+    echo "  ok: $3"
+  else
+    echo "  FAILED: expected $3 to be '$2', got '$1'" >&2
+    fail=1
+  fi
+}
+check "$NO_AUTH_STATUS" "401" "an unauthenticated tasks/send is denied with 401"
+check "$HAPPY_STATUS" "200" "an authorized tasks/send succeeds"
+rm -f /tmp/sa2-no-auth.json /tmp/sa2-happy.json
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "sa2-mesh-roundtrip: FAILED" >&2
+  exit 1
+fi
+
+echo
+echo "+ done — SA2 promotion criterion demonstrated end to end (registered, discoverable, reachable only with the CX_API_TOKEN)"

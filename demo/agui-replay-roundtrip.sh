@@ -24,6 +24,7 @@ WEB_PORT="${WEB_PORT:-8890}"
 SPRINT_ID="agui-demo/iter-1"
 RUN_ID="run-demo-1"
 TEXT="here is the artifact this node produced"
+API_TOKEN="demo-agui-token-abc123"
 
 rm -f "$DB_PATH"
 PIDS=()
@@ -42,29 +43,30 @@ DB_PATH="$DB_PATH" SPRINT_ID="$SPRINT_ID" RUN_ID="$RUN_ID" AGENT_ID="loom-build"
 
 echo
 echo "+ starting the real production web server (src/web/server.lex serve_loom) on :$WEB_PORT"
-( PORT="$WEB_PORT" DB_PATH="$DB_PATH" \
+( PORT="$WEB_PORT" DB_PATH="$DB_PATH" LOOM_API_TOKEN="$API_TOKEN" \
     lex run --allow-effects "$EFFECTS" \
     src/web/server.lex serve_loom ) &
 PIDS+=("$!")
 
 echo "+ waiting for the server"
 for i in $(seq 1 30); do
-  curl -s -o /dev/null "http://localhost:$WEB_PORT/api/companies" && break
+  curl -s -o /dev/null "http://localhost:$WEB_PORT/"  && break
   sleep 0.5
 done
 
 echo
-echo "+ GET /api/sprint-agui/<sprint_id> — should replay the recorded turn as real SSE frames"
+echo "+ GET /api/sprint-agui/<sprint_id>?token=... — should replay the recorded turn as real SSE frames"
+echo "  (query-param token, not a header: EventSource -- the standard way a browser consumes SSE -- can't set headers, lex-loom#190)"
 REPLAY_HEADERS=$(mktemp)
-REPLAY=$(curl -s -D "$REPLAY_HEADERS" "http://localhost:$WEB_PORT/api/sprint-agui/$SPRINT_ID")
+REPLAY=$(curl -s -D "$REPLAY_HEADERS" "http://localhost:$WEB_PORT/api/sprint-agui/$SPRINT_ID?token=$API_TOKEN")
 REPLAY_CONTENT_TYPE=$(grep -i "^content-type:" "$REPLAY_HEADERS" | tr -d '\r' | cut -d' ' -f2)
 rm -f "$REPLAY_HEADERS"
 echo "$REPLAY"
 echo "  content_type=$REPLAY_CONTENT_TYPE"
 
 echo
-echo "+ GET /api/sprint-agui/<unknown> — should cleanly report no events, not error out"
-UNKNOWN=$(curl -s "http://localhost:$WEB_PORT/api/sprint-agui/no-such-sprint")
+echo "+ GET /api/sprint-agui/<unknown>?token=... — should cleanly report no events, not error out"
+UNKNOWN=$(curl -s "http://localhost:$WEB_PORT/api/sprint-agui/no-such-sprint?token=$API_TOKEN")
 echo "$UNKNOWN"
 
 echo

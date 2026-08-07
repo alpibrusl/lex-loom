@@ -14,6 +14,8 @@ import "std.sql" as sql
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "../src/migrate" as migrate
 
 import "../src/identity" as identity
@@ -23,6 +25,7 @@ import "../src/cast" as cast
 # "sqlite::memory:" is one shared store per process — every test uses its own
 # agent/sprint ids to keep rows disjoint (same rule as test_ops.lex).
 fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

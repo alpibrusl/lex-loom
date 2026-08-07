@@ -24,6 +24,8 @@ import "std.time" as time
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "lex-orm/src/query" as ormq
 
 import "lex-trail/src/log" as tlog
@@ -41,6 +43,7 @@ import "../src/effects" as eff
 import "../src/actuation" as act
 
 fn open_db() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

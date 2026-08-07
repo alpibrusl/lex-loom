@@ -23,6 +23,8 @@ import "lex-llm/src/tool" as t
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "../src/migrate" as migrate
 
 import "../src/agent/runner" as runner
@@ -52,6 +54,7 @@ fn call_arg() -> jv.Json {
 # "sqlite::memory:" is one shared store per process, not one per open — so
 # every test uses its own agent id to keep its trace rows disjoint.
 fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

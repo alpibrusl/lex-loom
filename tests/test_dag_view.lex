@@ -18,6 +18,8 @@ import "std.crypto" as crypto
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "../src/migrate" as migrate
 
 import "../src/dag_view" as dagv
@@ -28,6 +30,7 @@ import "../src/dag_view" as dagv
 # same file with "UNIQUE constraint failed"). Every row id/sprint id below
 # gets a random suffix via uniq() so repeat runs never collide.
 fn fresh_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

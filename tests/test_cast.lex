@@ -24,6 +24,8 @@ import "std.crypto" as crypto
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "../src/migrate" as migrate
 
 import "../src/cast" as cast
@@ -36,6 +38,7 @@ import "../src/graph" as graph
 # enough on their own — every seeded agent_pool row uses a random suffix
 # (uniq()) so repeat runs of this same file never collide with leftover rows.
 fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

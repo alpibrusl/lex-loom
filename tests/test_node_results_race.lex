@@ -26,11 +26,14 @@ import "std.crypto" as crypto
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "../src/migrate" as migrate
 
 import "../src/transport" as tr
 
 fn fresh_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

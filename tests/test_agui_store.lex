@@ -12,6 +12,8 @@ import "std.io" as io
 
 import "lex-orm/src/connection" as conn
 
+import "std.fs" as fs
+
 import "lex-llm/src/delta" as d
 
 import "lex-llm/src/message" as msg
@@ -21,6 +23,7 @@ import "../src/migrate" as migrate
 import "../src/agui_store" as agui_store
 
 fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

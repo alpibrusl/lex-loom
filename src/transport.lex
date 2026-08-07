@@ -64,12 +64,17 @@ fn sprint_ns(sprint_id :: Str) -> Str {
 # to the SQLite hash (both crypto.sha256_str), so the two backends are
 # interchangeable by id — `lex` store tooling can read sprint artifacts, and
 # `vcs.ref_get(sprint_ns(id), node)` lists a sprint's outputs.
-fn mirror_vcs(sprint_id :: Str, node_id :: Str, content :: Str, hash :: Str) -> [vcs, fs_write, fs_read] Unit {
+#
+# Returns the failure reason instead of swallowing it (lex-loom#196) — a
+# missing/unwritable store is still not fatal to the put, but the caller now
+# has what it needs to make that failure visible rather than leaving the
+# audit trail silently incomplete with no way to discover it happened.
+fn mirror_vcs(sprint_id :: Str, node_id :: Str, content :: Str, hash :: Str) -> [vcs, fs_write, fs_read] Result[Unit, Str] {
   match vcs.put_blob(content) {
-    Err(_) => (),
-    Ok(_) => {
-      let __r := vcs.ref_set(sprint_ns(sprint_id), node_id, hash)
-      ()
+    Err(e) => Err(str.concat("put_blob: ", e)),
+    Ok(_) => match vcs.ref_set(sprint_ns(sprint_id), node_id, hash) {
+      Err(e) => Err(str.concat("ref_set: ", e)),
+      Ok(_) => Ok(()),
     },
   }
 }
@@ -79,6 +84,12 @@ fn mirror_vcs(sprint_id :: Str, node_id :: Str, content :: Str, hash :: Str) -> 
 # re-store of the same content idempotent (the first writer's sprint_id/node_id
 # metadata stays); the SHA is returned either way so callers get a stable ref.
 # M6.1c: also mirrored into the vcs blob store + branch-per-sprint ref.
+#
+# A mirror failure never fails the put (the SQLite row is still the source of
+# truth) but is now recorded as a queryable "loom.artifact.mirror_failed"
+# trace row (lex-loom#196) — previously this was `Err(_) => ()`, a
+# disk-full/permissions/wrong-path failure across an entire sprint left
+# zero trace anywhere that the mirror was incomplete.
 fn artifact_put(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: Str) -> [sql, fs_write, fs_read, time, random, crypto, vcs] Result[Str, Str] {
   let hash := crypto.sha256_str(content)
   let now := time.now_str()
@@ -86,7 +97,10 @@ fn artifact_put(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, content :: 
   match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => {
-      let __m := mirror_vcs(sprint_id, node_id, content, hash)
+      let __m := match mirror_vcs(sprint_id, node_id, content, hash) {
+        Ok(_) => (),
+        Err(reason) => trail(db, sprint_id, "loom.artifact.mirror_failed", jv.stringify(JObj([("node_id", JStr(node_id)), ("hash", JStr(hash)), ("reason", JStr(reason))]))),
+      }
       Ok(hash)
     },
   }

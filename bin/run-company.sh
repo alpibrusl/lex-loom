@@ -21,13 +21,19 @@
 # mid-build with no code defect involved.
 #
 # EXEC_MODE=queue by default (#93): every sprint node runs via lex-jobs
-# instead of in-process, executed by WORKER_COUNT (default 2) separate
+# instead of in-process, executed by WORKER_COUNT (default 1) separate
 # `worker.lex::run_worker` processes this script launches, monitors, and
 # tears down on exit — so a company's long-running, unattended build phase
 # survives an individual worker crashing (reclaim_stale requeues its
 # orphaned job for another worker) instead of taking the whole run down
 # with it. Set EXEC_MODE=inline to go back to the old single-process
 # in-process fan-out (no workers launched).
+#
+# WORKER_COUNT > 1 is refused (lex-loom#197): the vendored lex-jobs v0.1
+# README states plainly "v1 is safe with a single worker per queue" —
+# multi-worker safety needs SELECT...FOR UPDATE SKIP LOCKED, tracked as a
+# v2 follow-up that hasn't shipped. Don't raise this without confirming
+# lex-jobs actually has that fix.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -47,7 +53,7 @@ fi
 : "${DB_PATH:=company-${COMPANY_ID}.db}"
 : "${GOAL:=Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.}"
 : "${EXEC_MODE:=queue}"
-: "${WORKER_COUNT:=2}"
+: "${WORKER_COUNT:=1}"
 : "${POLL_MS:=500}"
 : "${RECLAIM_LEASE_SECONDS:=300}"
 # Optional, read-only (#160): a human-configured endpoint returning
@@ -78,6 +84,14 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if [ "$EXEC_MODE" = "queue" ] && [ "$WORKER_COUNT" -gt 1 ]; then
+  echo "[run-company] FATAL: WORKER_COUNT=$WORKER_COUNT with EXEC_MODE=queue — refusing to start (lex-loom#197)." >&2
+  echo "[run-company]   lex-jobs v0.1's own README: \"v1 is safe with a single worker per queue\" — multi-worker" >&2
+  echo "[run-company]   safety needs SELECT...FOR UPDATE SKIP LOCKED, a v2 follow-up that hasn't shipped yet." >&2
+  echo "[run-company]   Set WORKER_COUNT=1, or use EXEC_MODE=inline (no workers, in-process fan-out)." >&2
+  exit 1
+fi
 
 if [ "$EXEC_MODE" = "queue" ]; then
   echo "[run-company] EXEC_MODE=queue: launching $WORKER_COUNT worker process(es), logs in $WORKER_LOG_DIR"

@@ -1,9 +1,16 @@
 # worker.lex — durable-queue node worker for M5 distributed execution.
 #
 # Pulls node-jobs from the "loom:node" queue and executes them.
-# Multiple worker processes can run concurrently against the same DB
-# (SQLite: single worker safe; Postgres: use FOR UPDATE SKIP LOCKED
-# once lex-jobs v2 ships that fix).
+#
+# Multiple worker processes are NOT currently safe to run concurrently
+# against the same DB, on either backend (lex-loom#197) — the vendored
+# lex-jobs v0.1's own README states plainly "v1 is safe with a single
+# worker per queue"; multi-worker safety needs SELECT...FOR UPDATE SKIP
+# LOCKED, a v2 follow-up that hasn't shipped. bin/run-company.sh (the
+# one caller that decides how many worker processes to launch) refuses
+# to start with WORKER_COUNT > 1 for exactly this reason — this file
+# doesn't self-enforce it, since one worker process has no way to know
+# how many siblings are running against the same DB.
 #
 # execute_node_job builds a real orchestrator.SprintCfg from the job payload
 # and calls orchestrator.invoke_node_attempt directly — the SAME gate

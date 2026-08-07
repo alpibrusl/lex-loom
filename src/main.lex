@@ -463,13 +463,20 @@ fn sprint_dag_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   }
 }
 
-# ── attention queue: list + resolve (#89) ─────────────────────────────────────
+# ── attention queue: list + resolve (#89, decision-rights lex-loom#165) ──────
 # The `human <oracle>` gate lane (monetization_handoff and any other
 # human-gated node) pushes here and the node stays UNSEALED until a human
 # calls attention_resolve_cmd — nothing else in the system can advance it.
 #
+# RESOLVER_ID is required and is always recorded (audit: who actually
+# approved this). If the company has registered relationships.lex contacts
+# for this item's oracle, RESOLVER_ID must be one of them (authorization:
+# only the accountable contact, not anyone with CLI/DB access) — a company
+# with no contacts registered for that oracle stays fully open, same as
+# before this existed (see company.is_authorized_resolver).
+#
 #   lex run --allow-effects env,io,sql,fs_read,fs_write src/main.lex attention_list_cmd
-#   ATTENTION_ID=<id> VERDICT=approved|rejected REASON="..." \
+#   ATTENTION_ID=<id> VERDICT=approved|rejected REASON="..." RESOLVER_ID=jane-doe \
 #     lex run --allow-effects env,io,sql,fs_read,fs_write,vcs src/main.lex attention_resolve_cmd
 fn attention_list_cmd() -> [env, io, sql, fs_read, fs_write, vcs] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
@@ -500,27 +507,42 @@ fn attention_resolve_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
   let id := get_env("ATTENTION_ID", "")
   let verdict := get_env("VERDICT", "")
   let reason := get_env("REASON", "")
+  let resolver_id := get_env("RESOLVER_ID", "")
   if str.is_empty(id) {
     io.print("[loom] ATTENTION_ID is required")
   } else {
-    if verdict != "approved" {
-      if verdict != "rejected" {
-        io.print("[loom] VERDICT must be 'approved' or 'rejected'")
-      } else {
-        resolve_attention_cmd_run(db_path, id, verdict, reason)
-      }
+    if str.is_empty(resolver_id) {
+      io.print("[loom] RESOLVER_ID is required — who is resolving this must always be on the record")
     } else {
-      resolve_attention_cmd_run(db_path, id, verdict, reason)
+      if verdict != "approved" {
+        if verdict != "rejected" {
+          io.print("[loom] VERDICT must be 'approved' or 'rejected'")
+        } else {
+          resolve_attention_cmd_run(db_path, id, verdict, reason, resolver_id)
+        }
+      } else {
+        resolve_attention_cmd_run(db_path, id, verdict, reason, resolver_id)
+      }
     }
   }
 }
 
-fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :: Str) -> [env, io, sql, fs_write, time] Unit {
+fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [env, io, sql, fs_write, fs_read, time] Unit {
   match conn.open(db_path) {
     Err(_) => io.print("[loom] FATAL open db"),
-    Ok(db) => match tr.resolve_attention(db, id, verdict, reason) {
-      Err(e) => io.print(str.concat("[loom] resolve failed: ", e)),
-      Ok(_) => io.print(str.join(["[loom] ", id, " -> ", verdict], "")),
+    Ok(db) => match tr.get_attention(db, id) {
+      None => io.print(str.concat("[loom] no such attention item: ", id)),
+      Some(item) => {
+        let company_id := company.company_id_of_sprint(item.sprint_id)
+        if company.is_authorized_resolver(db, company_id, item.oracle, resolver_id) {
+          match tr.resolve_attention(db, id, verdict, reason, resolver_id) {
+            Err(e) => io.print(str.concat("[loom] resolve failed: ", e)),
+            Ok(_) => io.print(str.join(["[loom] ", id, " -> ", verdict, " (resolved_by=", resolver_id, ")"], "")),
+          }
+        } else {
+          io.print(str.join(["[loom] DENIED: ", resolver_id, " is not a registered contact for oracle '", item.oracle, "' on company '", company_id, "'"], ""))
+        }
+      },
     },
   }
 }

@@ -87,7 +87,7 @@ fn test_resolving_approved_removes_it_from_pending() -> [random, sql, fs_read, f
       let sprint_id := uniq("s")
       match tr.push_attention(db, sprint_id, "mh", "human founder", "founder", "hash123") {
         Err(m) => Err(str.concat("push_attention failed: ", m)),
-        Ok(id) => match tr.resolve_attention(db, id, "approved", "") {
+        Ok(id) => match tr.resolve_attention(db, id, "approved", "", "jane-doe") {
           Err(m) => Err(str.concat("resolve_attention failed: ", m)),
           Ok(_) => {
             let pending := tr.list_attention_pending(db)
@@ -109,7 +109,7 @@ fn test_resolving_rejected_records_the_reason() -> [random, sql, fs_read, fs_wri
       let sprint_id := uniq("s")
       match tr.push_attention(db, sprint_id, "mh", "human founder", "founder", "hash123") {
         Err(m) => Err(str.concat("push_attention failed: ", m)),
-        Ok(id) => match tr.resolve_attention(db, id, "rejected", "price is too low") {
+        Ok(id) => match tr.resolve_attention(db, id, "rejected", "price is too low", "jane-doe") {
           Err(m) => Err(str.concat("resolve_attention failed: ", m)),
           Ok(_) => {
             let pending := tr.list_attention_pending(db)
@@ -117,6 +117,29 @@ fn test_resolving_rejected_records_the_reason() -> [random, sql, fs_read, fs_wri
               None => Ok(()),
               Some(_) => Err("expected the rejected item to no longer be pending"),
             }
+          },
+        },
+      }
+    },
+  }
+}
+
+fn test_resolve_records_who_resolved_it() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let sprint_id := uniq("s")
+      match tr.push_attention(db, sprint_id, "mh", "human founder", "founder", "hash123") {
+        Err(m) => Err(str.concat("push_attention failed: ", m)),
+        Ok(id) => match tr.resolve_attention(db, id, "approved", "", "jane-doe") {
+          Err(m) => Err(str.concat("resolve_attention failed: ", m)),
+          Ok(_) => match tr.get_attention(db, id) {
+            None => Err("expected get_attention to find the resolved row"),
+            Some(row) => if row.resolved_by == "jane-doe" {
+              Ok(())
+            } else {
+              Err(str.concat("expected resolved_by='jane-doe', got ", row.resolved_by))
+            },
           },
         },
       }
@@ -151,7 +174,7 @@ fn test_two_pending_items_from_different_sprints_both_listed() -> [random, sql, 
 }
 
 fn suite() -> [random, sql, fs_read, fs_write, time, crypto] List[Result[Unit, Str]] {
-  [test_pushed_item_appears_as_pending(), test_resolving_approved_removes_it_from_pending(), test_resolving_rejected_records_the_reason(), test_two_pending_items_from_different_sprints_both_listed()]
+  [test_pushed_item_appears_as_pending(), test_resolving_approved_removes_it_from_pending(), test_resolving_rejected_records_the_reason(), test_resolve_records_who_resolved_it(), test_two_pending_items_from_different_sprints_both_listed()]
 }
 
 fn run_all() -> [io, random, sql, fs_read, fs_write, time, crypto] Unit {

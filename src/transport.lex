@@ -313,7 +313,7 @@ fn make_worker_dispatch(db :: conn.ConnDb, invoke_fn :: (Str, Str, Str, Str, Str
 }
 
 # ── Attention queue ────────────────────────────────────────────────────────────
-type AttentionRow = { id :: Str, sprint_id :: Str, node_id :: Str, gate :: Str, oracle :: Str, artifact_hash :: Str, verdict :: Str, rejection_reason :: Str, created_at :: Str }
+type AttentionRow = { id :: Str, sprint_id :: Str, node_id :: Str, gate :: Str, oracle :: Str, artifact_hash :: Str, verdict :: Str, rejection_reason :: Str, created_at :: Str, resolved_by :: Str }
 
 fn push_attention(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, gate :: Str, oracle :: Str, artifact_hash :: Str) -> [sql, fs_write, time, random, crypto] Result[Str, Str] {
   let id := crypto.random_str_hex(16)
@@ -326,7 +326,7 @@ fn push_attention(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str, gate :: S
 }
 
 fn list_attention_pending(db :: conn.ConnDb) -> [sql, fs_read] List[AttentionRow] {
-  let q := "SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at FROM attention_queue WHERE verdict='pending' ORDER BY created_at ASC"
+  let q := "SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at, resolved_by FROM attention_queue WHERE verdict='pending' ORDER BY created_at ASC"
   let rows :: Result[List[AttentionRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => [],
@@ -334,9 +334,26 @@ fn list_attention_pending(db :: conn.ConnDb) -> [sql, fs_read] List[AttentionRow
   }
 }
 
-fn resolve_attention(db :: conn.ConnDb, id :: Str, verdict :: Str, reason :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+# Single-row lookup by id, any verdict — needed before resolving, to read the
+# row's sprint_id/oracle for the authorization check in company.lex
+# (lex-loom#165) before the resolve is allowed to happen.
+fn get_attention(db :: conn.ConnDb, id :: Str) -> [sql, fs_read] Option[AttentionRow] {
+  let q := str.join(["SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at, resolved_by FROM attention_queue WHERE id='", sq(id), "'"], "")
+  let rows :: Result[List[AttentionRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+# resolver_id (lex-loom#165) is recorded unconditionally as the audit trail
+# ("who actually approved this") — authorization (is this resolver actually
+# allowed to?) is a separate check the caller (main.lex's
+# resolve_attention_cmd_run) performs first, against company.lex's
+# relationships-backed oracle contacts, before ever calling this.
+fn resolve_attention(db :: conn.ConnDb, id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
-  let q := str.join(["UPDATE attention_queue SET verdict='", sq(verdict), "', rejection_reason='", sq(reason), "', resolved_at='", now, "' WHERE id='", sq(id), "'"], "")
+  let q := str.join(["UPDATE attention_queue SET verdict='", sq(verdict), "', rejection_reason='", sq(reason), "', resolved_at='", now, "', resolved_by='", sq(resolver_id), "' WHERE id='", sq(id), "'"], "")
   match sql.exec(db.handle, q, []) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),

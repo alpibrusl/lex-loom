@@ -442,6 +442,83 @@ fn test_resolve_oracle_contacts_empty_when_none_configured() -> [sql, fs_write, 
   }
 }
 
+fn test_company_id_of_sprint_extracts_prefix() -> Result[Unit, Str] {
+  if company.company_id_of_sprint("acme/iter-3") == "acme" {
+    Ok(())
+  } else {
+    Err(str.concat("expected 'acme', got ", company.company_id_of_sprint("acme/iter-3")))
+  }
+}
+
+fn test_is_authorized_resolver_true_when_no_contacts_registered() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("open-gate-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => if company.is_authorized_resolver(db, cid, "founder", "anyone-at-all") {
+            Ok(())
+          } else {
+            Err("expected an oracle with no registered contacts to authorize anyone (safe-default-when-unconfigured, same rule OA1's preset fallback uses)")
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_is_authorized_resolver_true_for_the_registered_contact() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("gated-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_contact(db, cid, "founder", "jane-doe", "Jane Doe", "mailto:jane@example.com") {
+            Err(e) => Err(e),
+            Ok(_) => if company.is_authorized_resolver(db, cid, "founder", "jane-doe") {
+              Ok(())
+            } else {
+              Err("expected the registered contact to be authorized")
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_is_authorized_resolver_false_for_an_unregistered_id_once_a_contact_exists() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
+  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
+  match conn.open("sqlite::memory:") {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let cid := rand_id("locked-co")
+        match company.save_company(db, { id: cid, goal: "g", model: "m", max_iterations: 1, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }) {
+          Err(e) => Err(e),
+          Ok(_) => match company.add_contact(db, cid, "founder", "jane-doe", "Jane Doe", "mailto:jane@example.com") {
+            Err(e) => Err(e),
+            Ok(_) => if company.is_authorized_resolver(db, cid, "founder", "some-random-person") {
+              Err("expected an unregistered id to be denied once a real contact is registered for this oracle")
+            } else {
+              Ok(())
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
   let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
   match conn.open("sqlite::memory:") {
@@ -2849,7 +2926,7 @@ fn test_operate_sweep_noop_on_empty_company() -> [sql, fs_write, time, crypto, r
 }
 
 fn suite() -> [env, sql, fs_read, fs_write, time, crypto, random, io, proc, net, concurrent, llm, vcs] List[Result[Unit, Str]] {
-  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_board_report_shows_soft_section_when_configured(), test_board_report_soft_section_defaults_not_configured(), test_list_companies_returns_seeded_ids(), test_save_company_registers_in_registry(), test_add_contact_and_resolve_returns_human(), test_add_pool_agent_contact_and_resolve_returns_pool_agent(), test_resolve_oracle_contacts_empty_when_none_configured(), test_contacts_section_lists_configured_contacts(), test_all_contacts_returns_oracle_and_resolved_contact(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_run_portfolio_advances_and_completes_a_sunset_track(), test_run_portfolio_empty_seed_advances_nothing(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_strategist_prompt_includes_product_signals(), test_product_signals_section_no_signal_yet(), test_product_signals_section_reads_latest_recorded_signal(), test_fetch_product_usage_reports_unreachable_cleanly(), test_strategist_prompt_includes_real_economics(), test_real_economics_section_no_revenue_configured(), test_real_economics_section_reads_latest_recorded_signal(), test_real_economics_section_reports_unreachable_without_inventing_zero(), test_check_and_record_revenue_noop_when_unset(), test_fetch_revenue_signal_reports_unreachable_cleanly(), test_strategist_prompt_includes_distribution(), test_distribution_section_no_content_published_yet(), test_distribution_section_sums_posts_and_views(), test_distribution_section_reports_unreachable(), test_fetch_distribution_signal_reports_unreachable_cleanly(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
+  [test_always_empty_never(), test_iter_bounds(), test_verdict_and_counts(), test_well_formed(), test_iteration_sprint_id(), test_company_roundtrip(), test_board_report_shows_soft_section_when_configured(), test_board_report_soft_section_defaults_not_configured(), test_list_companies_returns_seeded_ids(), test_save_company_registers_in_registry(), test_add_contact_and_resolve_returns_human(), test_add_pool_agent_contact_and_resolve_returns_pool_agent(), test_resolve_oracle_contacts_empty_when_none_configured(), test_company_id_of_sprint_extracts_prefix(), test_is_authorized_resolver_true_when_no_contacts_registered(), test_is_authorized_resolver_true_for_the_registered_contact(), test_is_authorized_resolver_false_for_an_unregistered_id_once_a_contact_exists(), test_contacts_section_lists_configured_contacts(), test_all_contacts_returns_oracle_and_resolved_contact(), test_persist_memory(), test_persist_brand_memory_writes_to_all_reader_agents(), test_persist_brand_memory_noop_when_no_brand_artifact(), test_strategist_continue(), test_strategist_revise(), test_strategist_revise_no_goal_degrades(), test_strategist_stop_and_garbage(), test_stage_advances_on_pmf(), test_stage_empty_condition_never_advances(), test_stage_growth_to_maintenance(), test_stage_sunset_from_any_stage(), test_stage_persistence_roundtrip(), test_is_dormant(), test_resume_point_fresh(), test_resume_point_after_iterations(), test_save_company_preserves_stage(), test_strategist_add(), test_strategist_add_no_goal_degrades(), test_backlog_roundtrip(), test_track_company_id(), test_portfolio_roundtrip(), test_add_track_idempotent(), test_run_portfolio_advances_and_completes_a_sunset_track(), test_run_portfolio_empty_seed_advances_nothing(), test_shipped_summary_empty(), test_shipped_summary_lists_successes_only(), test_board_notes_roundtrip(), test_board_report_contains_sections(), test_find_launch_url_from_artifact(), test_find_launch_url_none_for_cli(), test_find_deploy_url_from_artifact(), test_liveness_target_prefers_deploy_over_launch(), test_liveness_target_falls_back_to_launch(), test_liveness_target_none_for_cli(), test_check_remote_errors_no_host_is_clean(), test_check_remote_errors_no_service_name_is_clean(), test_find_deploy_service_name_from_artifact(), test_find_deploy_service_name_none_when_absent(), test_operate_section_includes_errors_when_present(), test_operate_section_omits_errors_section_when_none_recorded(), test_operate_signal_roundtrip(), test_board_report_shows_operate_section(), test_strategist_prompt_includes_operate_signals(), test_strategist_prompt_no_signals_yet(), test_strategist_prompt_includes_product_signals(), test_product_signals_section_no_signal_yet(), test_product_signals_section_reads_latest_recorded_signal(), test_fetch_product_usage_reports_unreachable_cleanly(), test_strategist_prompt_includes_real_economics(), test_real_economics_section_no_revenue_configured(), test_real_economics_section_reads_latest_recorded_signal(), test_real_economics_section_reports_unreachable_without_inventing_zero(), test_check_and_record_revenue_noop_when_unset(), test_fetch_revenue_signal_reports_unreachable_cleanly(), test_strategist_prompt_includes_distribution(), test_distribution_section_no_content_published_yet(), test_distribution_section_sums_posts_and_views(), test_distribution_section_reports_unreachable(), test_fetch_distribution_signal_reports_unreachable_cleanly(), test_real_usage_tokens_sums_multiple_calls(), test_real_usage_tokens_zero_when_none_recorded(), test_estimate_iteration_cost_prefers_real_tokens(), test_estimate_iteration_cost_falls_back_to_char_estimate(), test_record_strategist_cost_adds_per_iteration(), test_parse_dollars_to_cents(), test_spend_condition(), test_cost_ledger_roundtrip(), test_board_report_shows_spend(), test_should_consume_notes_continue_keeps_pending(), test_should_consume_notes_acted_on(), test_should_consume_notes_empty_is_noop(), test_resume_point_marks_running_as_interrupted(), test_resume_point_leaves_terminal_status_alone(), test_graduate_backlog_marks_previous_done(), test_json_escape_survives_a_realistic_llm_judge_verdict(), test_find_build_artifact_matches_by_role_not_node_name(), test_find_build_artifact_falls_back_without_a_graph_row(), test_find_build_artifact_none_when_neither_matches(), test_has_shipped_build_node_false_when_only_py_build_accepted(), test_has_shipped_build_node_true_when_a_build_node_was_accepted(), test_has_shipped_build_node_false_when_build_node_was_never_accepted(), test_build_status_section_wording_matches_shipped_state(), test_build_status_section_true_when_most_recent_iteration_shipped_build(), test_build_status_section_flags_drift_when_recent_iteration_dropped_lex(), test_strategist_reply_is_parseable_true_for_valid_json(), test_strategist_reply_is_parseable_false_for_garbage(), test_operate_section_no_controller_data_yet(), test_strategist_prompt_differs_by_controller_metrics(), test_board_report_omits_non_escalate_pending_contracts(), test_operate_sweep_diagnoses_and_proposes_contract(), test_operate_sweep_does_not_double_propose(), test_operate_sweep_noop_on_empty_company()]
 }
 
 fn run_all() -> [env, sql, fs_read, fs_write, time, crypto, random, io, proc, net, concurrent, llm, vcs] Unit {

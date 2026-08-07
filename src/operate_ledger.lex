@@ -222,6 +222,36 @@ fn trail_evidence_recorded(log :: tlog.Log, evidence :: Str, incident :: Str, pa
   }
 }
 
+fn trail_tier_changed(log :: tlog.Log, company_id :: Str, class_key :: Str, from_tier :: Str, to_tier :: Str, parent :: Option[Str]) -> [sql, time] Result[Str, Str] {
+  match tlog.append(log, "loom.operate.tier.changed", parent, str.join(["{\"company_id\":\"", company_id, "\",\"class_key\":\"", class_key, "\",\"from\":\"", from_tier, "\",\"to\":\"", to_tier, "\"}"], "")) {
+    Err(e) => Err(e),
+    Ok(evt) => Ok(evt.id),
+  }
+}
+
+# ── Tier state — the baseline a tier transition is diffed against ────────────
+type TierStateRow = { tier :: Str }
+
+fn tier_state(db :: conn.ConnDb, company_id :: Str, class_key :: Str) -> [sql] Option[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT tier FROM operate_tier_state WHERE company_id=? AND class_key=?", params: [PStr(company_id), PStr(class_key)] }, db.dialect)
+  let rows :: Result[List[TierStateRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => match list.head(rs) {
+      None => None,
+      Some(r) => Some(r.tier),
+    },
+  }
+}
+
+fn set_tier_state(db :: conn.ConnDb, company_id :: Str, class_key :: Str, tier :: Str, updated_at :: Str) -> [sql] Result[Unit, Str] {
+  let q := ormq.for_dialect({ sql: "INSERT INTO operate_tier_state (company_id, class_key, tier, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(company_id, class_key) DO UPDATE SET tier=excluded.tier, updated_at=excluded.updated_at", params: [PStr(company_id), PStr(class_key), PStr(tier), PStr(updated_at)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(e) => Err(e.message),
+    Ok(_) => Ok(()),
+  }
+}
+
 # Every trail log is `Option[tlog.Log]` at the call sites above — the
 # runner doesn't always carry one yet — and every caller (sensing.lex,
 # diagnosis.lex, effects.lex) repeated the same shape near-verbatim:

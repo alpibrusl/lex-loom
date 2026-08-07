@@ -1902,26 +1902,46 @@ fn liveness_target(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[{ url ::
 
 # Runs CTL4 diagnosis and CTL5 contract proposal + verification on
 # whatever CTL3 sensing has already opened/scored this round (#118).
-# Pure [sql, time] — no proc/env — so the live iteration loop and the
-# standalone cron monitor (both of which call `check_and_record_liveness`
+# Pure [sql, time, fs_write] — no proc/env — so the live iteration loop and
+# the standalone cron monitor (both of which call `check_and_record_liveness`
 # below) advance the same incident/effect state machine identically.
 # Before this, diagnosis and effects were tested library code with no
 # caller outside their own test files — incidents opened but nothing
 # ever diagnosed them or proposed a remediation contract.
-fn operate_sweep(db :: conn.ConnDb, company_id :: Str, idx :: Int, at :: Str) -> [sql, time] Result[Unit, Str] {
-  match diagnosis.diagnose_all(db, None, 60, sensing.default_policy().budget_cap_milli, at) {
+#
+# The trail opens on its OWN file (`<company_id>-operate-trail.db`, the
+# same convention `loom_trail.open_for_sprint` uses), NOT `tlog.from_conn(db)`
+# sharing the company's main connection: `db` already carries loom's own
+# `attestations` table (did:lex reputation, ddl_attestations in migrate.lex)
+# under the SAME name lex-trail's schema owns for a different purpose
+# (event attestations, incompatible columns) — `from_conn` against `db`
+# fails at `CREATE INDEX idx_attest_event ON attestations(event_id)` the
+# moment loom's migration has already run on that connection, found live
+# running this exact function. Every existing operate test already avoids
+# this by keeping its `tlog.open_memory()` handle separate from the
+# migrated `db` — this mirrors that, just persistent instead of ephemeral.
+#
+# Before this, every call below passed `None` for its log and every
+# `loom.operate.*` trail emit that function contains was structurally
+# dead in the live iteration loop: defined, tested, never actually
+# appended. Threading `Some(log)` here is what makes them real.
+fn operate_sweep(db :: conn.ConnDb, company_id :: Str, idx :: Int, at :: Str) -> [sql, time, fs_write] Result[Unit, Str] {
+  match tlog.open(str.concat(company_id, "-operate-trail.db")) {
     Err(e) => Err(e),
-    Ok(_) => match effects.propose_for_company(db, None, company_id, idx, at) {
+    Ok(log) => match diagnosis.diagnose_all(db, Some(log), 60, sensing.default_policy().budget_cap_milli, at) {
       Err(e) => Err(e),
-      Ok(_) => match effects.verify_pending(db, None, idx, at) {
+      Ok(_) => match effects.propose_for_company(db, Some(log), company_id, idx, at) {
         Err(e) => Err(e),
-        Ok(_) => Ok(()),
+        Ok(_) => match effects.verify_pending(db, Some(log), idx, at) {
+          Err(e) => Err(e),
+          Ok(_) => act.record_all_tier_transitions(db, Some(log), company_id, at),
+        },
       },
     },
   }
 }
 
-fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [env, sql, time, proc] Result[Unit, Str] {
+fn check_and_record_liveness(db :: conn.ConnDb, company_id :: Str, idx :: Int, sprint_id :: Str) -> [env, sql, time, proc, fs_write] Result[Unit, Str] {
   match liveness_target(db, sprint_id) {
     None => Ok(()),
     Some(target) => {

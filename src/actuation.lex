@@ -52,6 +52,8 @@ import "lex-ctl/src/tier" as ktier
 
 import "lex-ctl/src/stability" as kstab
 
+import "lex-trail/src/log" as tlog
+
 import "lex-orm/src/connection" as conn
 
 import "./operate_ledger" as ledger
@@ -178,6 +180,20 @@ fn precondition_holds(db :: conn.ConnDb, r :: ledger.EffectFullRow) -> [sql] Boo
 # collision fixed upstream in lex-ctl#2; this avoids reintroducing it.
 type Decision = Cleared(ktier.Tier) | Blocked(Str)
 
+fn tier_str(t :: ktier.Tier) -> Str
+  examples {
+    tier_str(Auto) => "auto",
+    tier_str(Propose) => "propose",
+    tier_str(Escalate) => "escalate"
+  }
+{
+  match t {
+    Auto => "auto",
+    Propose => "propose",
+    Escalate => "escalate",
+  }
+}
+
 fn decision_str(d :: Decision) -> Str
   examples {
     decision_str(Cleared(Auto)) => "auto",
@@ -185,9 +201,7 @@ fn decision_str(d :: Decision) -> Str
   }
 {
   match d {
-    Cleared(Auto) => "auto",
-    Cleared(Propose) => "propose",
-    Cleared(Escalate) => "escalate",
+    Cleared(t) => tier_str(t),
     Blocked(reason) => str_concat_blocked(reason),
   }
 }
@@ -239,5 +253,57 @@ fn dossier(db :: conn.ConnDb, incident :: Str) -> [sql] Str {
       str.join(["incident ", incident, ": diagnosed ", d.diagnosed_cause, " (", int.to_str(d.diagnosed_p_pct), "%), symptoms ", d.symptoms_json], "")
     },
   }
+}
+
+# ── Tier-change trail integration (#126) ─────────────────────────────────────
+# `real_tier` is recomputed fresh from history on every call — there is no
+# persisted "current tier" to diff against. `ledger.operate_tier_state`
+# stores the last-observed value per (company, class) so a REAL move can be
+# told apart from a steady-state read; only a real move is worth a trail
+# event, same discipline as every other operate.* kind (fired on a state
+# change, not on every sweep). A class's first-ever observation seeds the
+# state with no emission — there is no prior tier to report a transition
+# from.
+fn record_tier_transition(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, class_key :: Str, at :: Str) -> [sql, time] Result[Unit, Str] {
+  match real_tier(db, company_id, class_key) {
+    None => Ok(()),
+    Some(t) => {
+      let now_str := tier_str(t)
+      match ledger.tier_state(db, company_id, class_key) {
+        None => ledger.set_tier_state(db, company_id, class_key, now_str, at),
+        Some(prev) => if prev == now_str {
+          Ok(())
+        } else {
+          match ledger.set_tier_state(db, company_id, class_key, now_str, at) {
+            Err(e) => Err(e),
+            Ok(_) => match log {
+              None => Ok(()),
+              Some(l) => match ledger.trail_tier_changed(l, company_id, class_key, prev, now_str, None) {
+                Err(e) => Err(e),
+                Ok(_) => Ok(()),
+              },
+            },
+          }
+        },
+      }
+    },
+  }
+}
+
+fn record_tier_transitions(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, class_keys :: List[Str], at :: Str) -> [sql, time] Result[Unit, Str] {
+  match list.head(class_keys) {
+    None => Ok(()),
+    Some(k) => match record_tier_transition(db, log, company_id, k, at) {
+      Err(e) => Err(e),
+      Ok(_) => record_tier_transitions(db, log, company_id, list.tail(class_keys), at),
+    },
+  }
+}
+
+# Called once per operate sweep (`company.operate_sweep`) after
+# verification, so a disposition recorded THIS round has already updated
+# the history `real_tier` folds over.
+fn record_all_tier_transitions(db :: conn.ConnDb, log :: Option[tlog.Log], company_id :: Str, at :: Str) -> [sql, time] Result[Unit, Str] {
+  record_tier_transitions(db, log, company_id, eff.known_class_keys(), at)
 }
 

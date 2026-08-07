@@ -445,15 +445,45 @@ fn handle_list_attention(db_path :: Str, _c :: ctx.Ctx) -> [io, time, crypto, ra
   }
 }
 
+# resolve_attention_authorized mirrors main.lex's resolve_attention_cmd_run
+# exactly (lex-loom#165): resolver_id is required and always recorded; if
+# the company registered a relationships.lex contact for this item's
+# oracle, only that contact's id is authorized (an unconfigured oracle
+# stays open — same safe-default-when-unconfigured rule as everywhere
+# else this pattern is used).
+fn resolve_attention_authorized(db :: conn.ConnDb, item_id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [sql, fs_write, fs_read, time] Result[Unit, Str] {
+  if str.is_empty(resolver_id) {
+    Err("resolver_id is required — who is resolving this must always be on the record")
+  } else {
+    match tr.get_attention(db, item_id) {
+      None => Err(str.concat("no such attention item: ", item_id)),
+      Some(item) => {
+        let company_id := company.company_id_of_sprint(item.sprint_id)
+        if company.is_authorized_resolver(db, company_id, item.oracle, resolver_id) {
+          tr.resolve_attention(db, item_id, verdict, reason, resolver_id)
+        } else {
+          Err(str.join(["DENIED: ", resolver_id, " is not a registered contact for oracle '", item.oracle, "' on company '", company_id, "'"], ""))
+        }
+      },
+    }
+  }
+}
+
 fn handle_approve_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing attention item id"),
-    Some(item_id) => match open_loom_db(db_path) {
-      Err(_) => resp.internal_error(),
-      Ok(db) => match tr.resolve_attention(db, item_id, "approved", "") {
-        Err(e) => resp.bad_request(e),
-        Ok(_) => resp.json(str.join(["{\"id\":", esc(item_id), ",\"verdict\":\"approved\"}"], "")),
-      },
+    Some(item_id) => {
+      let resolver_id := get_jv_str(match jv.parse(c.body) {
+        Ok(j) => j,
+        Err(_) => JObj([]),
+      }, "resolver_id")
+      match open_loom_db(db_path) {
+        Err(_) => resp.internal_error(),
+        Ok(db) => match resolve_attention_authorized(db, item_id, "approved", "", resolver_id) {
+          Err(e) => resp.bad_request(e),
+          Ok(_) => resp.json(str.join(["{\"id\":", esc(item_id), ",\"verdict\":\"approved\",\"resolved_by\":", esc(resolver_id), "}"], "")),
+        },
+      }
     },
   }
 }
@@ -462,15 +492,17 @@ fn handle_reject_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, r
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing attention item id"),
     Some(item_id) => {
-      let reason := get_jv_str(match jv.parse(c.body) {
+      let body_j := match jv.parse(c.body) {
         Ok(j) => j,
         Err(_) => JObj([]),
-      }, "reason")
+      }
+      let reason := get_jv_str(body_j, "reason")
+      let resolver_id := get_jv_str(body_j, "resolver_id")
       match open_loom_db(db_path) {
         Err(_) => resp.internal_error(),
-        Ok(db) => match tr.resolve_attention(db, item_id, "rejected", reason) {
+        Ok(db) => match resolve_attention_authorized(db, item_id, "rejected", reason, resolver_id) {
           Err(e) => resp.bad_request(e),
-          Ok(_) => resp.json(str.join(["{\"id\":", esc(item_id), ",\"verdict\":\"rejected\",\"reason\":", esc(reason), "}"], "")),
+          Ok(_) => resp.json(str.join(["{\"id\":", esc(item_id), ",\"verdict\":\"rejected\",\"reason\":", esc(reason), ",\"resolved_by\":", esc(resolver_id), "}"], "")),
         },
       }
     },

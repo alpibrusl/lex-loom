@@ -184,7 +184,11 @@ flag stays false — until a person actually resolves it:
 lex run --allow-effects env,io,sql,fs_read,fs_write,vcs src/main.lex attention_list_cmd
 
 # after actually creating the product and confirming it's live
-ATTENTION_ID=<id> VERDICT=approved REASON="created gumroad product, tested one purchase" \
+# RESOLVER_ID is required and always recorded (lex-loom#165) — if the
+# company has registered a relationships.lex contact for this oracle
+# (`add_contact_cmd`/`add_pool_contact_cmd`), only that contact's id is
+# authorized; an unconfigured oracle stays open to any RESOLVER_ID.
+ATTENTION_ID=<id> VERDICT=approved REASON="created gumroad product, tested one purchase" RESOLVER_ID=<your-registered-contact-id> \
   lex run --allow-effects env,io,sql,fs_read,fs_write,time src/main.lex attention_resolve_cmd
 ```
 

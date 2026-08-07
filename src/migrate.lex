@@ -74,7 +74,7 @@ fn ddl_agent_pool_idx() -> Str {
 # Attention queue — items awaiting human attestation (Judgeable-lane gates).
 # verdict: pending | approved | rejected
 fn ddl_attention_queue() -> Str {
-  "CREATE TABLE IF NOT EXISTS attention_queue (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, gate TEXT NOT NULL, oracle TEXT NOT NULL, artifact_hash TEXT NOT NULL DEFAULT '', verdict TEXT NOT NULL DEFAULT 'pending', rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '')"
+  "CREATE TABLE IF NOT EXISTS attention_queue (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, gate TEXT NOT NULL, oracle TEXT NOT NULL, artifact_hash TEXT NOT NULL DEFAULT '', verdict TEXT NOT NULL DEFAULT 'pending', rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '', resolved_by TEXT NOT NULL DEFAULT '')"
 }
 
 fn ddl_attention_queue_idx() -> Str {
@@ -271,6 +271,7 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __23 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_roles TEXT NOT NULL DEFAULT ''")
   let __24 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_settlement TEXT NOT NULL DEFAULT ''")
   let __25 := try_ddl(db, "ALTER TABLE companies ADD COLUMN policy_isolation TEXT NOT NULL DEFAULT ''")
+  let __26 := try_ddl(db, "ALTER TABLE attention_queue ADD COLUMN resolved_by TEXT NOT NULL DEFAULT ''")
   ()
 }
 

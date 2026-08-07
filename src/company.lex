@@ -223,6 +223,43 @@ fn contacts_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str 
   }
 }
 
+# `sprint_id` is always "{company_id}/iter-{n}" (see iteration_sprint_id
+# above) — the inverse, for callers that only have a sprint_id (like
+# attention_resolve_cmd_run) and need the company_id it belongs to.
+fn company_id_of_sprint(sprint_id :: Str) -> Str {
+  match list.head(str.split(sprint_id, "/")) {
+    Some(cid) => cid,
+    None => sprint_id,
+  }
+}
+
+# Decision-rights check for a `human <oracle>` gate resolution (lex-loom#165):
+# is `resolver_id` actually one of the contacts this company registered for
+# `oracle`? relationships.lex was, until now, purely advisory — "who's
+# accountable" for a human operator to read, nothing enforced. This is the
+# one enforcement point: attention_resolve_cmd_run (main.lex) calls this
+# before resolve_attention is allowed to run, so the answer to "can THIS
+# person approve THIS gate" is no longer "anyone with CLI/DB access."
+#
+# A company with NO contacts registered for this oracle authorizes anyone —
+# same safe-default-when-unconfigured rule OA1's preset fallback already
+# uses (manifests.lex: an unmapped role kind falls back to Demo, never
+# fail-closed on missing config). Registering a contact for an oracle is
+# what turns this into a real, enforced gate; until then it's unchanged
+# from today's fully-open behavior.
+fn is_authorized_resolver(db :: conn.ConnDb, company_id :: Str, oracle :: Str, resolver_id :: Str) -> [sql, fs_read] Bool {
+  match rel.peers_by_role(db, company_id, oracle) {
+    Err(_) => true,
+    Ok(rels) => if list.is_empty(rels) {
+      true
+    } else {
+      list.fold(rels, false, fn (found :: Bool, r :: rel.Relationship) -> Bool {
+        found or r.to_agent == resolver_id
+      })
+    },
+  }
+}
+
 fn load_company(db :: conn.ConnDb, company_id :: Str) -> [sql] Option[CompanyCfg] {
   let q := ormq.for_dialect({ sql: "SELECT id, goal, model, max_iterations, stop_when, pmf_when, maintenance_when, wake_when, soft_mesh_url, soft_org_id, soft_roles, soft_settlement, policy_isolation FROM companies WHERE id=?", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[CompanyRow], SqlError] := sql.query(db.handle, q.sql, q.params)

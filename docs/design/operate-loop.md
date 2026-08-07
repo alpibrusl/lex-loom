@@ -374,7 +374,13 @@ raw #85 signal history (consecutive unhealthy readings of one kind = one
 episode; the next healthy reading resolves it; re-runs are no-ops), and
 `operate_ledger.replay` reconstructs any incident's chain in time order.
 Trail kinds: `loom.operate.{incident.opened, incident.closed,
-action.executed, effect.contracted, effect.disposed, evidence.recorded}`.
+action.executed, effect.contracted, effect.disposed, evidence.recorded,
+tier.changed}`. `tier.changed` fires from `actuation.record_all_tier_transitions`
+(called once per sweep, after verification) whenever a class's measured
+tier actually moves from its last-recorded value in `operate_tier_state` —
+not on every sweep's read. `company.operate_sweep` opens the trail log via
+`tlog.from_conn` on the company's own connection (#126), so every kind
+above is appended for real in the live iteration loop, not only under test.
 
 The human read path is the board report (#82), extended to render exactly
 this: what the controller did, under what authority, on what evidence, what

@@ -436,8 +436,92 @@ fn test_dossier_renders_diagnosis() -> [sql, fs_write, concurrent, crypto, fs_re
   }
 }
 
+# End-to-end for #126's trail-integration gap: a class's first-ever tier
+# read seeds `operate_tier_state` silently (no event — there is no prior
+# tier to report a move FROM), a later disposition-driven promotion to
+# Auto emits exactly one `loom.operate.tier.changed` event, and a third
+# call with no new dispositions emits no further event — the trail
+# reflects state CHANGES, not every sweep.
+fn tier_changed_events(log :: tlog.Log) -> [sql] Result[List[Str], Str] {
+  match tlog.range(log, 0, 9999999999999) {
+    Err(e) => Err(e),
+    Ok(evts) => Ok(list.map(list.filter(evts, fn (e :: { id :: Str, kind :: Str, parent :: Option[Str], payload_json :: Str, ts_ms :: Int }) -> Bool {
+      e.kind == "loom.operate.tier.changed"
+    }), fn (e :: { id :: Str, kind :: Str, parent :: Option[Str], payload_json :: Str, ts_ms :: Int }) -> Str {
+      e.payload_json
+    })),
+  }
+}
+
+fn test_tier_promotion_emits_trail_event_once() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => match tlog.open_memory() {
+      Err(e) => Err(e),
+      Ok(log) => {
+        let cid := fresh_company("tiertrail")
+        match act.record_all_tier_transitions(db, Some(log), cid, "2026-02-06T00:00:00Z") {
+          Err(e) => Err(e),
+          Ok(_) => match ledger.tier_state(db, cid, "restart") {
+            None => Err("expected the first sweep to seed a tier state"),
+            Some(seeded) => if seeded != "propose" {
+              Err(str.concat("expected the class to seed at 'propose', got ", seeded))
+            } else {
+              match tier_changed_events(log) {
+                Err(e) => Err(e),
+                Ok(before) => if list.len(before) != 0 {
+                  Err("expected no trail event from the seeding sweep")
+                } else {
+                  match seed_materialised(db, cid, "restart", 30, 200000) {
+                    Err(e) => Err(e),
+                    Ok(_) => match act.record_all_tier_transitions(db, Some(log), cid, "2026-02-06T00:01:00Z") {
+                      Err(e) => Err(e),
+                      Ok(_) => match ledger.tier_state(db, cid, "restart") {
+                        None => Err("expected a tier state after promotion"),
+                        Some(promoted) => if promoted != "auto" {
+                          Err(str.concat("expected promotion to 'auto', got ", promoted))
+                        } else {
+                          match tier_changed_events(log) {
+                            Err(e) => Err(e),
+                            Ok(after_promo) => if list.len(after_promo) != 1 {
+                              Err(str.concat("expected exactly 1 tier.changed event, got ", int.to_str(list.len(after_promo))))
+                            } else {
+                              match list.head(after_promo) {
+                                None => Err("expected a payload"),
+                                Some(payload) => if str.contains(payload, "\"from\":\"propose\"") and str.contains(payload, "\"to\":\"auto\"") {
+                                  match act.record_all_tier_transitions(db, Some(log), cid, "2026-02-06T00:02:00Z") {
+                                    Err(e) => Err(e),
+                                    Ok(_) => match tier_changed_events(log) {
+                                      Err(e) => Err(e),
+                                      Ok(steady) => if list.len(steady) == 1 {
+                                        Ok(())
+                                      } else {
+                                        Err(str.concat("expected no NEW event on a steady-state sweep, count is now ", int.to_str(list.len(steady))))
+                                      },
+                                    },
+                                  }
+                                } else {
+                                  Err(str.concat("unexpected payload: ", payload))
+                                },
+                              }
+                            },
+                          }
+                        },
+                      },
+                    },
+                  }
+                },
+              }
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_compensatable_class_never_clears_to_auto(), test_class_with_real_record_reaches_auto(), test_circuit_breaker_trips_and_demotes(), test_sustained_failures_on_propose_ceiling_escalates(), test_sustained_failures_on_auto_ceiling_escalates(), test_tier_state_is_isolated_per_company(), test_dwell_lock_blocks_overlapping_action(), test_precondition_mismatch_blocks(), test_oscillation_detection(), test_dossier_renders_diagnosis()]
+  let results := [test_compensatable_class_never_clears_to_auto(), test_class_with_real_record_reaches_auto(), test_circuit_breaker_trips_and_demotes(), test_sustained_failures_on_propose_ceiling_escalates(), test_sustained_failures_on_auto_ceiling_escalates(), test_tier_state_is_isolated_per_company(), test_dwell_lock_blocks_overlapping_action(), test_precondition_mismatch_blocks(), test_oscillation_detection(), test_dossier_renders_diagnosis(), test_tier_promotion_emits_trail_event_once()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

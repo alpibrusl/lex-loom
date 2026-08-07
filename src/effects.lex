@@ -278,6 +278,17 @@ fn verify_pending(db :: conn.ConnDb, log :: Option[tlog.Log], now_idx :: Int, at
 # ── Promotion status — the CTL6 gate check ───────────────────────────────────
 type PromotionStatus = { class_key :: Str, samples :: Int, hit_rate_pct :: Int, ceiling :: ktier.Tier, promotable :: Bool }
 
+# Every class key the registry above knows about — the set
+# `actuation.record_all_tier_transitions` walks each sweep. Named once
+# here so it can't drift out of sync with `action_spec_by_class_key`.
+fn known_class_keys() -> List[Str]
+  examples {
+    known_class_keys() => ["restart", "scale", "rollback_release", "hold"]
+  }
+{
+  ["restart", "scale", "rollback_release", "hold"]
+}
+
 fn action_spec_by_class_key(class_key :: Str) -> Option[ActionSpec] {
   if class_key == "restart" {
     action_spec_for("server_down", "")

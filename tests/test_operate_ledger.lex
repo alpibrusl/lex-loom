@@ -400,8 +400,46 @@ fn test_company_hit_rate_trend_reflects_actual_windowing() -> [sql, fs_write, co
   }
 }
 
+# tier_state has no prior row for a fresh (company, class) pair, set_tier_state
+# upserts it, and a second set_tier_state with a different tier overwrites
+# rather than duplicating — the ON CONFLICT DO UPDATE the transition
+# detector in actuation.lex relies on to tell a real move from a
+# steady-state read.
+fn test_tier_state_roundtrips() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("tierstate")
+      match ledger.tier_state(db, cid, "restart") {
+        Some(t) => Err(str.concat("expected no prior state, got ", t)),
+        None => match ledger.set_tier_state(db, cid, "restart", "propose", "2026-01-01T00:00:01") {
+          Err(e) => Err(e),
+          Ok(_) => match ledger.tier_state(db, cid, "restart") {
+            None => Err("expected a state after set_tier_state"),
+            Some(t1) => if t1 != "propose" {
+              Err(str.concat("expected 'propose', got ", t1))
+            } else {
+              match ledger.set_tier_state(db, cid, "restart", "auto", "2026-01-01T00:00:02") {
+                Err(e) => Err(e),
+                Ok(_) => match ledger.tier_state(db, cid, "restart") {
+                  None => Err("expected a state after the second set_tier_state"),
+                  Some(t2) => if t2 == "auto" {
+                    Ok(())
+                  } else {
+                    Err(str.concat("expected upsert to overwrite to 'auto', got ", t2))
+                  },
+                },
+              }
+            },
+          },
+        },
+      }
+    },
+  }
+}
+
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_backfill_merges_concurrent_open_incidents(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company(), test_company_hit_rate_trend_reflects_actual_windowing()]
+  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_backfill_merges_concurrent_open_incidents(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company(), test_company_hit_rate_trend_reflects_actual_windowing(), test_tier_state_roundtrips()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

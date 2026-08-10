@@ -10,6 +10,10 @@ import "std.list" as list
 
 import "lex-jobs/src/jobs" as jobs
 
+import "lex-orm/src/connection" as conn
+
+import "lex-agent/src/memory" as mem
+
 fn ddl_sprint_graphs() -> Str {
   "CREATE TABLE IF NOT EXISTS sprint_graphs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, phase TEXT NOT NULL, graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
 }
@@ -114,14 +118,6 @@ fn ddl_rel_idx() -> Str {
 
 fn ddl_agent_state() -> Str {
   "CREATE TABLE IF NOT EXISTS agent_state (agent_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT NOT NULL)"
-}
-
-fn ddl_agent_memory() -> Str {
-  "CREATE TABLE IF NOT EXISTS agent_memory (id TEXT NOT NULL PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL DEFAULT '', content TEXT NOT NULL, ts TEXT NOT NULL)"
-}
-
-fn ddl_agent_memory_idx() -> Str {
-  "CREATE INDEX IF NOT EXISTS idx_mem_agent ON agent_memory(agent_id, kind)"
 }
 
 fn ddl_traces() -> Str {
@@ -292,13 +288,29 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
   }
 }
 
+# agent_memory's schema is owned by lex-agent/src/memory (lex-loom#206) —
+# it's the same table `agent/runner.lex` reads through `mem.recall_all`/
+# `mem.load_state` every step, so this repo no longer hand-declares a second,
+# driftable copy of its shape (a real gap: this repo's own copy had fallen
+# behind lex-agent's extended columns — mtype/importance/scope/superseded/
+# expires_at — silently breaking recall via `mem.recall_all`'s SELECT of
+# columns this table didn't have, swallowed by that fn's own `Err(_) => []`).
+# loom is SQLite-only (no Postgres path anywhere in this repo), so the
+# dialect is hardcoded rather than probed.
+fn mem_conndb(db :: Db) -> conn.ConnDb {
+  { dialect: DbSqlite(()), handle: db }
+}
+
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_agent_memory(), ddl_agent_memory_idx(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx()]) {
     Err(e) => Err(e),
-    Ok(_) => {
-      let __jobs := jobs.init_schema(db)
-      let __up := run_upgrades(db)
-      Ok(())
+    Ok(_) => match mem.init_schema(mem_conndb(db)) {
+      Err(e) => Err(e),
+      Ok(_) => {
+        let __jobs := jobs.init_schema(db)
+        let __up := run_upgrades(db)
+        Ok(())
+      },
     },
   }
 }

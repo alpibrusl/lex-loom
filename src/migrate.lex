@@ -12,7 +12,7 @@ import "lex-jobs/src/jobs" as jobs
 
 import "lex-orm/src/connection" as conn
 
-import "lex-agent/src/memory" as mem
+import "lex-memory/src/memory" as mem
 
 fn ddl_sprint_graphs() -> Str {
   "CREATE TABLE IF NOT EXISTS sprint_graphs (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, phase TEXT NOT NULL, graph_json TEXT NOT NULL, created_at TEXT NOT NULL)"
@@ -288,13 +288,15 @@ fn run_step(db :: Db, stmts :: List[Str]) -> [sql, fs_write] Result[Unit, Str] {
   }
 }
 
-# agent_memory's schema is owned by lex-agent/src/memory (lex-loom#206) —
-# it's the same table `agent/runner.lex` reads through `mem.recall_all`/
+# agent_memory's schema is owned by lex-memory/src/memory (lex-loom#206,
+# extracted from lex-agent/src/memory per alpibrusl/lex-memory#1/lex-loom#208)
+# — it's the same table `agent/runner.lex` reads through `mem.recall_all`/
 # `mem.load_state` every step, so this repo no longer hand-declares a second,
 # driftable copy of its shape (a real gap: this repo's own copy had fallen
-# behind lex-agent's extended columns — mtype/importance/scope/superseded/
-# expires_at — silently breaking recall via `mem.recall_all`'s SELECT of
-# columns this table didn't have, swallowed by that fn's own `Err(_) => []`).
+# behind the shared module's extended columns — mtype/importance/scope/
+# superseded/expires_at — silently breaking recall via `mem.recall_all`'s
+# SELECT of columns this table didn't have, swallowed by that fn's own
+# `Err(_) => []`).
 # loom is SQLite-only (no Postgres path anywhere in this repo), so the
 # dialect is hardcoded rather than probed.
 fn mem_conndb(db :: Db) -> conn.ConnDb {

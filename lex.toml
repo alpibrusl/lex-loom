@@ -20,3 +20,4 @@ lex-ctl         = { git = "https://github.com/alpibrusl/lex-ctl" }
 lex-log         = { git = "https://github.com/alpibrusl/lex-log" }
 lex-soft        = { git = "https://github.com/alpibrusl/lex-soft" }
 lex-ag-ui       = { git = "https://github.com/alpibrusl/lex-ag-ui" }
+lex-memory      = { git = "https://github.com/alpibrusl/lex-memory" }

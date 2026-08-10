@@ -18,7 +18,7 @@ import "std.fs" as fs
 
 import "lex-orm/src/query" as ormq
 
-import "lex-agent/src/memory" as mem
+import "lex-memory/src/memory" as mem
 
 import "../src/migrate" as migrate
 

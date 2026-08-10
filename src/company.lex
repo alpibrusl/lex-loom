@@ -49,7 +49,7 @@ import "./actuation" as act
 
 import "./soft_settlement" as soft_settlement
 
-import "lex-agent/src/memory" as mem
+import "lex-memory/src/memory" as mem
 
 import "./agent/relationships" as rel
 

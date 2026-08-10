@@ -56,7 +56,7 @@ import "lex-llm/src/provider" as prov
 
 import "lex-llm/src/providers" as providers
 
-import "lex-agent/src/memory" as mem
+import "lex-memory/src/memory" as mem
 
 import "lex-orm/src/connection" as conn
 

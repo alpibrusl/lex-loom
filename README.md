@@ -677,4 +677,10 @@ Agent runtime (runner, trace, state store, registry, A2A) is vendored directly i
 
 ---
 
+## License
+
+EUPL-1.2 — matches the rest of the lex ecosystem.
+
+---
+
 Built under the principles of [Trust Without Comprehension](https://lexlang.org/manifesto).

@@ -114,7 +114,7 @@ fn note_op_call(path :: Str, tool_name :: Str, ok :: Bool) -> [io] Unit {
 # [io, net, proc] row, so the record is a file append, not a traces write.
 fn wrap_tool(path :: Str, tl :: t.Tool) -> t.Tool {
   let inner := tl.execute
-  { name: tl.name, description: tl.description, params: tl.params, precondition: tl.precondition, execute: fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  { name: tl.name, description: tl.description, params: tl.params, precondition: tl.precondition, approval_scope: tl.approval_scope, execute: fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let out := inner(args)
     let ok := match out {
       Ok(_) => true,
@@ -713,7 +713,7 @@ fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
 # between-iteration call (e.g. the strategist) that has no sprint of its own.
 # Empty string means "don't record" (e.g. proc_cmd/a2a_url paths never touch
 # an LLM directly, so there is no usage to attribute).
-fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, policy_isolation :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env] Str {
+fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, policy_isolation :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env, approval] Str {
   let run_id := trace.new_run_id()
   let _t1 := trace.record(db, run_id, def.id, "received", msg_json)
   let answer := if str.len(def.a2a_url) > 0 {

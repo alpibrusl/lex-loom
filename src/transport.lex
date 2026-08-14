@@ -256,8 +256,8 @@ fn await_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: Lis
   }
 }
 
-fn make_worker_dispatch(db :: conn.ConnDb, invoke_fn :: (Str, Str, Str, Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] { accepted :: Bool, artifact :: Str, reason :: Str }) -> (Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
-  fn (handler :: Str, payload :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] jobs.WorkOutcome {
+fn make_worker_dispatch(db :: conn.ConnDb, invoke_fn :: (Str, Str, Str, Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] { accepted :: Bool, artifact :: Str, reason :: Str }) -> (Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] jobs.WorkOutcome {
+  fn (handler :: Str, payload :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] jobs.WorkOutcome {
     match handler {
       "invoke" => {
         let sprint_id := match jv.parse(payload) {

@@ -1,6 +1,6 @@
 # debug_model.lex — diagnose which Ollama models work with lex-llm's provider.
 #
-# Run: OLLAMA_MODEL=mistral-small:latest lex run --allow-effects env,io,net,llm,proc src/debug_model.lex check_model
+# Run: OLLAMA_MODEL=mistral-small:latest lex run --allow-effects env,io,net,llm,proc,approval src/debug_model.lex check_model
 
 import "std.io" as io
 
@@ -22,7 +22,7 @@ import "lex-llm/src/message" as msg
 
 import "lex-llm/src/delta" as d
 
-fn check_model() -> [env, io, net, llm, proc] Unit {
+fn check_model() -> [env, io, net, llm, proc, approval] Unit {
   let model_name := match env.get("OLLAMA_MODEL") {
     Some(m) => m,
     None => "gemma4:latest",

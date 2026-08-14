@@ -70,7 +70,7 @@ import "../roles" as roles
 # ── Skill: fetch_support_items ────────────────────────────────────────────────
 fn skill_fetch_support_items() -> srv.Skill {
   let params := { title: "FetchSupportItems", description: "Read items needing a human response from a company's live /loom/support endpoint", fields: [s.required_str("url", [])] }
-  { capability: cap.inbound("support.fetch_items", "GET `url` + \"/loom/support\" and return {items:[{id,text,status}]} or {error}. Read-only. Requires Authorization: Bearer <CX_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
+  { capability: cap.inbound("support.fetch_items", "GET `url` + \"/loom/support\" and return {items:[{id,text,status}]} or {error}. Read-only. Requires Authorization: Bearer <CX_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let url := str_field(msg_to_json(m), "url")
     if str.is_empty(url) {
       error_outcome("url is required")
@@ -139,8 +139,8 @@ fn is_authorized(c :: ctx.Ctx, expected_token :: Str) -> Bool {
 # content_a2a.lex's `gated_rpc_route` exactly, including sendSubscribe
 # support (this agent was already AG-UI-streamable via the plain
 # `agent_mount.mount()`'s auto-detection; gating must not regress that).
-fn gated_rpc_route(agent :: srv.AgentDef, expected_token :: Str) -> (ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
-  fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn gated_rpc_route(agent :: srv.AgentDef, expected_token :: Str) -> (ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     if is_authorized(c, expected_token) {
       let body_str := wbody.raw_body(c)
       if srv.is_subscribe_body(body_str) {
@@ -173,7 +173,7 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 # ── Entry point ───────────────────────────────────────────────────────────────
 # Run it:
 #   CX_API_TOKEN=<a real secret> \
-#   lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc \
+#   lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval \
 #     src/server/cx_a2a.lex serve_cx_a2a
 #
 # Env:
@@ -181,7 +181,7 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 #   BASE_URL      this agent's own public base URL  (default: http://localhost:<PORT>)
 #   CX_API_TOKEN  required — no default, no fallback. Unset refuses to
 #                 start rather than silently serving unauthenticated.
-fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc] Unit {
+fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Unit {
   let token := env_or("CX_API_TOKEN", "")
   if str.is_empty(token) {
     io.print("[cx-a2a] FATAL: CX_API_TOKEN is required — refusing to serve an unauthenticated fetch_support_items endpoint")
@@ -196,7 +196,7 @@ fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write
     let __p1 := io.print("=== lex-loom CX A2A server (token-gated) ===")
     let __p2 := io.print(str.concat("  port: ", int.to_str(port)))
     let __p3 := io.print(str.concat("  base: ", base_url))
-    net.serve_fn(port, fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] Response {
+    net.serve_fn(port, fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] Response {
       let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
       let rsp := router.dispatch(r, raw)
       { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }

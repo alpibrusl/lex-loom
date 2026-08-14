@@ -127,7 +127,7 @@ fn specs_for_role(all_specs :: List[dg.TightenedSpec], role :: Str) -> List[dg.T
 }
 
 # ── Core improvement ──────────────────────────────────────────────────────────
-fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[dg.TightenedSpec], lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Option[Str] {
+fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[dg.TightenedSpec], lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] Option[Str] {
   let current_opt := load_best_agent(db, role)
   let current_prompt := match current_opt {
     Some(a) => a.system_prompt,
@@ -165,7 +165,7 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
-fn run_improvement(db :: conn.ConnDb, sprint_id :: Str, lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] ImprovementResult {
+fn run_improvement(db :: conn.ConnDb, sprint_id :: Str, lesson :: Str, model :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] ImprovementResult {
   let specs := dg.load_tightened_specs(db, sprint_id)
   if list.is_empty(specs) {
     let __log := io.print("[loom/improver] no tightened specs — nothing to improve")
@@ -173,7 +173,7 @@ fn run_improvement(db :: conn.ConnDb, sprint_id :: Str, lesson :: Str, model :: 
   } else {
     let roles_to_improve := unique_roles(specs)
     let __log := io.print(str.join(["[loom/improver] improving ", int.to_str(list.len(roles_to_improve)), " role(s): ", str.join(roles_to_improve, ", ")], ""))
-    let results := list.map(roles_to_improve, fn (role :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Option[Str] {
+    let results := list.map(roles_to_improve, fn (role :: Str) -> [env, io, time, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] Option[Str] {
       improve_role(db, sprint_id, role, specs_for_role(specs, role), lesson, model)
     })
     let new_ids := list.fold(results, [], fn (acc :: List[Str], opt :: Option[Str]) -> List[Str] {

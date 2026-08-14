@@ -26,7 +26,7 @@ fn open_db(path :: Str) -> [sql, fs_write] Result[conn.ConnDb, Str] {
   }
 }
 
-fn demo_skip() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+fn demo_skip() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   match open_db("/tmp/demo-activate.db") {
     Err(e) => io.print(str.concat("FATAL: ", e)),
     Ok(db) => {

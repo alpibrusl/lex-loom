@@ -72,7 +72,7 @@ fn max_strategist_retries() -> Int {
   2
 }
 
-fn strategist_reply_with_retry(db :: conn.ConnDb, agent :: runner.AgentDef, prompt :: Str, cost_owner :: Str, attempt :: Int) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] Str {
+fn strategist_reply_with_retry(db :: conn.ConnDb, agent :: runner.AgentDef, prompt :: Str, cost_owner :: Str, attempt :: Int) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] Str {
   let reply := runner.step(db, agent, prompt, cost_owner, "")
   if company.strategist_reply_is_parseable(reply) {
     reply
@@ -86,7 +86,7 @@ fn strategist_reply_with_retry(db :: conn.ConnDb, agent :: runner.AgentDef, prom
   }
 }
 
-fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random] company.StrategistDecision {
+fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: Str, ctx :: company.IterCtx) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] company.StrategistDecision {
   let agent := roles.strategist_agent(ccfg.model)
   let shipped := company.shipped_summary(db, ccfg.id)
   let notes := company.pending_board_notes(db, ccfg.id)
@@ -131,7 +131,7 @@ fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sq
   }
 }
 
-fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
+fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let sprint_id := company.iteration_sprint_id(ccfg.id, k)
   let __carry := if k > 1 {
     let n := company.carry_specs_forward(db, str.concat(parent_sprint, "-next"), sprint_id)
@@ -275,7 +275,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
 # Launch (or refuse to launch) the next iteration given a resume point and the
 # goal it should run — shared by the fresh/dormant-woken path and the
 # resume-from-Sunset path so both respect max_iterations identically.
-fn proceed(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool, resume :: company.ResumePoint, goal :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
+fn proceed(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool, resume :: company.ResumePoint, goal :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   if resume.start_idx > ccfg.max_iterations {
     let __mp := io.print("[company] max_iterations already reached — nothing to do")
     { company_id: ccfg.id, iterations: resume.start_idx - 1, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "max_iterations" }
@@ -292,7 +292,7 @@ fn proceed(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve
 # UNLESS a backlog item is queued (#80) — the strategist's earlier "stop" meant
 # "this goal is done", not "the company is done"; a pending feature reactivates
 # it (reverting the stage to Growth, since PMF was already established).
-fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] CompanyRunResult {
+fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let __save := company.save_company(db, ccfg)
   let stage0 := company.load_stage(db, ccfg.id)
   let resume := company.resume_point(db, ccfg.id)
@@ -342,7 +342,7 @@ type TrackRunResult = { track_id :: Str, result :: CompanyRunResult }
 
 type PortfolioRunResult = { portfolio_id :: Str, tracks :: List[TrackRunResult] }
 
-fn run_one_track(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] TrackRunResult {
+fn run_one_track(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] TrackRunResult {
   let cid := company.track_company_id(portfolio_id, t.track_id)
   let ccfg := { id: cid, goal: t.goal, model: model, max_iterations: max_iterations, stop_when: "", pmf_when: "", maintenance_when: "", wake_when: "", soft_mesh_url: "", soft_org_id: "", soft_roles: "", soft_settlement: "", policy_isolation: "" }
   let __p := io.print(str.join(["[portfolio] track ", t.track_id, " -> ", cid], ""))
@@ -355,15 +355,15 @@ fn run_one_track(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :
   { track_id: t.track_id, result: res }
 }
 
-fn run_tracks(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, ts :: List[company.Track]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] List[TrackRunResult] {
-  list.map(ts, fn (t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] TrackRunResult {
+fn run_tracks(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, ts :: List[company.Track]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] List[TrackRunResult] {
+  list.map(ts, fn (t :: company.Track) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] TrackRunResult {
     run_one_track(db, portfolio_id, model, api_max, max_iterations, evolve, t)
   })
 }
 
 # Seed any tracks not already present (idempotent — see company.add_track),
 # then advance every currently-active track by one company-loop invocation.
-fn run_portfolio(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, seed :: List[(Str, Str)]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] PortfolioRunResult {
+fn run_portfolio(db :: conn.ConnDb, portfolio_id :: Str, model :: Str, api_max :: Int, max_iterations :: Int, evolve :: Bool, seed :: List[(Str, Str)]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] PortfolioRunResult {
   let __seed := list.map(seed, fn (p :: (Str, Str)) -> [sql, fs_write, time] Unit {
     match p {
       (track_id, goal) => {

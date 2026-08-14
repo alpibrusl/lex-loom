@@ -138,7 +138,11 @@ fn classify(gate :: Str) -> Lane {
     Formal
   } else {
     if str.starts_with(trimmed, "human ") {
-      let oracle := str.trim(str.slice(trimmed, 6, str.len(trimmed)))
+      let rest := str.trim(str.slice(trimmed, 6, str.len(trimmed)))
+      let oracle := match list.head(str.split(rest, " ")) {
+        None => rest,
+        Some(first) => first,
+      }
       if str.is_empty(oracle) {
         Testable
       } else {
@@ -147,6 +151,54 @@ fn classify(gate :: Str) -> Lane {
     } else {
       Testable
     }
+  }
+}
+
+# ── Blocking human gates (GOV1, lex-loom#221) ─────────────────────────────────
+# `human <oracle>` stays advisory (attest immediately, seal later — unchanged).
+# `human <oracle> blocking` PARKS the dependent subtree until the oracle
+# resolves the attention item; downstream work waits, independent tracks
+# continue. An optional trailing `<N>h` declares a timeout after which the
+# scheduler escalates the still-pending gate (it never auto-approves):
+#   human legal blocking        — block until resolved
+#   human legal blocking 48h    — block; escalate if still pending after 48h
+fn is_blocking(gate :: Str) -> Bool {
+  let trimmed := str.trim(gate)
+  if str.starts_with(trimmed, "human ") {
+    let toks := list.filter(str.split(trimmed, " "), fn (t :: Str) -> Bool {
+      not str.is_empty(str.trim(t))
+    })
+    match list.head(list.tail(list.tail(toks))) {
+      Some(t) => t == "blocking",
+      None => false,
+    }
+  } else {
+    false
+  }
+}
+
+# Declared escalation timeout in hours; 0 when none (or not a blocking gate).
+fn blocking_timeout_hours(gate :: Str) -> Int {
+  if is_blocking(gate) {
+    let toks := list.filter(str.split(str.trim(gate), " "), fn (t :: Str) -> Bool {
+      not str.is_empty(str.trim(t))
+    })
+    match list.head(list.tail(list.tail(list.tail(toks)))) {
+      None => 0,
+      Some(t) => match str.strip_suffix(t, "h") {
+        None => 0,
+        Some(n_str) => match str.to_int(n_str) {
+          None => 0,
+          Some(n) => if n > 0 {
+            n
+          } else {
+            0
+          },
+        },
+      },
+    }
+  } else {
+    0
   }
 }
 

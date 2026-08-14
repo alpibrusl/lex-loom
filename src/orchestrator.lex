@@ -61,7 +61,7 @@ type NodeOutcome = { node_id :: Str, attested :: Bool, sealed :: Bool, artifact 
 
 type PhaseResult = { phase :: graph.Phase, outcomes :: List[NodeOutcome], success :: Bool }
 
-type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, fully_sealed :: Bool, summary :: Str }
+type SprintResult = { sprint_id :: Str, phases :: List[PhaseResult], success :: Bool, fully_sealed :: Bool, summary :: Str, parked :: Bool }
 
 # trail_log: the per-sprint lex-trail log (#7). None when the trail DB
 # could not be opened; all emit_* helpers no-op in that case.
@@ -231,24 +231,84 @@ fn invoke_expand_node(n :: graph.Node, subtask :: Str, input :: Str, cfg :: Spri
     } else {
       "false"
     }, "}"], ""))
-    if child_result.success {
-      match tr.artifact_put(cfg.db, cfg.id, n.id, result_json) {
-        Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-        Ok(hash) => {
-          let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-          let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-          { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-        },
-      }
+    if child_result.parked {
+      let __tp := tr.trail(cfg.db, cfg.id, "node_parked", str.join(["{\"node\":\"", n.id, "\",\"child_sprint\":\"", child_id, "\",\"reason\":\"child sprint parked on a blocking gate\"}"], ""))
+      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["PARKED via child sprint ", child_id, " (blocking human gate inside)"], "") }
     } else {
-      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"child sprint failed\"}"], ""))
-      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, child_result.summary, 1)
-      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["child sprint failed: ", child_result.summary], "") }
+      if child_result.success {
+        match tr.artifact_put(cfg.db, cfg.id, n.id, result_json) {
+          Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+          Ok(hash) => {
+            let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+            let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+            { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+          },
+        }
+      } else {
+        let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"child sprint failed\"}"], ""))
+        let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, child_result.summary, 1)
+        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["child sprint failed: ", child_result.summary], "") }
+      }
     }
   }
 }
 
+# ── Blocking human gates (GOV1, lex-loom#221) ─────────────────────────────────
+# A `human <oracle> blocking` gate parks the node (and, via run_phase, its
+# dependent subtree) until the oracle resolves the attention item. Parked is
+# NOT failure: it rides NodeOutcome.reason with this marker so run_phase can
+# tell "waiting on the board" apart from "denied" without changing the
+# NodeOutcome shape every literal in this file constructs.
+fn parked_reason(oracle :: Str, attention_id :: Str) -> Str {
+  str.join(["PARKED awaiting oracle '", oracle, "' (attention ", attention_id, ")"], "")
+}
+
+fn is_parked_outcome(o :: NodeOutcome) -> Bool {
+  str.starts_with(o.reason, "PARKED ")
+}
+
+# The re-entry outcome for a blocking gate whose attention item already
+# exists: approved -> sealed with the human-attested artifact (the node is
+# NOT re-run and no duplicate item is pushed); rejected -> cancelled with the
+# board's reason on the trail (terminal, no retry — the board said no);
+# pending -> parked again (idempotent).
+fn resolved_gate_outcome(n :: graph.Node, cfg :: SprintCfg, item :: tr.AttentionRow) -> [sql, fs_write, time, random, crypto] NodeOutcome {
+  if item.verdict == "approved" {
+    let __ta := tr.trail(cfg.db, cfg.id, "node_gate_approved", str.join(["{\"node\":\"", n.id, "\",\"attention\":\"", item.id, "\",\"resolved_by\":\"", item.resolved_by, "\"}"], ""))
+    { node_id: n.id, attested: true, sealed: true, artifact: item.artifact_hash, reason: "" }
+  } else {
+    if item.verdict == "rejected" {
+      let __tc := tr.trail(cfg.db, cfg.id, "node_cancelled", str.join(["{\"node\":\"", n.id, "\",\"attention\":\"", item.id, "\",\"resolved_by\":\"", item.resolved_by, "\",\"reason\":\"", company.json_escape(item.rejection_reason), "\"}"], ""))
+      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["cancelled by ", item.resolved_by, ": ", item.rejection_reason], "") }
+    } else {
+      let __tp := tr.trail(cfg.db, cfg.id, "node_parked", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", item.oracle, "\",\"attention\":\"", item.id, "\"}"], ""))
+      { node_id: n.id, attested: false, sealed: false, artifact: item.artifact_hash, reason: parked_reason(item.oracle, item.id) }
+    }
+  }
+}
+
+# Before ever invoking the agent: a blocking gate node whose attention item
+# already exists (a re-entered parked sprint) resolves from the item alone —
+# no LLM call, no duplicate attention row.
+fn blocking_precheck(n :: graph.Node, cfg :: SprintCfg) -> [sql, fs_read, fs_write, time, random, crypto] Option[NodeOutcome] {
+  if gates.is_judgeable(n.gate) and gates.is_blocking(n.gate) {
+    match tr.attention_for_node(cfg.db, cfg.id, n.id) {
+      None => None,
+      Some(item) => Some(resolved_gate_outcome(n, cfg, item)),
+    }
+  } else {
+    None
+  }
+}
+
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
+  match blocking_precheck(n, cfg) {
+    Some(outcome) => outcome,
+    None => invoke_node_attempt_fresh(n, input, cfg, attempt, prior_denial, parent),
+  }
+}
+
+fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
     None => roles.for_role(n.role, cfg.model, runner.qa_evidence_path(cfg.id, n.id), cfg.id),
@@ -332,11 +392,16 @@ fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt 
               let oracle := gates.oracle_of(n.gate)
               match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
                 Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                Ok(hash) => {
-                  let __tq := tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash)
-                  let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
-                  let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                  { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+                Ok(hash) => match tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash) {
+                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("attention push failed: ", err) },
+                  Ok(attention_id) => if gates.is_blocking(n.gate) {
+                    let __tp := tr.trail(cfg.db, cfg.id, "node_parked", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"attention\":\"", attention_id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                    { node_id: n.id, attested: false, sealed: false, artifact: hash, reason: parked_reason(oracle, attention_id) }
+                  } else {
+                    let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+                    let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                    { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+                  },
                 },
               }
             } else {
@@ -685,16 +750,37 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
     Err(e) => { phase: p, outcomes: [], success: false },
     Ok(layers) => {
       let entry_parent := current_parent(cfg)
-      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str] } {
+      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent, parked: [] }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str] } {
         if not acc.success {
           acc
         } else {
-          let layer_result := run_layer(layer, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
-          let all_ok := list.fold(layer_result.outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
+          let blocked := graph.descendants(g, acc.parked)
+          let is_blocked := fn (id :: Str) -> Bool {
+            list.fold(blocked, false, fn (found :: Bool, b :: Str) -> Bool {
+              found or b == id
+            })
+          }
+          let to_run := list.filter(layer, fn (id :: Str) -> Bool {
+            not is_blocked(id)
+          })
+          let held_outcomes := list.map(list.filter(layer, is_blocked), fn (id :: Str) -> [sql, fs_write, time, random, crypto] NodeOutcome {
+            let __tp := tr.trail(cfg.db, cfg.id, "node_parked_downstream", str.join(["{\"node\":\"", id, "\"}"], ""))
+            { node_id: id, attested: false, sealed: false, artifact: "", reason: "PARKED downstream of a blocking human gate" }
+          })
+          let layer_result := run_layer(to_run, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
+          let combined := list.concat(layer_result.outcomes, held_outcomes)
+          let all_ok := list.fold(combined, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
             if not ok {
               false
             } else {
-              o.attested
+              o.attested or is_parked_outcome(o)
+            }
+          })
+          let new_parked := list.fold(combined, acc.parked, fn (ps :: List[Str], o :: NodeOutcome) -> List[Str] {
+            if is_parked_outcome(o) {
+              list.concat(ps, [o.node_id])
+            } else {
+              ps
             }
           })
           let next_ref := list.fold(layer_result.outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
@@ -708,7 +794,7 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
               ref
             }
           })
-          { outcomes: list.concat(acc.outcomes, layer_result.outcomes), last_ref: next_ref, cache: layer_result.cache, success: all_ok, parent: current_parent(cfg) }
+          { outcomes: list.concat(acc.outcomes, combined), last_ref: next_ref, cache: layer_result.cache, success: all_ok, parent: current_parent(cfg), parked: new_parked }
         }
       })
       { phase: p, outcomes: result.outcomes, success: result.success }
@@ -1038,7 +1124,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
   match design_dr {
     DesignFailed(reason) => {
       let __tf := tr.trail(cfg.db, cfg.id, "sprint_failed", str.join(["{\"reason\":\"", reason, "\"}"], ""))
-      { sprint_id: cfg.id, phases: [intake_result], success: false, fully_sealed: false, summary: str.join(["Sprint ", cfg.id, " failed in Design: ", reason], "") }
+      { sprint_id: cfg.id, phases: [intake_result], success: false, fully_sealed: false, summary: str.join(["Sprint ", cfg.id, " failed in Design: ", reason], ""), parked: false }
     },
     DesignOk(sprint_graph) => {
       let design_ref := intake_ref
@@ -1149,7 +1235,29 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }))
       })
       let __cup := cast.update_pool_from_sprint(cfg.db, roster, attested_ids)
-      { sprint_id: cfg.id, phases: all_phases, success: overall_ok, fully_sealed: fully_sealed, summary: summary }
+      let any_parked := list.fold(all_phases, false, fn (p_acc :: Bool, pr :: PhaseResult) -> Bool {
+        if p_acc {
+          true
+        } else {
+          list.fold(pr.outcomes, false, fn (o_acc :: Bool, o :: NodeOutcome) -> Bool {
+            o_acc or is_parked_outcome(o)
+          })
+        }
+      })
+      let __tpk := if any_parked {
+        tr.trail(cfg.db, cfg.id, "sprint_parked", "{\"parked\":true}")
+      } else {
+        ()
+      }
+      { sprint_id: cfg.id, phases: all_phases, success: if any_parked {
+        false
+      } else {
+        overall_ok
+      }, fully_sealed: fully_sealed, summary: if any_parked {
+        str.join(["Sprint ", cfg.id, " PARKED — awaiting a blocking human gate decision."], "")
+      } else {
+        summary
+      }, parked: any_parked }
     },
   }
 }

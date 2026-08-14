@@ -169,6 +169,43 @@ fn topo_step(g :: SprintGraph, remaining :: List[Str], acc :: List[List[Str]]) -
   }
 }
 
+# ── Descendants (GOV1, lex-loom#221) ─────────────────────────────────────────
+# Every node reachable from `roots` via edges (roots excluded unless reachable
+# from another root). What a blocking `human` gate parks: the gate node's
+# dependent subtree waits while independent tracks continue.
+fn descendants(g :: SprintGraph, roots :: List[Str]) -> List[Str]
+  examples {
+    descendants({ id: "g6", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "test", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "c", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }] }, ["a"]) => ["b"],
+    descendants({ id: "g7", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "test", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "c", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "c", handoff: "schema {}" }] }, ["a"]) => ["b", "c"],
+    descendants({ id: "g8", phase: Intake, nodes: [{ id: "a", role: "build", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }, []) => []
+  }
+{
+  descend_step(g, roots, [])
+}
+
+fn descend_step(g :: SprintGraph, frontier :: List[Str], seen :: List[Str]) -> List[Str] {
+  let next := list.fold(g.edges, [], fn (acc :: List[Str], e :: Edge) -> List[Str] {
+    if str_contains(frontier, e.from) {
+      if str_contains(seen, e.to) {
+        acc
+      } else {
+        if str_contains(acc, e.to) {
+          acc
+        } else {
+          list.concat(acc, [e.to])
+        }
+      }
+    } else {
+      acc
+    }
+  })
+  if list.is_empty(next) {
+    seen
+  } else {
+    descend_step(g, next, list.concat(seen, next))
+  }
+}
+
 # ── Public API ────────────────────────────────────────────────────────────────
 # Structural validation only — schema and spec content are checked by metaspec.
 fn validate(g :: SprintGraph) -> Result[Unit, Str]

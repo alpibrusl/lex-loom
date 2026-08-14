@@ -37,6 +37,8 @@ import "lex-schema/json_value" as jv
 
 import "lex-trail/src/log" as tlog
 
+import "./transport" as tr
+
 import "./operate_ledger" as oledger
 
 import "./sensing" as sensing
@@ -339,6 +341,15 @@ fn shipped_summary(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
 }
 
 # Highest iteration index recorded so far (0 if none).
+# Status of the most recent iteration ("" when none) — the scheduler's
+# parked-company detection (GOV1, lex-loom#221).
+fn latest_iteration_status(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
+  match last_iteration(load_iterations(db, company_id)) {
+    None => "",
+    Some(it) => it.status,
+  }
+}
+
 fn latest_iteration_idx(db :: conn.ConnDb, company_id :: Str) -> [sql] Int {
   list.fold(load_iterations(db, company_id), 0, fn (acc :: Int, it :: CompanyIteration) -> Int {
     if it.idx > acc {
@@ -1111,8 +1122,29 @@ fn resume_point(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write, time] R
       } else {
         ()
       }
-      { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal }
+      if it.status == "parked" {
+        { start_idx: it.idx, parent_sprint: it.parent_sprint_id, prev_ctx: prior_ctx(db, company_id, it.idx), last_goal: it.goal }
+      } else {
+        { start_idx: it.idx + 1, parent_sprint: it.sprint_id, prev_ctx: derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"), last_goal: it.goal }
+      }
     },
+  }
+}
+
+# The ctx a PARKED iteration originally entered with (GOV1, lex-loom#221):
+# re-entering the SAME iteration must see the same prior context, i.e. the
+# iteration before it — not the parked attempt's own half-finished state.
+fn prior_ctx(db :: conn.ConnDb, company_id :: Str, parked_idx :: Int) -> [sql] IterCtx {
+  let prev := list.fold(load_iterations(db, company_id), None, fn (acc :: Option[CompanyIteration], it :: CompanyIteration) -> Option[CompanyIteration] {
+    if it.idx == parked_idx - 1 {
+      Some(it)
+    } else {
+      acc
+    }
+  })
+  match prev {
+    None => { idx: 1, last_verdict: "", digest_summary: "", accepted_count: 0, bounced_count: 0, spend_cents: 0 },
+    Some(it) => derive_ctx(db, company_id, it.sprint_id, it.idx, it.status == "success"),
   }
 }
 
@@ -2323,6 +2355,27 @@ fn soft_section(cfg :: CompanyCfg) -> Str {
   }
 }
 
+# GOV1 (lex-loom#221): a parked company must be IMPOSSIBLE for the board to
+# miss — the whole company is waiting on them. Renders at the very top of the
+# report, above the mission; empty string when nothing is parked.
+fn parked_banner(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
+  if latest_iteration_status(db, company_id) == "parked" {
+    let idx := latest_iteration_idx(db, company_id)
+    let sprint_id := iteration_sprint_id(company_id, idx)
+    let pending := tr.attention_pending_for_sprint(db, sprint_id)
+    let items := list.map(pending, fn (item :: tr.AttentionRow) -> Str {
+      str.join(["  - node ", item.node_id, " awaits oracle '", item.oracle, "' since ", item.created_at, " (attention ", item.id, ")"], "")
+    })
+    str.join(["*** PARKED — BOARD ACTION REQUIRED ***\n", "Iteration ", int.to_str(idx), " is blocked on ", int.to_str(list.len(pending)), " unresolved gate(s):\n", str.join(items, "\n"), if list.is_empty(pending) {
+      "  (all gates resolved — the scheduler will resume this company on its next tick)"
+    } else {
+      ""
+    }, "\nResolve: ATTENTION_ID=<id> VERDICT=approved|rejected REASON=... RESOLVER_ID=<you> lex run ... src/main.lex attention_resolve_cmd\n\n"], "")
+  } else {
+    ""
+  }
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
@@ -2332,7 +2385,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", parked_banner(db, company_id), "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

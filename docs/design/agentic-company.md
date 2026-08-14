@@ -121,6 +121,19 @@ territory. Not autonomous by design.
 **Distribution roles.** Activate the four pending marketing roles (#14–#17) —
 they're already speced in the task backlog, just never built.
 
+**Heartbeat** *(landed since — HB1, #213)*. `src/scheduler.lex` +
+`bin/loom-scheduler.sh`: a long-lived daemon that owns every company in
+`$LOOM_WORKSPACE` — per tick it classifies each company from its own DB
+(run / dormant / stopped / sunset / max_iterations, trail-recorded as
+`scheduler_decision`), starts at most `MAX_RUNS_PER_TICK` runs through the
+same `run_company` path a manual invocation uses, and gives every company it
+did NOT run the between-run revenue/liveness monitor sweep so a dormant
+company's `wake_when` has fresh signals to fire against. A company stopped by
+`stop_when` is never resurrected autonomously — only a pending board note
+runs it once more. All scheduler state lives in the company DBs, so
+kill/restart is always safe. This closes "nothing ever wakes a dormant
+company"; event-driven wakes are HB2 (#214), true concurrency HB3 (#215).
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

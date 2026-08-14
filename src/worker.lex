@@ -24,7 +24,7 @@
 # second, drifted reimplementation.
 #
 # Usage (one worker process):
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
 #     src/worker.lex run_worker
 #
 # Environment:
@@ -100,7 +100,7 @@ fn default_api_calls_max() -> Int {
 # bounce/possible-retire on denial) rather than waiting for a whole-sprint
 # batch update, since a queue-driven sprint has no single synchronous
 # "sprint completed" moment to batch at.
-fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] jobs.WorkOutcome {
+fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] jobs.WorkOutcome {
   match jv.parse(payload) {
     Err(_) => Fail("invalid JSON payload"),
     Ok(j) => {
@@ -222,7 +222,7 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider, lease_seconds :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider, lease_seconds :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   match jobs.try_claim(db.handle, queue) {
     Err(e) => io.print(str.concat("[loom/worker] claim error: ", e)),
     Ok(None) => {
@@ -250,7 +250,7 @@ fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, prov
   }
 }
 
-fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let model := get_env("MODEL", "claude-haiku-4-5-20251001")
   let poll_ms := match str.to_int(get_env("POLL_MS", "500")) {

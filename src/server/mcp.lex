@@ -11,7 +11,7 @@
 #   sprint_digest  — fetch Digest artifacts
 #
 # Usage:
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
 #     src/server/mcp.lex run_mcp_server
 #
 # Environment:
@@ -44,7 +44,7 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
   }
 }
 
-fn run_mcp_server() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Unit {
+fn run_mcp_server() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let model := get_env("MODEL", "claude-haiku-4-5-20251001")
   let base_url := get_env("LOOM_BASE_URL", "http://localhost:9100")

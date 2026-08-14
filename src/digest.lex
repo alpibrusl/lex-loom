@@ -239,7 +239,7 @@ fn scribe_prompt(sprint_id :: Str, trail_text :: Str, next_sprint_id :: Str) -> 
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
-fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: conn.ConnDb) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] DigestResult {
+fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: conn.ConnDb) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] DigestResult {
   let trail_rows := load_trail(db, sprint_id)
   let trail_text := if list.is_empty(trail_rows) {
     "(no trail events found)"

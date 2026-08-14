@@ -48,7 +48,7 @@ import "../tenant" as tenant
 # ── Skill: start ──────────────────────────────────────────────────────────────
 fn skill_start(db :: conn.ConnDb, model_default :: Str) -> srv.Skill {
   let params := { title: "StartSprint", description: "Start a new sprint", fields: [s.required_str("sprint_id", []), s.required_str("request", []), s.optional(s.required_str("model", []))] }
-  { capability: cap.inbound("start", "Start a new loom sprint given a project request.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
+  { capability: cap.inbound("start", "Start a new loom sprint given a project request.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let args := msg_to_json(m)
     let sprint_id := str_field(args, "sprint_id")
     let request := str_field(args, "request")
@@ -74,7 +74,7 @@ fn skill_start(db :: conn.ConnDb, model_default :: Str) -> srv.Skill {
 # ── Skill: status ─────────────────────────────────────────────────────────────
 fn skill_status(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintStatus", description: "Get sprint status", fields: [s.required_str("sprint_id", [])] }
-  { capability: cap.inbound("status", "Return the current state of a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
+  { capability: cap.inbound("status", "Return the current state of a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let args := msg_to_json(m)
     let sprint_id := str_field(args, "sprint_id")
     if str.is_empty(sprint_id) {
@@ -91,7 +91,7 @@ fn skill_status(db :: conn.ConnDb) -> srv.Skill {
 # ── Skill: trail ──────────────────────────────────────────────────────────────
 fn skill_trail(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintTrail", description: "Fetch sprint trail events", fields: [s.required_str("sprint_id", []), s.optional(s.required_int("limit", []))] }
-  { capability: cap.inbound("trail", "Return the last N trail events for a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
+  { capability: cap.inbound("trail", "Return the last N trail events for a sprint.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let args := msg_to_json(m)
     let sprint_id := str_field(args, "sprint_id")
     if str.is_empty(sprint_id) {
@@ -109,7 +109,7 @@ fn skill_trail(db :: conn.ConnDb) -> srv.Skill {
 # ── Skill: digest ─────────────────────────────────────────────────────────────
 fn skill_digest(db :: conn.ConnDb) -> srv.Skill {
   let params := { title: "SprintDigest", description: "Fetch Digest artifacts", fields: [s.required_str("sprint_id", [])] }
-  { capability: cap.inbound("digest", "Return Digest lessons and tightened spec count.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] srv.HandlerOutcome {
+  { capability: cap.inbound("digest", "Return Digest lessons and tightened spec count.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let args := msg_to_json(m)
     let sprint_id := str_field(args, "sprint_id")
     if str.is_empty(sprint_id) {

@@ -18,7 +18,7 @@
 # LAST pattern segment, so the action verb moved before the id instead of
 # after it, e.g. /api/sprints/:id/status -> /api/sprint-status/*id).
 # Run:
-#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
+#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs,approval \
 #     src/web/server.lex serve_loom
 #
 # Environment:
@@ -149,7 +149,7 @@ fn load_transitions_json(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] 
   }
 }
 
-fn handle_status(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_status(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing sprint id"),
     Some(sprint_id) => match open_loom_db(db_path) {
@@ -169,7 +169,7 @@ fn trail_row_to_json(r :: dg.TrailRow) -> Str {
   str.join(["{\"ts\":", esc(r.ts), ",\"event_kind\":", esc(r.event_kind), ",\"data_json\":", esc(r.data_json), "}"], "")
 }
 
-fn handle_trail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_trail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing sprint id"),
     Some(sprint_id) => match open_loom_db(db_path) {
@@ -199,7 +199,7 @@ fn agui_error_stream(msg :: Str) -> stream.StreamResponse {
   stream.event_stream(iter.from_list([str.join(["{\"error\":\"", msg, "\"}"], "")]))
 }
 
-fn handle_sprint_agui(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] stream.StreamResponse {
+fn handle_sprint_agui(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] stream.StreamResponse {
   match ctx.path_param(c, "id") {
     None => agui_error_stream("missing sprint id"),
     Some(sprint_id) => match open_loom_db(db_path) {
@@ -218,7 +218,7 @@ fn handle_sprint_agui(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random
 # ── /api/sprint-graph/*id ───────────────────────────────────────────────────
 type GraphRow = { graph_json :: Str }
 
-fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing sprint id"),
     Some(sprint_id) => match open_loom_db(db_path) {
@@ -244,7 +244,7 @@ fn handle_graph(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql,
 # problem every other sprint route below has.
 type ArtifactContentRow = { content :: Str }
 
-fn handle_artifact(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_artifact(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "hash") {
     None => resp.bad_request("missing hash"),
     Some(hash) => match open_loom_db(db_path) {
@@ -276,7 +276,7 @@ fn seed_flag(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
   }
 }
 
-fn handle_digest(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_digest(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing sprint id"),
     Some(sprint_id) => match open_loom_db(db_path) {
@@ -293,7 +293,7 @@ fn handle_digest(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql
 }
 
 # ── POST /api/sprints (carries [env]) ─────────────────────────────────────────
-fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] resp.Response {
+fn handle_launch_body(body :: Str, db_path :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] resp.Response {
   match jv.parse(body) {
     Err(_) => resp.bad_request("invalid JSON"),
     Ok(j) => match open_loom_db(db_path) {
@@ -338,7 +338,7 @@ fn agent_row_to_json(r :: AgentPoolRow) -> Str {
   str.join(["{\"id\":", esc(r.id), ",\"role\":", esc(r.role), ",\"model_name\":", esc(r.model_name), ",\"domain_tags\":", r.domain_tags_json, ",\"attestation_count\":", int.to_str(r.attestation_count), ",\"created_at\":", esc(r.created_at), "}"], "")
 }
 
-fn handle_list_agents(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_list_agents(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match open_loom_db(db_path) {
     Err(_) => resp.internal_error(),
     Ok(db) => {
@@ -355,7 +355,7 @@ fn handle_list_agents(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random
 # ── /api/agents/:id ───────────────────────────────────────────────────────────
 type AgentDetailRow = { id :: Str, role :: Str, model_name :: Str, domain_tags_json :: Str, attestation_count :: Int, system_prompt :: Str, created_at :: Str }
 
-fn handle_get_agent(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_get_agent(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "agent_id") {
     None => resp.bad_request("missing agent id"),
     Some(agent_id) => match open_loom_db(db_path) {
@@ -434,7 +434,7 @@ fn attention_row_to_json(r :: tr.AttentionRow) -> Str {
   str.join(["{\"id\":", esc(r.id), ",\"sprint_id\":", esc(r.sprint_id), ",\"node_id\":", esc(r.node_id), ",\"gate\":", esc(r.gate), ",\"oracle\":", esc(r.oracle), ",\"artifact_hash\":", esc(r.artifact_hash), ",\"verdict\":", esc(r.verdict), ",\"created_at\":", esc(r.created_at), "}"], "")
 }
 
-fn handle_list_attention(db_path :: Str, _c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_list_attention(db_path :: Str, _c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match open_loom_db(db_path) {
     Err(_) => resp.internal_error(),
     Ok(db) => {
@@ -469,7 +469,7 @@ fn resolve_attention_authorized(db :: conn.ConnDb, item_id :: Str, verdict :: St
   }
 }
 
-fn handle_approve_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_approve_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing attention item id"),
     Some(item_id) => {
@@ -488,7 +488,7 @@ fn handle_approve_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, 
   }
 }
 
-fn handle_reject_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_reject_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing attention item id"),
     Some(item_id) => {
@@ -595,7 +595,7 @@ fn handle_providers() -> [env] resp.Response {
 }
 
 # ── GET /api/series ───────────────────────────────────────────────────────────
-fn handle_series(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_series(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match open_loom_db(db_path) {
     Err(_) => resp.internal_error(),
     Ok(db) => {
@@ -640,7 +640,7 @@ fn company_list_row_json(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
   }
 }
 
-fn handle_list_companies(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_list_companies(db_path :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match open_loom_db(db_path) {
     Err(_) => resp.internal_error(),
     Ok(db) => {
@@ -670,7 +670,7 @@ fn live_status_of(readings :: List[Str]) -> Str {
   }
 }
 
-fn handle_company_detail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+fn handle_company_detail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing company id"),
     Some(company_id) => match open_loom_db(db_path) {
@@ -708,52 +708,52 @@ fn handle_company_detail(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, ran
 # ── Router (static + read-only JSON routes) ───────────────────────────────────
 fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r0 := router.new()
-  let r1 := router.route_effectful(r0, "GET", "/", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r1 := router.route_effectful(r0, "GET", "/", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     match io.read(str.concat(web_dir, "/dashboard.html")) {
       Ok(html) => resp.html(html),
       Err(_) => resp.not_found(),
     }
   })
-  let r2 := router.route_effectful(r1, "GET", "/api/sprint-status/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r2 := router.route_effectful(r1, "GET", "/api/sprint-status/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_status(db_path, c)
   })
-  let r3 := router.route_effectful(r2, "GET", "/api/sprint-trail/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r3 := router.route_effectful(r2, "GET", "/api/sprint-trail/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_trail(db_path, c)
   })
-  let r4 := router.route_effectful(r3, "GET", "/api/sprint-digest/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r4 := router.route_effectful(r3, "GET", "/api/sprint-digest/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_digest(db_path, c)
   })
-  let r5 := router.route_effectful(r4, "GET", "/api/sprint-graph/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r5 := router.route_effectful(r4, "GET", "/api/sprint-graph/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_graph(db_path, c)
   })
-  let r6 := router.route_effectful(r5, "GET", "/api/artifact/:hash", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r6 := router.route_effectful(r5, "GET", "/api/artifact/:hash", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_artifact(db_path, c)
   })
-  let r7 := router.route_effectful(r6, "GET", "/api/agents", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r7 := router.route_effectful(r6, "GET", "/api/agents", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_list_agents(db_path, c)
   })
-  let r8 := router.route_effectful(r7, "GET", "/api/agents/:agent_id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r8 := router.route_effectful(r7, "GET", "/api/agents/:agent_id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_get_agent(db_path, c)
   })
-  let r9 := router.route_effectful(r8, "GET", "/api/series", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r9 := router.route_effectful(r8, "GET", "/api/series", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_series(db_path)
   })
-  let r10 := router.route_effectful(r9, "GET", "/api/attention", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r10 := router.route_effectful(r9, "GET", "/api/attention", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_list_attention(db_path, c)
   })
-  let r11 := router.route_effectful(r10, "POST", "/api/attention/:id/approve", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r11 := router.route_effectful(r10, "POST", "/api/attention/:id/approve", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_approve_attention(db_path, c)
   })
-  let r12 := router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r12 := router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_reject_attention(db_path, c)
   })
-  let r13 := router.route_effectful(r12, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r13 := router.route_effectful(r12, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_list_companies(db_path)
   })
-  let r14 := router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] resp.Response {
+  let r14 := router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_company_detail(db_path, c)
   })
-  router.route_stream(r14, "GET", "/api/sprint-agui/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc] stream.StreamResponse {
+  router.route_stream(r14, "GET", "/api/sprint-agui/*id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] stream.StreamResponse {
     handle_sprint_agui(db_path, c)
   })
 }
@@ -797,7 +797,7 @@ fn unauthorized_response() -> Response {
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypto, random, concurrent, vcs] Unit {
+fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypto, random, concurrent, vcs, approval] Unit {
   let api_token := get_env_l("LOOM_API_TOKEN", "")
   if str.is_empty(api_token) {
     io.print("[lex-loom] FATAL: LOOM_API_TOKEN is required — refusing to serve an unauthenticated web API")
@@ -816,7 +816,7 @@ fn serve_loom() -> [env, net, io, llm, proc, sql, fs_read, fs_write, time, crypt
     }
     let r := build_loom_router(web_dir, db_path)
     let __p := io.print(str.join(["[lex-loom] web on :", int.to_str(port), "  db=", db_path], ""))
-    net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs] Response {
+    net.serve_fn(port, fn (req :: Request) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Response {
       let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
       if req.path == "/" {
         match router.dispatch_outcome(r, raw) {

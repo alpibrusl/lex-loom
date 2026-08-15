@@ -2382,7 +2382,7 @@ fn test_real_usage_tokens_zero_when_none_recorded() -> [sql, fs_write, time, cry
 # char-count proxy -- that's the entire point of #94 (the proxy undercounts
 # real spend). 500 tokens * 30 cents/1k = 15 cents, NOT whatever the (much
 # larger) artifact char count would estimate.
-fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, crypto, random, fs_read] Result[Unit, Str] {
   match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -2413,7 +2413,7 @@ fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, c
 # A sprint with real artifacts but NO recorded usage (e.g. every provider
 # involved doesn't report it) must fall back to the char-count proxy rather
 # than silently reporting zero cost.
-fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write, time, crypto, random, fs_read] Result[Unit, Str] {
   match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
@@ -2442,7 +2442,7 @@ fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write,
 # (strategist_cost_owner), not the bare company_id -- so a SECOND iteration's
 # strategist usage adds on top of the first's rather than being invisible to
 # real_usage_tokens (which sums only the exact owner id it's given).
-fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
+fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, crypto, random, fs_read] Result[Unit, Str] {
   match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {

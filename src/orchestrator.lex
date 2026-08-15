@@ -42,6 +42,8 @@ import "./lex_skill" as lexskill
 
 import "./cast" as cast
 
+import "./pricing" as pricing
+
 import "./diff" as diff
 
 import "./digest" as digest
@@ -199,12 +201,21 @@ fn company_of_sprint(sprint_id :: Str) -> Str {
   }
 }
 
+# The per-node usage owner (#94): runner.step calls made FOR this node are
+# recorded under "<sprint>#<node>", so envelope charging (below) and the
+# iteration ledger (company.estimate_iteration_cost_cents, which includes
+# these children) both price the node's REAL tokens.
+fn node_cost_owner(sprint_id :: Str, node_id :: Str) -> Str {
+  str.join([sprint_id, "#", node_id], "")
+}
+
 # GOV2 (lex-loom#222): every node dispatch consults the role's spend
 # envelope (and the company total) BEFORE the agent runs — an exhausted
 # envelope refuses the node (that subtree stops; unrelated roles continue)
-# and escalates once. Completed nodes are charged the same estimate the
-# cost ledger uses, atomically, so utilization is always the sum of real
-# charges and can never go negative.
+# and escalates once. Since #94, a completed node is charged its REAL
+# priced usage (the delta of usage recorded under its node owner across
+# this invocation, so phase re-runs never double-charge); the artifact-size
+# estimate remains only for calls whose provider reported no usage.
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   if node_active(n, cfg) {
     let cid := company_of_sprint(cfg.id)
@@ -216,11 +227,13 @@ fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option
         { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["BUDGET: spend envelope exhausted for role '", n.role, "' — refused at dispatch"], "") }
       },
       _ => {
+        let usage_before := pricing.usage_cost_cents(cfg.db, node_cost_owner(cfg.id, n.id), false)
         let outcome := match n.expand {
           Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
           None => invoke_node_attempt(n, input, cfg, 1, "", parent),
         }
-        let cost := budget.artifact_cost_cents(str.len(resolve_input(cfg.db, outcome.artifact)))
+        let usage_after := pricing.usage_cost_cents(cfg.db, node_cost_owner(cfg.id, n.id), false)
+        let cost := budget.charge_basis(usage_before, usage_after, str.len(resolve_input(cfg.db, outcome.artifact)))
         let __c := budget.charge(cfg.db, cid, n.role, cost)
         let __w1 := budget.warn_if_needed(cfg.db, cid, "total")
         let __w2 := budget.warn_if_needed(cfg.db, cid, str.concat("role:", n.role))
@@ -374,7 +387,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
         } else {
           ()
         }
-        let output := runner.step(cfg.db, agent_cfg, prompt, cfg.id, cfg.policy_isolation)
+        let output := runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
         if str.is_empty(output) {
           if attempt > max_node_retries() {
             { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
@@ -386,7 +399,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
           if gates.is_llm_judge(n.gate) {
             let criteria := gates.judge_criteria(n.gate)
             let judge_cfg := roles.judge_agent(cfg.model, criteria)
-            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), cfg.id, cfg.policy_isolation)
+            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
             let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
               true
             } else {
@@ -584,7 +597,7 @@ fn parse_assessment(resp :: Str) -> Assessment {
 fn assess_input(n :: graph.Node, input :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Assessment {
   match roles.assessor_agent(n.role, cfg.model) {
     assessor => {
-      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""), cfg.id, cfg.policy_isolation)
+      let resp := runner.step(cfg.db, assessor, str.join(["Your assigned input:\n", input], ""), node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
       parse_assessment(resp)
     },
   }

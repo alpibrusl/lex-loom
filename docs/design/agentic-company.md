@@ -74,9 +74,14 @@ Ordered roughly bottom-up. Every layer's proof is a fully offline demo in
    enforced at node dispatch (refuse, don't overdraft), 80% warnings,
    exhaustion escalations to the board; a finance role proposes envelope
    revisions from revenue, board-approved, with self-grading predictions
-   (`budget.lex`, `allocation.lex`). ⚠️ Charges come from an artifact-size
-   *estimate* — replacing it with real provider token usage is #94, the
-   highest-value correctness work remaining.
+   (`budget.lex`, `allocation.lex`). ✅ Charges are REAL since #94:
+   `pricing.lex` prices every recorded `llm_usage` reading per model
+   (input/output split, milli-cent rates, local models honestly free);
+   envelopes charge the priced delta of each node's own usage
+   (`<sprint>#<node>` owners), the iteration ledger books the same, and
+   the artifact-size estimate survives only as the fallback for providers
+   that report no usage. Queue-mode workers pass the same budget wall as
+   inline nodes (they used to bypass it entirely).
 9. **Lifecycle + dormancy** — ✅ stage FSM (C10) plus a real heartbeat:
    a scheduler daemon owns every company in a workspace (HB1), external
    events wake dormant companies within seconds through an append-only
@@ -213,10 +218,10 @@ work.
 
 ## What's next
 
-The post-#212 audit epic (#239) tracks the remaining work, in order: the
-truth pass and CI coverage of the offline demos (#240, #241), legacy
-consolidation — portfolio tracks, cron-era commands, default sprawl, test
-hygiene (#242) — and real provider-token cost accounting (#94), which
-upgrades every budget, allocation, and stop-condition decision from an
-estimate to the truth. Deploy automation (#188) and cx URL scoping (#194)
-are the live follow-ups beyond that.
+The post-#212 audit epic (#239) is nearly complete: the truth pass (#240),
+CI demo coverage (#241), legacy consolidation (#242), and real
+provider-token cost accounting (#94) have all landed. Remaining: E
+(re-scoping the delivered epics). Beyond the audit, the live follow-ups
+are deploy automation (#188), cx URL scoping (#194) — and the real
+milestone all of this serves: running a company end-to-end for days under
+the scheduler, governed purely through the board surface.

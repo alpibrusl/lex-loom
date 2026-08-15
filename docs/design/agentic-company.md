@@ -197,6 +197,27 @@ and the Strategist's prompt consumes that summary section — raw artifacts
 are reviewed by the manager, not re-read at the top. A flat company is
 untouched: no manager, no review, `done` stays final.
 
+**The CEO** *(landed since — ORG4, #219)*. Goal origination above the
+Strategist, on the HB1 heartbeat (scheduler tick), not per-sprint. Whether
+the CEO is even consulted is decided by a *mechanical* gate over grounded
+signals — ≥ 2 consecutive failed iterations AND a non-growing
+settlement-recorded revenue trend — so a healthy company never invokes it
+(no proposal churn, no spend), with hysteresis on top (one proposal per
+iteration index, never while one is pending). When consulted, the CEO —
+an ordinary cast node, role `ceo` — must answer in EXACTLY one JSON
+proposal object (`none` / `pivot` + new_goal / `sunset`); no prose
+fallback for a mission change. A proposal is **advisory until approved**:
+it parks before the board through the same attention queue as every other
+human decision (oracle `board`, evidence artifact attached, RESOLVER_ID
+recorded on resolve). An approved pivot revises `companies.goal` *and* the
+resume-goal pointer — the Strategist executes the new mission from the
+next iteration — and appends a `mission_ledger` row naming the proposal
+and the approver (row 1 is always the founding mission, by the founder).
+An approved sunset winds the company down; a rejection changes nothing but
+the trail. Explicit non-goal, enforced by construction: the CEO has no
+spend/payment authority anywhere in this path — it proposes, the board
+disposes.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

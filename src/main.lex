@@ -67,6 +67,8 @@ import "./transport" as tr
 
 import "./company" as company
 
+import "./org" as org
+
 import "./company_runner" as company_runner
 
 import "./identity" as identity
@@ -707,13 +709,27 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
   } else {
     evolve_flag != "false"
   }
+  let org_spec := get_env("ORG_EDGES", "")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
-    Ok(db) => {
-      let __seed := pool_seed.seed(db)
-      let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
-      let __res := company_runner.run_company(db, ccfg, api_max, evolve)
-      ()
+    Ok(db) => match org.parse_org_spec(org_spec) {
+      Err(m) => io.print(str.join(["[company] FATAL: refusing to start — invalid [org] declaration: ", m], "")),
+      Ok(org_edges) => {
+        let __org := if list.is_empty(org_edges) {
+          Ok(())
+        } else {
+          org.save_org(db, company_id, org_edges)
+        }
+        let __op := if list.is_empty(org_edges) {
+          ()
+        } else {
+          io.print(str.join(["[company] org chart loaded (", int.to_str(list.len(org_edges)), " reporting line(s))"], ""))
+        }
+        let __seed := pool_seed.seed(db)
+        let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
+        let __res := company_runner.run_company(db, ccfg, api_max, evolve)
+        ()
+      },
     },
   }
 }
@@ -782,7 +798,7 @@ fn board_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
 # Usage:
 #   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write \
 #     src/main.lex roster_grant_report_cmd
-fn roster_grant_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+fn roster_grant_report_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto] Unit {
   let db_path := resolve_db_url()
   let company_id := get_env("COMPANY_ID", "acme")
   match open_db(db_path) {

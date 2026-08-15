@@ -74,6 +74,16 @@ soft_settlement = "1" if get("soft", "settlement", False) else ""
 policy_isolation_table = get("policy", "isolation", {})
 policy_isolation = ",".join(f"{k}:{v}" for k, v in policy_isolation_table.items()) if isinstance(policy_isolation_table, dict) else ""
 
+# ORG1 (lex-loom#216): reporting lines. [org] maps each role to its manager:
+#   [org]
+#   build = "eng_manager"
+#   qa = "eng_manager"
+#   eng_manager = "founder"
+# Flattened to "child:parent,child:parent" for ORG_EDGES; run_company_cmd
+# validates (cycles, unknown leaf roles) and REFUSES to start on a bad org.
+org_table = m.get("org", {}) if isinstance(m.get("org", {}), dict) else {}
+org_edges = ",".join(f"{child}:{parent}" for child, parent in org_table.items())
+
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
@@ -82,6 +92,7 @@ out = {
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
     "CSOFT_SETTLEMENT": soft_settlement,
     "CPOLICY_ISOLATION": policy_isolation,
+    "CORG_EDGES": org_edges,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -202,7 +213,7 @@ fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
-  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... bin/run-company.sh"
+  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' bin/run-company.sh"
   exit 0
 fi
 
@@ -212,4 +223,5 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
+  ORG_EDGES="$CORG_EDGES" \
   bin/run-company.sh

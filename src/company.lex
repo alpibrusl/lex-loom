@@ -39,6 +39,8 @@ import "lex-trail/src/log" as tlog
 
 import "./transport" as tr
 
+import "./org" as org
+
 import "./operate_ledger" as oledger
 
 import "./sensing" as sensing
@@ -2376,6 +2378,12 @@ fn parked_banner(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
   }
 }
 
+# ORG1 (lex-loom#216): the reporting lines the board is governing, rendered
+# from the persisted org edges. "(flat)" when no [org] was declared.
+fn org_chart_section(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
+  org.org_chart(org.load_org(db, company_id))
+}
+
 fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
   match load_company(db, company_id) {
     None => str.concat("No company found with id: ", company_id),
@@ -2385,7 +2393,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", parked_banner(db, company_id), "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", parked_banner(db, company_id), "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Org chart (reporting lines):\n", org_chart_section(db, company_id), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

@@ -30,6 +30,10 @@ import "./graph" as graph
 
 import "./manifests" as manifests
 
+import "./org" as org
+
+import "./transport" as tr
+
 import "lex-orm/src/query" as ormq
 
 # ── Types ─────────────────────────────────────────────────────────────────────
@@ -149,22 +153,41 @@ fn empty_roster() -> Roster {
 }
 
 # ── Cast a single node ────────────────────────────────────────────────────────
-fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read] RosterEntry {
+fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read, fs_write, time, random, crypto] RosterEntry {
   let evidence_path := runner.qa_evidence_path(sprint_id, n.id)
   let candidates := load_pool_for_role(db, n.role)
   let fallback := default_config_for_role(n.role, model, evidence_path, sprint_id)
-  match best_agent(candidates, request) {
+  let entry := match best_agent(candidates, request) {
     None => { node_id: n.id, pool_agent_id: "", agent_config: fallback },
     Some(agent) => {
       let cfg := pool_agent_to_config(agent, fallback, model)
       { node_id: n.id, pool_agent_id: agent.id, agent_config: cfg }
     },
   }
+  let __auth := record_cast_authority(db, sprint_id, n, entry)
+  entry
+}
+
+# ORG1 (lex-loom#216): every casting records WHOSE authority it ran under —
+# the cast role's manager per the company org chart ("" for a flat company or
+# an unmanaged role). Consumed by ORG2/ORG3 (delegation, manager review);
+# today it makes the org chart load-bearing in the audit trail rather than
+# decorative.
+fn record_cast_authority(db :: conn.ConnDb, sprint_id :: Str, n :: graph.Node, entry :: RosterEntry) -> [sql, fs_read, fs_write, time, random, crypto] Unit {
+  let company_id := match list.head(str.split(sprint_id, "/")) {
+    Some(cid) => cid,
+    None => sprint_id,
+  }
+  let manager := match org.manager_of(org.load_org(db, company_id), n.role) {
+    None => "",
+    Some(m) => m,
+  }
+  tr.trail(db, sprint_id, "node_cast", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"agent\":\"", entry.pool_agent_id, "\",\"authority\":\"", manager, "\"}"], ""))
 }
 
 # ── Build full roster for a sprint graph ─────────────────────────────────────
-fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read] Roster {
-  list.map(g.nodes, fn (n :: graph.Node) -> [env, sql, fs_read] RosterEntry {
+fn select_roster(db :: conn.ConnDb, g :: graph.SprintGraph, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read, fs_write, time, random, crypto] Roster {
+  list.map(g.nodes, fn (n :: graph.Node) -> [env, sql, fs_read, fs_write, time, random, crypto] RosterEntry {
     cast_node(db, n, request, model, sprint_id)
   })
 }

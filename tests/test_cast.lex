@@ -106,7 +106,7 @@ fn test_score_agent_domain_match_beats_generalist_reputation() -> Result[Unit, S
 }
 
 # ── Roster assembly (DB) ──────────────────────────────────────────────────────
-fn test_cast_node_falls_back_when_pool_empty() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_cast_node_falls_back_when_pool_empty() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -120,7 +120,7 @@ fn test_cast_node_falls_back_when_pool_empty() -> [env, sql, fs_read, fs_write, 
   }
 }
 
-fn test_cast_node_picks_seeded_pool_agent() -> [env, random, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_cast_node_picks_seeded_pool_agent() -> [env, random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -137,7 +137,7 @@ fn test_cast_node_picks_seeded_pool_agent() -> [env, random, sql, fs_read, fs_wr
   }
 }
 
-fn test_select_roster_covers_every_node() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_select_roster_covers_every_node() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -275,7 +275,7 @@ fn test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected() -> [env,
 }
 
 # ── Grant reporting (OA1, lex-loom#182) ──────────────────────────────────────
-fn test_roster_grant_report_uses_default_preset_without_override() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_roster_grant_report_uses_default_preset_without_override() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -304,7 +304,7 @@ fn find_entry(entries :: List[cast.GrantReportEntry], node_id :: Str) -> Option[
   })
 }
 
-fn test_roster_grant_report_honors_policy_isolation_override() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_roster_grant_report_honors_policy_isolation_override() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -323,7 +323,7 @@ fn test_roster_grant_report_honors_policy_isolation_override() -> [env, sql, fs_
   }
 }
 
-fn test_roster_grant_report_defaults_unoverridden_role() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_roster_grant_report_defaults_unoverridden_role() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -351,7 +351,7 @@ fn test_grant_report_text_empty_roster() -> Result[Unit, Str] {
   }
 }
 
-fn test_grant_report_text_lists_every_node() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_grant_report_text_lists_every_node() -> [env, sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -371,11 +371,11 @@ fn test_grant_report_text_lists_every_node() -> [env, sql, fs_read, fs_write, ti
   }
 }
 
-fn suite() -> [env, random, sql, fs_read, fs_write, time] List[Result[Unit, Str]] {
+fn suite() -> [env, random, sql, fs_read, fs_write, time, crypto] List[Result[Unit, Str]] {
   [test_domain_bonus_matches_tag_in_request(), test_domain_bonus_no_match_is_zero(), test_score_agent_weights_reputation_above_attestation(), test_score_agent_domain_match_beats_generalist_reputation(), test_cast_node_falls_back_when_pool_empty(), test_cast_node_picks_seeded_pool_agent(), test_select_roster_covers_every_node(), test_increment_attestation_raises_count(), test_record_bounce_lowers_count_and_retires_after_three(), test_retired_agent_excluded_from_pool(), test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected(), test_roster_grant_report_uses_default_preset_without_override(), test_roster_grant_report_honors_policy_isolation_override(), test_roster_grant_report_defaults_unoverridden_role(), test_grant_report_text_empty_roster(), test_grant_report_text_lists_every_node()]
 }
 
-fn run_all() -> [io, env, random, sql, fs_read, fs_write, time] Unit {
+fn run_all() -> [io, env, random, sql, fs_read, fs_write, time, crypto] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> [io] Int {
     match r {
       Ok(_) => n,

@@ -1233,6 +1233,14 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
 # .system_prompt off the result). `sprint_id` scopes build/py_build/qa/py_qa/
 # security/launch/deploy's shared work dir (#156) — pass "" for callers that
 # never execute the returned agent's tools for real.
+# Every role `for_role` below can dispatch — the castable vocabulary an
+# [org] declaration's leaf roles are validated against (ORG1, lex-loom#216).
+# Keep in sync with the if-chain in `for_role`; ORG5 (#220) makes both
+# data-driven.
+fn known_kinds() -> List[Str] {
+  ["pm", "architect", "build", "py_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "fe_build", "launch", "deploy", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "cx", "research", "monetization_handoff", "scribe"]
+}
+
 fn for_role(role :: Str, model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {
   if role == "pm" {
     Some(pm(model))

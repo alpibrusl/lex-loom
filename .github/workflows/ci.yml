@@ -48,6 +48,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # SA2 launches the REAL lex-soft mesh server from a sibling checkout
+      # (LEX_SOFT_ROOT) — the demo proves loom registers against actual
+      # lex-soft, not a stub.
+      - uses: actions/checkout@v4
+        with:
+          repository: alpibrusl/lex-soft
+          path: lex-soft-checkout
       - name: Install Lex
         run: |
           set -euo pipefail
@@ -56,7 +63,9 @@ jobs:
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
       - name: Install deps
-        run: lex pkg install
+        run: |
+          lex pkg install
+          (cd lex-soft-checkout && lex pkg install)
       - name: "Demo: HB1 scheduler heartbeat"
         run: bash demo/hb1-scheduler-roundtrip.sh
       - name: "Demo: HB2 event-driven wakes"
@@ -66,4 +75,4 @@ jobs:
       - name: "Demo: GOV4 board decision surface"
         run: bash demo/gov4-board-surface-roundtrip.sh
       - name: "Demo: SA2 mesh registration + token-gated skill"
-        run: bash demo/sa2-mesh-roundtrip.sh
+        run: LEX_SOFT_ROOT="$GITHUB_WORKSPACE/lex-soft-checkout" bash demo/sa2-mesh-roundtrip.sh

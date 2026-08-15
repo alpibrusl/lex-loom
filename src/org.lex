@@ -18,7 +18,7 @@
 # Declared via company.toml's [org] table (bootstrap-company.sh flattens it
 # to the ORG_EDGES env var, "child:parent,child:parent,..."). Validation is
 # REFUSE, DON'T DOWNGRADE: a malformed spec, a duplicate child, a cycle, or
-# a leaf role outside roles.known_kinds() aborts the company launch loudly —
+# a leaf role outside role_kinds.known_kinds() aborts the company launch loudly —
 # it never runs with a half-loaded org. A company with no [org] is exactly
 # what it was before: flat, oracle-direct.
 
@@ -32,7 +32,7 @@ import "lex-orm/src/connection" as conn
 
 import "./agent/relationships" as rel
 
-import "./roles" as roles
+import "./role_kinds" as role_kinds
 
 type OrgEdge = { child :: Str, parent :: Str }
 
@@ -90,7 +90,7 @@ fn is_parent_somewhere(edges :: List[OrgEdge], role :: Str) -> Bool {
 }
 
 fn is_known_role(role :: Str) -> Bool {
-  list.fold(roles.known_kinds(), false, fn (found :: Bool, k :: Str) -> Bool {
+  list.fold(role_kinds.known_kinds(), false, fn (found :: Bool, k :: Str) -> Bool {
     found or k == role
   })
 }

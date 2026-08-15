@@ -160,6 +160,25 @@ walks the chain upward (`legal -> eng_manager -> founder`) before landing on
 the oracle, and `board_report` renders the chart. A company with no `[org]`
 is exactly what it was: flat, oracle-direct.
 
+**Delegation** *(landed since — ORG2, #217)*. A role hands a TYPED subtask
+to a direct report, under three hard rules. (1) *Structural gate*: writing
+an assignment requires the ORG1 `may_assign` edge, checked against the DB
+org chart at write time — never against anything the LLM said; refusals
+land on the trail (`delegation_refused`). (2) *Closed vocabulary*: a task
+is a `kind` from `delegation.known_kinds()` (`build_feature`, `write_tests`,
+`write_docs`, `review_artifact`) rendered through that kind's fixed prompt
+template — no free-form command synthesis. (3) *Normal execution*: an
+accepted assignment materializes as an ordinary sprint node
+(`company_runner.drain_assignments`, at the top of every iteration) — cast
+from the pool under the delegator's recorded authority, gated, attested,
+trail-recorded; the artifact lands back on the `assignments` row, and a
+failed one is `returned` with the ORG1 escalation chain on the trail. The
+`delegate` tool follows the runner's op-call pattern: its effect row is
+`[net, io, proc]` (no sql), so an agent can only *request* — the request
+file is flushed through the gated `offer` after the loop, which is where
+authorization lives. Managing roles (org-chart parents) get the tool
+injected automatically; leaf roles never see it.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

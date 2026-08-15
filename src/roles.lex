@@ -8,6 +8,8 @@
 # M2: system prompts are minimal; tools list is empty (LLM text output only).
 # M3: Architect gains graph-emit tool; roles gain lex-code worker tools.
 
+import "./role_kinds" as role_kinds
+
 import "std.str" as str
 
 import "std.env" as env
@@ -1235,10 +1237,11 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
 # never execute the returned agent's tools for real.
 # Every role `for_role` below can dispatch — the castable vocabulary an
 # [org] declaration's leaf roles are validated against (ORG1, lex-loom#216).
-# Keep in sync with the if-chain in `for_role`; ORG5 (#220) makes both
-# data-driven.
+# The list itself lives in role_kinds.lex (a leaf module) so org.lex and the
+# runner can read it without importing this file; this re-export keeps the
+# ORG1 API.
 fn known_kinds() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "fe_build", "launch", "deploy", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "cx", "research", "monetization_handoff", "scribe"]
+  role_kinds.known_kinds()
 }
 
 fn for_role(role :: Str, model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {

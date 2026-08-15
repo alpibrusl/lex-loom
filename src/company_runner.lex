@@ -34,6 +34,8 @@ import "./delegation" as delegation
 
 import "./manager" as manager
 
+import "./budget" as budget
+
 import "./org" as org
 
 type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: Str, stopped_by :: Str }
@@ -204,6 +206,17 @@ fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id ::
 }
 
 fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  match budget.check_scope(db, ccfg.id, "total") {
+    Exhausted => {
+      let __esc := budget.escalate_exhausted(db, ccfg.id, "total", "pm")
+      let __p := io.print(str.join(["[budget] ", ccfg.id, ": total spend envelope EXHAUSTED — refusing to start iteration ", int.to_str(k), " (no overdraft); escalated to the board"], ""))
+      { company_id: ccfg.id, iterations: k - 1, last_verdict: prev_ctx.last_verdict, stopped_by: "budget" }
+    },
+    _ => run_iterations_funded(db, ccfg, k, parent_sprint, api_max, prev_ctx, current_goal, evolve),
+  }
+}
+
+fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let sprint_id := company.iteration_sprint_id(ccfg.id, k)
   let __carry := if k > 1 {
     let n := company.carry_specs_forward(db, str.concat(parent_sprint, "-next"), sprint_id)

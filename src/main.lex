@@ -71,6 +71,8 @@ import "./org" as org
 
 import "./role_registry" as registry
 
+import "./budget" as budget
+
 import "./company_runner" as company_runner
 
 import "./identity" as identity
@@ -718,32 +720,43 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
       Err(m) => io.print(str.join(["[company] FATAL: refusing to start — invalid [org] declaration: ", m], "")),
       Ok(org_edges) => match registry.validate_packs(get_env("ROLE_PACKS", "")) {
         Err(m) => io.print(str.join(["[company] FATAL: refusing to start — invalid [roles].packs declaration: ", m], "")),
-        Ok(packs) => {
-          let __org := if list.is_empty(org_edges) {
-            Ok(())
-          } else {
-            org.save_org(db, company_id, org_edges)
-          }
-          let __op := if list.is_empty(org_edges) {
+        Ok(packs) => match budget.parse_envelope_spec(get_env("BUDGET_ENVELOPES", "")) {
+          Err(m) => io.print(str.join(["[company] FATAL: refusing to start — invalid [budget.envelopes] declaration: ", m], "")),
+          Ok(envelopes) => {
+            let __org := if list.is_empty(org_edges) {
+              Ok(())
+            } else {
+              org.save_org(db, company_id, org_edges)
+            }
+            let __op := if list.is_empty(org_edges) {
+              ()
+            } else {
+              io.print(str.join(["[company] org chart loaded (", int.to_str(list.len(org_edges)), " reporting line(s))"], ""))
+            }
+            let __seed := pool_seed.seed(db)
+            let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
+            let __save := company.save_company(db, ccfg)
+            let __packs := if list.is_empty(packs) {
+              Ok(())
+            } else {
+              registry.save_packs(db, company_id, packs)
+            }
+            let __pp := if list.is_empty(packs) {
+              ()
+            } else {
+              io.print(str.join(["[company] role packs staffed: core + ", str.join(packs, ", ")], ""))
+            }
+            let __envs := list.map(envelopes, fn (p :: (Str, Int)) -> [io, sql, fs_read, fs_write, time, random, crypto] Unit {
+              match p {
+                (scope, cents) => match budget.set_envelope(db, company_id, scope, cents, "founder") {
+                  Err(m) => io.print(str.concat("[budget] envelope not set: ", m)),
+                  Ok(_) => io.print(str.join(["[budget] envelope ", scope, ": ", int.to_str(cents), "c (declared at launch)"], "")),
+                },
+              }
+            })
+            let __res := company_runner.run_company(db, ccfg, api_max, evolve)
             ()
-          } else {
-            io.print(str.join(["[company] org chart loaded (", int.to_str(list.len(org_edges)), " reporting line(s))"], ""))
-          }
-          let __seed := pool_seed.seed(db)
-          let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
-          let __save := company.save_company(db, ccfg)
-          let __packs := if list.is_empty(packs) {
-            Ok(())
-          } else {
-            registry.save_packs(db, company_id, packs)
-          }
-          let __pp := if list.is_empty(packs) {
-            ()
-          } else {
-            io.print(str.join(["[company] role packs staffed: core + ", str.join(packs, ", ")], ""))
-          }
-          let __res := company_runner.run_company(db, ccfg, api_max, evolve)
-          ()
+          },
         },
       },
     },
@@ -801,7 +814,33 @@ fn board_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   let company_id := get_env("COMPANY_ID", "acme")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[board] FATAL: ", e)),
-    Ok(db) => io.print(company.board_report(db, company_id)),
+    Ok(db) => io.print(str.concat(company.board_report(db, company_id), budget.report_section(db, company_id))),
+  }
+}
+
+# ── budget_set_cmd (GOV2, lex-loom#222) ──────────────────────────────────────
+# The board's ONLY way to create or resize a spend envelope after launch.
+# RESOLVER_ID is required and recorded on the trail — envelope changes are a
+# governance act, not something any agent code path can do.
+fn budget_set_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  let scope := get_env("SCOPE", "")
+  let resolver := get_env("RESOLVER_ID", "")
+  let cents := match str.to_int(get_env("CAP_CENTS", "")) {
+    Some(c) => c,
+    None => 0,
+  }
+  if str.is_empty(resolver) {
+    io.print("[budget] FATAL: RESOLVER_ID is required — envelope changes are board-only and always attributed")
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[budget] FATAL: ", e)),
+      Ok(db) => match budget.set_envelope(db, company_id, scope, cents, resolver) {
+        Err(m) => io.print(str.concat("[budget] FATAL: ", m)),
+        Ok(_) => io.print(str.join(["[budget] envelope ", scope, " set to ", int.to_str(cents), "c by ", resolver], "")),
+      },
+    }
   }
 }
 

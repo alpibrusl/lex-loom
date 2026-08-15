@@ -56,6 +56,8 @@ import "lex-trail/src/log" as tlog
 
 import "./manifests" as manifests
 
+import "./budget" as budget
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 type NodeOutcome = { node_id :: Str, attested :: Bool, sealed :: Bool, artifact :: Str, reason :: Str }
 
@@ -190,11 +192,40 @@ fn node_active(n :: graph.Node, cfg :: SprintCfg) -> Bool {
   }
 }
 
+fn company_of_sprint(sprint_id :: Str) -> Str {
+  match list.head(str.split(sprint_id, "/")) {
+    Some(cid) => cid,
+    None => sprint_id,
+  }
+}
+
+# GOV2 (lex-loom#222): every node dispatch consults the role's spend
+# envelope (and the company total) BEFORE the agent runs — an exhausted
+# envelope refuses the node (that subtree stops; unrelated roles continue)
+# and escalates once. Completed nodes are charged the same estimate the
+# cost ledger uses, atomically, so utilization is always the sum of real
+# charges and can never go negative.
 fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   if node_active(n, cfg) {
-    match n.expand {
-      Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
-      None => invoke_node_attempt(n, input, cfg, 1, "", parent),
+    let cid := company_of_sprint(cfg.id)
+    match budget.check_role(cfg.db, cid, n.role) {
+      Exhausted => {
+        let __esc := budget.escalate_exhausted(cfg.db, cid, str.concat("role:", n.role), n.role)
+        let __t := tr.trail(cfg.db, cfg.id, "node_refused_budget", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\"}"], ""))
+        let __p := io.print(str.join(["[budget] node ", n.id, " (", n.role, ") REFUSED — spend envelope exhausted (no overdraft)"], ""))
+        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["BUDGET: spend envelope exhausted for role '", n.role, "' — refused at dispatch"], "") }
+      },
+      _ => {
+        let outcome := match n.expand {
+          Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
+          None => invoke_node_attempt(n, input, cfg, 1, "", parent),
+        }
+        let cost := budget.artifact_cost_cents(str.len(resolve_input(cfg.db, outcome.artifact)))
+        let __c := budget.charge(cfg.db, cid, n.role, cost)
+        let __w1 := budget.warn_if_needed(cfg.db, cid, "total")
+        let __w2 := budget.warn_if_needed(cfg.db, cid, str.concat("role:", n.role))
+        outcome
+      },
     }
   } else {
     let __sk := tr.trail(cfg.db, cfg.id, "node_skipped", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\",\"activate_when\":\"", n.activate_when, "\"}"], ""))

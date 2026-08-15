@@ -17,20 +17,53 @@ jobs:
       # Equivalent to `lex ci` (pkg install + check --strict + fmt --check +
       # test), but the test step grants the `vcs` effect (#5) — `lex ci` bundles
       # test with a default effect set that doesn't include the new effect.
+      # demo/ is in scope too (#241): the offline roundtrip demos are the
+      # acceptance proofs for every company-layer pillar, and their .lex
+      # scaffolding must stay compilable and canonically formatted.
       - name: Install deps
         run: lex pkg install
       - name: Check (strict)
         run: |
           set -euo pipefail
           fail=0
-          for f in $(find src tests examples -name '*.lex'); do
+          for f in $(find src tests examples demo -name '*.lex'); do
             lex check --strict "$f" || fail=1
           done
           [ "$fail" -eq 0 ]
       - name: Format check
-        run: lex fmt --check src tests examples
+        run: lex fmt --check src tests examples demo
       - name: Test
         run: |
           lex test --allow-effects \
             concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
             tests
+
+  # The offline roundtrip demos are the live acceptance proofs for the
+  # company layer (heartbeat, event wakes, concurrency, board surface, mesh
+  # skills). They need no provider keys and no external network — every
+  # socket they open is their own localhost server — but they DO rot when
+  # module effect rows grow (#241: sa2 was broken on main for weeks and
+  # nothing noticed). Run them on every PR.
+  demo-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lex
+        run: |
+          set -euo pipefail
+          V=0.10.10; T=x86_64-unknown-linux-gnu
+          curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
+          tar -xzf /tmp/lex.tgz -C /tmp
+          echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
+      - name: Install deps
+        run: lex pkg install
+      - name: "Demo: HB1 scheduler heartbeat"
+        run: bash demo/hb1-scheduler-roundtrip.sh
+      - name: "Demo: HB2 event-driven wakes"
+        run: bash demo/hb2-event-wake-roundtrip.sh
+      - name: "Demo: HB3 true concurrency"
+        run: bash demo/hb3-concurrency-roundtrip.sh
+      - name: "Demo: GOV4 board decision surface"
+        run: bash demo/gov4-board-surface-roundtrip.sh
+      - name: "Demo: SA2 mesh registration + token-gated skill"
+        run: bash demo/sa2-mesh-roundtrip.sh

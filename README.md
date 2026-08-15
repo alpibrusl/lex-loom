@@ -13,22 +13,47 @@ can also run a single sprint standalone to test one change.
 
 Every phase transition is evidence-gated. Every artifact is content-addressed. The audit trail is append-only. The system learns: the Digest phase tightens specs and seeds the next iteration's graph from lessons in the current trail.
 
-> **Status: M5+ sprint engine, company layer landing incrementally.** The sprint
-> pipeline (Intake → Design → Implementation → QA → Demo → Retro → Digest) with
-> learning loop, agent pool scoring, bounce penalties, and retirement is
-> complete. Above it, the company layer has: Product loop, Distribution roles
-> (CX, research, self-hosted content publishing), a real revenue signal, Board
-> oversight, Portfolio (multiple concurrent product lines), Lifecycle (Ideation
-> → Growth → Sunset), and a declarative `company.toml` manifest + deterministic
-> bootstrap — done. The **Operate loop** (epic #118, on the shared
-> [`lex-ctl`](https://github.com/alpibrusl/lex-ctl) kernel — the same kernel
-> lex-soft consumes independently) is at v1: sensing → incident → capability-
-> gated actuation → effect verification, with an auto-tier decision layer
-> behind a circuit breaker. Real monetization wiring (an actual Stripe/Gumroad
-> product) is deliberately, permanently human-gated by design — see
+> **Status: sprint engine AND company layer complete** (epic #212, closed).
+> The sprint pipeline (Intake → Design → Implementation → QA → Demo → Retro →
+> Digest) with learning loop, agent pool scoring, bounce penalties, and
+> retirement is complete. Above it, the full company layer is landed:
+> **heartbeat** (a scheduler daemon owns every company in a workspace,
+> external events wake dormant companies within seconds, runs are truly
+> concurrent — HB1–3), **org structure** (reporting lines → typed delegation
+> with rework → manager review → a CEO that proposes pivots → a board-approved
+> dynamic role registry — ORG1–5), and **board governance** (blocking human
+> gates, per-role budget envelopes, a revenue-driven allocation loop, and one
+> typed board decision surface with append-only minutes — GOV1–4). The
+> **Operate loop** (epic #118, on the shared
+> [`lex-ctl`](https://github.com/alpibrusl/lex-ctl) kernel) is at v1:
+> sensing → incident → capability-gated actuation → effect verification.
+> Real monetization wiring (an actual Stripe/Gumroad product) is
+> deliberately, permanently human-gated by design (#89) — see
 > [`docs/design/agentic-company.md`](docs/design/agentic-company.md) for the
-> full layer inventory and [`docs/design/operate-loop.md`](docs/design/operate-loop.md)
-> for the Operate loop.
+> full layer inventory and implementation index.
+
+---
+
+## The company lifecycle in three commands
+
+```bash
+# 1. Scaffold a company from a declarative manifest into a workspace
+LOOM_WORKSPACE=~/loom-companies bin/bootstrap-company.sh examples/linksnap.company.toml --no-run
+
+# 2. Start the heartbeat — a daemon that classifies, runs, monitors, and
+#    wakes every company in the workspace (event wakes land within seconds)
+LOOM_WORKSPACE=~/loom-companies bin/loom-scheduler.sh
+
+# 3. Govern — see everything the company owes you an answer on, and decide
+COMPANY_ID=linksnap DB_PATH=~/loom-companies/linksnap/company.db \
+  lex run --allow-effects env,io,sql,fs_read,fs_write src/main.lex board_pending_cmd
+ATTENTION_ID=<id> VERDICT=approved RESOLVER_ID=<your-contact-id> \
+  DB_PATH=~/loom-companies/linksnap/company.db \
+  lex run --allow-effects env,io,sql,fs_read,fs_write,time,random,crypto src/main.lex board_decide_cmd
+```
+
+Everything below — provider setup, the sprint primitive, the HTTP API — is in
+service of that loop. See "Running a company" for the full surface.
 
 ---
 
@@ -168,13 +193,66 @@ to gate a sub-loom to specific iterations):
 | `accepted ge N` / `bounced ge N` | node accept/bounce thresholds |
 | `spend ge N` | cumulative LLM/infra spend threshold |
 | `always` / `never` | constant |
+| `<a> or <b>` | disjunction of any atoms above (or event kinds, below) |
+| `board_note`, `support_item`, `incident`, `operate_signal`, `research_request`, `content_request`, `webhook` | *(wake_when only)* an unconsumed external event of that kind exists — see "Event wakes" |
 
 Each iteration is recorded in `company_iterations` (with parent lineage) and
 stays provable via the four-layer verifier (`verify_sprint_cmd`). See
 [`docs/design/agentic-company.md`](docs/design/agentic-company.md) for the full
 picture of what a company is beyond the build loop — Distribution, Monetization
-(deliberately human-gated), the Operate loop, Strategy, Board, Portfolio, and
+(deliberately human-gated), the Operate loop, Strategy, Org, Board, and
 Lifecycle.
+
+### The heartbeat (scheduler daemon)
+
+Run one long-lived process per **workspace** (a directory of
+`<company-id>/company.db` folders — one SQLite file per company). Each tick
+it classifies every company from its own persisted state (run / dormant /
+stopped / parked / sunset), runs up to `MAX_RUNS_PER_TICK` of them
+**concurrently**, and gives everyone else the between-run monitor sweep
+(revenue, liveness, operate signals). Killing and restarting it is always
+safe — all state lives in the company DBs.
+
+```bash
+LOOM_WORKSPACE=~/loom-companies TICK_MS=60000 EVENT_POLL_MS=2000 \
+  MAX_RUNS_PER_TICK=2 bin/loom-scheduler.sh
+```
+
+### Event wakes
+
+A dormant company (Maintenance stage) declares which external events wake it
+in its manifest — `wake_when board_note or support_item` — and the scheduler
+wakes it within seconds of one arriving (bypassing the periodic tick). Events
+land in an append-only per-company ledger with one-shot consumption marks:
+replaying it is the wake history (`events_cmd`). Writers: board notes, the
+operate sweep (incident opened / revenue moved), the A2A capability servers,
+and a token-gated generic webhook (`POST /api/events/:company_id`). Event
+bodies are data, never instruction — they carry ids, never caller text, and
+never reach a prompt.
+
+### Governing (the board surface)
+
+Everything the company owes a human flows through ONE typed queue — blocking
+`human <oracle>` gates (which park the company), budget-exhaustion
+escalations, allocation proposals, CEO strategy proposals, role-creation
+approvals, operate escalation dossiers:
+
+```bash
+COMPANY_ID=acme lex run ... src/main.lex board_pending_cmd   # typed, aged queue
+COMPANY_ID=acme lex run ... src/main.lex board_report_cmd    # leads with the queue
+ATTENTION_ID=<id> VERDICT=approved|rejected|deferred REASON="..." RESOLVER_ID=<contact> \
+  lex run ... src/main.lex board_decide_cmd                  # THE one decide path
+COMPANY_ID=acme lex run ... src/main.lex board_minutes_cmd   # append-only minutes
+```
+
+`RESOLVER_ID` is required and recorded on every decision; when a contact is
+registered for an oracle (`add_contact_cmd`), only that contact may decide
+(#165). The web API (`/api/board/pending`, `/api/board/decide/:id`) calls the
+exact same function. There is no auto-approve path, anywhere, by design.
+
+Budgets: give roles spend envelopes in the manifest (`[budget.envelopes]`) or
+via `budget_set_cmd`; a node whose role's envelope is exhausted is refused at
+dispatch (never overdrafted), and the exhaustion escalates to the board.
 
 > Against OpenCode Go, leave `OPENCODE_BASE_URL` unset (hit the API directly) —
 > the local reasoning-proxy breaks loom's streaming agent loop.
@@ -572,6 +650,24 @@ src/
   tenant.lex         Sprint registration in agent registry
   company.lex        The layer above a single sprint — a company runs a series of them
   company_runner.lex Auto loop-back runner: finishes a sprint, seeds and starts the next
+  scheduler.lex      The heartbeat daemon (HB1/HB3): classify, run concurrently, monitor
+  events.lex         Append-only external-event ledger + wake grammar (HB2)
+  gates.lex          Blocking human gates that park a company (GOV1) + gate DSL
+  budget.lex         Per-role spend envelopes, enforced at dispatch (GOV2)
+  allocation.lex     Revenue-driven envelope proposals, board-approved, self-grading (GOV3)
+  board.lex          The typed board decision surface + append-only minutes (GOV4)
+  org.lex            Reporting lines + escalation chains (ORG1)
+  delegation.lex     Typed, closed-vocabulary delegation with rework cycles (ORG2)
+  manager.lex        Manager review: verdicts → attestations + reports upward (ORG3)
+  ceo.lex            Goal origination above the Strategist + mission ledger (ORG4)
+  role_registry.lex  Role packs + bounded, board-approved runtime role creation (ORG5)
+  sensing.lex        Operate loop: score signals, open incidents (CTL3)
+  diagnosis.lex      Operate loop: diagnose incidents (CTL4)
+  effects.lex        Operate loop: remediation contracts + verification (CTL5)
+  actuation.lex      Operate loop: capability-gated actions behind tiers (CTL6)
+  operate_ledger.lex The controller's queryable record (CTL2)
+  soft_settlement.lex Revenue readings settled + re-verifiable via lex-soft (SA3)
+  soft_register.lex  Mesh registration/discovery on lex-soft (SA2)
   series.lex         Sprint-series statistics for the improvement chart
   verify.lex         Independent re-derivation of a sprint's integrity from the trail
   loom_trail.lex     Sprint trail backed by lex-trail (content-addressed, append-only)
@@ -590,15 +686,18 @@ src/
   server/
     a2a.lex          A2A HTTP front door
     mcp.lex          MCP stdio front door — exposes skills as Claude Code tools
+    cx_a2a.lex       Token-gated CX support-triage skill (SA2)
+    research_a2a.lex Token-gated web-research skill (SA4)
+    content_a2a.lex  Token-gated content-publishing skill (#187)
 
-tests/                20 suites, no LLM required. Core: graph (validation,
-                      topo sort, JSON round-trip), phase (legal transitions,
-                      wrong evidence, illegal moves), metaspec (rule
-                      acceptance/rejection). Plus cast, gates, company,
-                      identity, improver, verify + verify_shell_gate,
-                      dag_view, qa_evidence, qa_demo_reuse, bounce_stall,
-                      node_results_race, attention, dynamic, ops,
-                      security_scan, deploy_hetzner.
+tests/                49 suites, no LLM required. Core: graph, phase,
+                      metaspec, gates, cast, company. Company layer:
+                      scheduler, events, concurrency, blocking_gates,
+                      budget, allocation, board, org, delegation, manager,
+                      ceo, role_registry, soft_settlement. Operate loop:
+                      sensing, diagnosis, effects, actuation, operate
+                      ledger. Plus identity, improver, verify (+ shell
+                      gate), attention, web_auth, and more.
 ```
 
 ---
@@ -606,9 +705,14 @@ tests/                20 suites, no LLM required. Core: graph (validation,
 ## Tests
 
 ```bash
-lex test tests/
-# 20 suites — no LLM, no API key required
+lex test --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval tests
+# 49 suites — no LLM, no API key required
 ```
+
+The fully offline roundtrip demos in `demo/` are the acceptance proofs for
+each company-layer pillar (heartbeat, event wakes, concurrency, delegation,
+manager review, CEO, roles, budgets, allocation, board surface) — CI runs
+them as a smoke job.
 
 ---
 
@@ -673,7 +777,8 @@ Agent runtime (runner, trace, state store, registry, A2A) is vendored directly i
 | M4 | ✓ | `digest.lex` — Scribe closes the learning loop |
 | M5 | ✓ | Durable queue + multi-tenancy + HTTP API + Vertex AI / Anthropic / Ollama |
 | M5+ | ✓ | Pool fitness loop — bounce penalty, agent retirement, proc/a2a executors, "Sprint That Fixes Itself" demo |
-| M6 | — | `lex-vcs` — artifacts by content hash on a branch per sprint |
+| M6 | ✓ | `lex-vcs` — artifacts by content hash on a branch per sprint |
+| Company | ✓ | Company layer complete (epic #212): heartbeat HB1–3, org structure ORG1–5, board governance GOV1–4 — plus Operate loop v1 (#118) and soft/os-aware agents (#177) |
 
 ---
 

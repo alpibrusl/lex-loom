@@ -75,7 +75,7 @@ PIDS+=("$!")
 
 echo "+ starting loom's content_creator A2A server on :$CONTENT_PORT (token-gated)"
 ( cd "$REPO_ROOT" && PORT="$CONTENT_PORT" CONTENT_PUBLISH_TOKEN="$REAL_TOKEN" \
-    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval \
+    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
     src/server/content_a2a.lex serve_content_a2a ) &
 PIDS+=("$!")
 

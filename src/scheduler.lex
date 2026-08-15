@@ -61,6 +61,8 @@ import "./migrate" as migrate
 
 import "./company" as company
 
+import "./gates" as gates
+
 import "./company_runner" as company_runner
 
 import "./pool_seed" as pool_seed
@@ -86,7 +88,19 @@ fn skip_decision(reason :: Str) -> SchedDecision {
 #   run decision would be a pointless invocation); Sunset and stopped are
 #   terminal-unless-overridden; dormancy is the cheap steady state; anything
 #   left is due.
-fn classify(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool) -> SchedDecision {
+fn classify(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool, parked :: Str) -> SchedDecision {
+  if parked == "pending" {
+    skip_decision("parked")
+  } else {
+    if parked == "resolved" {
+      run_decision("gate_resolved")
+    } else {
+      classify_unparked(stage, cfg, ctx, start_idx, has_backlog, has_notes)
+    }
+  }
+}
+
+fn classify_unparked(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool) -> SchedDecision {
   if start_idx > cfg.max_iterations {
     skip_decision("max_iterations")
   } else {
@@ -123,9 +137,51 @@ fn classify(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: c
   }
 }
 
+# A parked company's state as the pure classifier sees it: "" (not parked),
+# "pending" (a blocking gate still awaits the board — stay parked), or
+# "resolved" (every gate item answered — due to re-enter the SAME iteration,
+# where approved gates seal and rejected gates cancel their subtree).
+fn parked_state(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
+  if company.latest_iteration_status(db, company_id) == "parked" {
+    let sprint_id := company.iteration_sprint_id(company_id, company.latest_iteration_idx(db, company_id))
+    if list.is_empty(tr.attention_pending_for_sprint(db, sprint_id)) {
+      "resolved"
+    } else {
+      "pending"
+    }
+  } else {
+    ""
+  }
+}
+
+# GOV1 timeout: a pending blocking-gate item whose gate declared `<N>h` and
+# that has been pending longer escalates ONCE (trail `gate_escalated` + loud
+# print) and then stays parked — never an auto-approve, never silence.
+fn escalate_overdue(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read, fs_write, time, random, crypto, io] Unit {
+  let idx := company.latest_iteration_idx(db, company_id)
+  let sprint_id := company.iteration_sprint_id(company_id, idx)
+  let __each := list.map(tr.attention_pending_for_sprint(db, sprint_id), fn (item :: tr.AttentionRow) -> [sql, fs_read, fs_write, time, random, crypto, io] Unit {
+    let hours := gates.blocking_timeout_hours(item.gate)
+    if hours > 0 {
+      let overdue := list.fold(tr.attention_overdue(db, sprint_id, hours), false, fn (found :: Bool, o :: tr.AttentionRow) -> Bool {
+        found or o.id == item.id
+      })
+      if overdue and not tr.trail_contains(db, company_id, "gate_escalated", item.id) {
+        let __t := tr.trail(db, company_id, "gate_escalated", str.join(["{\"attention\":\"", item.id, "\",\"oracle\":\"", item.oracle, "\",\"node\":\"", item.node_id, "\",\"timeout_hours\":", int.to_str(hours), "}"], ""))
+        io.print(str.join(["[scheduler] ESCALATION ", company_id, ": gate for oracle '", item.oracle, "' pending past its ", int.to_str(hours), "h timeout (attention ", item.id, ") — still parked, board action required"], ""))
+      } else {
+        ()
+      }
+    } else {
+      ()
+    }
+  })
+  ()
+}
+
 # Gather a company's facts from its DB and classify. None when the company row
 # is missing (an unbootstrapped or corrupt DB) — the caller skips it loudly.
-fn classify_company(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write, time] Option[(company.CompanyCfg, SchedDecision)] {
+fn classify_company(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read, fs_write, time] Option[(company.CompanyCfg, SchedDecision)] {
   match company.load_company(db, company_id) {
     None => None,
     Some(cfg) => {
@@ -136,7 +192,7 @@ fn classify_company(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_write, tim
         Some(_) => true,
       }
       let has_notes := not list.is_empty(company.pending_board_notes(db, company_id))
-      Some((cfg, classify(stage, cfg, resume.prev_ctx, resume.start_idx, has_backlog, has_notes)))
+      Some((cfg, classify(stage, cfg, resume.prev_ctx, resume.start_idx, has_backlog, has_notes, parked_state(db, company_id))))
     },
   }
 }
@@ -204,6 +260,11 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
                 d.reason
               }
               let __p := io.print(str.join(["[scheduler] skip ", company_id, " (", why, ")"], ""))
+              let __esc := if why == "parked" {
+                escalate_overdue(db, company_id)
+              } else {
+                ()
+              }
               let __m := monitor_company(db, company_id)
               0
             }

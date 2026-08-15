@@ -134,6 +134,19 @@ runs it once more. All scheduler state lives in the company DBs, so
 kill/restart is always safe. This closes "nothing ever wakes a dormant
 company"; event-driven wakes are HB2 (#214), true concurrency HB3 (#215).
 
+**Blocking human gates** *(landed since — GOV1, #221)*. `human <oracle>
+blocking` (optional trailing `<N>h` timeout) parks the gate node and its
+dependent subtree until the oracle resolves the attention item — independent
+tracks continue in the same pass, and parked is not failure. Approve seals
+the node from the human-attested artifact (no re-run, no duplicate item);
+reject cancels the subtree with the board's reason ledgered (`node_cancelled`);
+a declared timeout escalates once (`gate_escalated`) and stays parked — there
+is no auto-approve path anywhere. A parked iteration finishes as `"parked"`,
+the scheduler holds the company (`scheduler_decision: parked`) until every
+gate item is resolved, then re-enters the SAME iteration; `board_report`
+leads with a PARKED banner. Plain `human <oracle>` gates stay advisory —
+existing manifests are unchanged.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

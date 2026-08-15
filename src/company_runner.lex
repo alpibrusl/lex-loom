@@ -164,10 +164,14 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     Err(m) => io.print(str.join(["[company] cost recording failed: ", m], "")),
   }
   let ctx := company.derive_ctx(db, ccfg.id, sprint_id, k, result.success)
-  let __fin := company.finish_iteration(db, ccfg.id, k, if result.success {
-    "success"
+  let __fin := company.finish_iteration(db, ccfg.id, k, if result.parked {
+    "parked"
   } else {
-    "failed"
+    if result.success {
+      "success"
+    } else {
+      "failed"
+    }
   })
   let __sync := if result.success {
     match company.find_build_artifact(db, sprint_id) {
@@ -207,12 +211,12 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     ()
   }
   let __p2 := io.print(str.join(["[company] iter ", int.to_str(k), " done verdict=", ctx.last_verdict, " accepted=", int.to_str(ctx.accepted_count), " bounced=", int.to_str(ctx.bounced_count), " est_spend=", company.format_cents(ctx.spend_cents)], ""))
-  let decision := if evolve {
+  let decision := if evolve and not result.parked {
     decide_next(db, ccfg, current_goal, ctx)
   } else {
     { decision: "continue", goal: "", reason: "" }
   }
-  let __pd := if evolve {
+  let __pd := if evolve and not result.parked {
     io.print(str.join(["[company] strategist: ", decision.decision, " — ", decision.reason], ""))
   } else {
     ()
@@ -235,7 +239,11 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     company.eval_condition(ccfg.stop_when, ctx)
   }
   let cur_stage := company.load_stage(db, ccfg.id)
-  let new_stage := company.next_stage(cur_stage, ctx, ccfg, decision.decision == "stop")
+  let new_stage := if result.parked {
+    cur_stage
+  } else {
+    company.next_stage(cur_stage, ctx, ccfg, decision.decision == "stop")
+  }
   let __ss := if new_stage == cur_stage {
     ()
   } else {
@@ -244,28 +252,34 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     io.print(str.join(["[company] stage: ", company.stage_to_str(cur_stage), " -> ", company.stage_to_str(new_stage)], ""))
   }
   let dormant := company.is_dormant(new_stage, ccfg.wake_when, ctx)
-  if decision.decision == "stop" {
-    if k >= ccfg.max_iterations {
-      { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
-    } else {
-      match graduate_backlog(db, ccfg.id, k) {
-        None => { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" },
-        Some(item) => run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, item.goal, evolve),
-      }
-    }
+  if result.parked {
+    let __pt := tr.trail(db, ccfg.id, "company_parked", str.join(["{\"iter\":", int.to_str(k), ",\"sprint\":\"", sprint_id, "\"}"], ""))
+    let __pp := io.print(str.join(["[company] PARKED at iter ", int.to_str(k), " — a blocking human gate awaits the board (resolve via attention_resolve_cmd or /api/attention; the scheduler resumes it after)"], ""))
+    { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "parked" }
   } else {
-    if stop {
-      { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "condition" }
-    } else {
-      if dormant {
-        let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(k), ",\"stage\":\"", company.stage_to_str(new_stage), "\"}"], ""))
-        let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(new_stage), ", wake_when not met)"], ""))
-        { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "dormant" }
+    if decision.decision == "stop" {
+      if k >= ccfg.max_iterations {
+        { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
       } else {
-        if k >= ccfg.max_iterations {
-          { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+        match graduate_backlog(db, ccfg.id, k) {
+          None => { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "strategist" },
+          Some(item) => run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, item.goal, evolve),
+        }
+      }
+    } else {
+      if stop {
+        { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "condition" }
+      } else {
+        if dormant {
+          let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(k), ",\"stage\":\"", company.stage_to_str(new_stage), "\"}"], ""))
+          let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(new_stage), ", wake_when not met)"], ""))
+          { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "dormant" }
         } else {
-          run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, next_goal, evolve)
+          if k >= ccfg.max_iterations {
+            { company_id: ccfg.id, iterations: k, last_verdict: ctx.last_verdict, stopped_by: "max_iterations" }
+          } else {
+            run_iterations(db, ccfg, k + 1, sprint_id, api_max, ctx, next_goal, evolve)
+          }
         }
       }
     }

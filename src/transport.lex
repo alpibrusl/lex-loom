@@ -346,6 +346,61 @@ fn get_attention(db :: conn.ConnDb, id :: Str) -> [sql, fs_read] Option[Attentio
   }
 }
 
+# The most recent attention item for one node of one sprint, any verdict —
+# what a re-entered sprint consults at a BLOCKING `human` gate (GOV1,
+# lex-loom#221) to decide parked-again / approved-resume / rejected-cancel
+# without re-running the node or pushing a duplicate item.
+fn attention_for_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str) -> [sql, fs_read] Option[AttentionRow] {
+  let q := str.join(["SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at, resolved_by FROM attention_queue WHERE sprint_id='", sq(sprint_id), "' AND node_id='", sq(node_id), "' ORDER BY created_at DESC LIMIT 1"], "")
+  let rows :: Result[List[AttentionRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+# All still-pending attention items for one sprint — what decides whether a
+# parked company stays parked (any pending) or is due to resume (none).
+fn attention_pending_for_sprint(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[AttentionRow] {
+  let q := str.join(["SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at, resolved_by FROM attention_queue WHERE sprint_id='", sq(sprint_id), "' AND verdict='pending' ORDER BY created_at ASC"], "")
+  let rows :: Result[List[AttentionRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+# Whether a trail event of `event_kind` whose payload contains `needle` was
+# already emitted for `sprint_id` — the scheduler's once-only guard for
+# gate-timeout escalations (GOV1): escalate a given attention item once, not
+# on every tick it stays overdue.
+type TrailContainsRow = { n :: Int }
+
+fn trail_contains(db :: conn.ConnDb, sprint_id :: Str, event_kind :: Str, needle :: Str) -> [sql, fs_read] Bool {
+  let q := str.join(["SELECT COUNT(*) AS n FROM traces WHERE agent_id='", sq(sprint_id), "' AND event_kind='", sq(event_kind), "' AND data_json LIKE '%", sq(needle), "%'"], "")
+  let rows :: Result[List[TrailContainsRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => false,
+    Ok(rs) => match list.head(rs) {
+      None => false,
+      Some(r) => r.n > 0,
+    },
+  }
+}
+
+# Pending attention items for a sprint older than `hours` — the scheduler's
+# gate-timeout check (GOV1). Uses sqlite's datetime arithmetic against the
+# stored created_at; an unparseable created_at simply never matches (fails
+# closed into "not overdue", never into an auto-approve).
+fn attention_overdue(db :: conn.ConnDb, sprint_id :: Str, hours :: Int) -> [sql, fs_read] List[AttentionRow] {
+  let q := str.join(["SELECT id, sprint_id, node_id, gate, oracle, artifact_hash, verdict, rejection_reason, created_at, resolved_by FROM attention_queue WHERE sprint_id='", sq(sprint_id), "' AND verdict='pending' AND datetime(created_at) <= datetime('now', '-", int.to_str(hours), " hours') ORDER BY created_at ASC"], "")
+  let rows :: Result[List[AttentionRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
 # resolver_id (lex-loom#165) is recorded unconditionally as the audit trail
 # ("who actually approved this") — authorization (is this resolver actually
 # allowed to?) is a separate check the caller (main.lex's

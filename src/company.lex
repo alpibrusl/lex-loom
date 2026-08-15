@@ -39,6 +39,8 @@ import "lex-trail/src/log" as tlog
 
 import "./transport" as tr
 
+import "./events" as events
+
 import "./org" as org
 
 import "./operate_ledger" as oledger
@@ -734,7 +736,25 @@ fn parse_dollars_to_cents(s :: Str) -> Int {
   whole * 100 + frac
 }
 
+# HB2 (#214): a condition is a disjunction of atoms joined by " or "
+# (events.split_atoms — quoted conditions are never split). Each atom is
+# either a grounded-ctx predicate (evaluated by eval_atom below) or a bare
+# event kind from events.known_kinds(). Event atoms are NOT ctx-evaluable —
+# they fall through eval_atom's unknown-head branch to false here, and the
+# scheduler evaluates them separately against the company's unconsumed
+# events (events.has_wake_eligible). One grammar, two enforcement points.
 fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
+  let c := str.trim(cond)
+  if str.is_empty(c) {
+    true
+  } else {
+    list.fold(events.split_atoms(c), false, fn (acc :: Bool, a :: Str) -> Bool {
+      acc or eval_atom(a, ctx)
+    })
+  }
+}
+
+fn eval_atom(cond :: Str, ctx :: IterCtx) -> Bool {
   let c := str.trim(cond)
   if str.is_empty(c) {
     true
@@ -782,41 +802,58 @@ fn eval_condition(cond :: Str, ctx :: IterCtx) -> Bool {
 }
 
 # Whether a condition is recognized & structurally valid (for graph validation).
+# Every " or "-joined atom must be well-formed; an atom may also be a bare
+# event kind (HB2 — `wake_when board_note or incident`).
 fn is_well_formed_condition(cond :: Str) -> Bool {
   let c := str.trim(cond)
   if str.is_empty(c) {
     true
   } else {
-    let parts := str.split(c, " ")
-    let head := part_at(parts, 0)
-    if head == "always" {
+    list.fold(events.split_atoms(c), true, fn (acc :: Bool, a :: Str) -> Bool {
+      acc and is_well_formed_atom(a)
+    })
+  }
+}
+
+fn is_well_formed_atom(cond :: Str) -> Bool {
+  let c := str.trim(cond)
+  if str.is_empty(c) {
+    true
+  } else {
+    if events.is_known_kind(c) {
       true
     } else {
-      if head == "never" {
+      let parts := str.split(c, " ")
+      let head := part_at(parts, 0)
+      if head == "always" {
         true
       } else {
-        if head == "verdict-passed" {
+        if head == "never" {
           true
         } else {
-          if head == "verdict-failed" {
+          if head == "verdict-passed" {
             true
           } else {
-            if head == "digest" {
-              part_at(parts, 1) == "contains"
+            if head == "verdict-failed" {
+              true
             } else {
-              if head == "iter" {
-                valid_cmp(part_at(parts, 1), part_at(parts, 2))
+              if head == "digest" {
+                part_at(parts, 1) == "contains"
               } else {
-                if head == "accepted" {
+                if head == "iter" {
                   valid_cmp(part_at(parts, 1), part_at(parts, 2))
                 } else {
-                  if head == "bounced" {
+                  if head == "accepted" {
                     valid_cmp(part_at(parts, 1), part_at(parts, 2))
                   } else {
-                    if head == "spend" {
-                      valid_cmp_dollars(part_at(parts, 1), part_at(parts, 2))
+                    if head == "bounced" {
+                      valid_cmp(part_at(parts, 1), part_at(parts, 2))
                     } else {
-                      false
+                      if head == "spend" {
+                        valid_cmp_dollars(part_at(parts, 1), part_at(parts, 2))
+                      } else {
+                        false
+                      }
                     }
                   }
                 }
@@ -1305,7 +1342,10 @@ fn add_board_note(db :: conn.ConnDb, company_id :: Str, note :: Str) -> [sql, fs
   let q := ormq.for_dialect({ sql: "INSERT INTO company_board_notes (company_id, idx, note, status, created_at) VALUES (?, ?, ?, 'pending', ?)", params: [PStr(company_id), PInt(next_idx), PStr(note), PStr(now)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
-    Ok(_) => Ok(()),
+    Ok(_) => {
+      let __ev := events.record_once(db, str.join(["ev-note-", company_id, "-", int.to_str(next_idx)], ""), company_id, "board_note", "board", str.join(["{\"note_idx\":", int.to_str(next_idx), "}"], ""))
+      Ok(())
+    },
   }
 }
 

@@ -24,6 +24,8 @@ import "./cast" as cast
 
 import "./company" as company
 
+import "./events" as events
+
 import "./roles" as roles
 
 import "./agent/runner" as runner
@@ -418,7 +420,7 @@ fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, ev
       },
     }
   } else {
-    if company.is_dormant(stage0, ccfg.wake_when, resume.prev_ctx) {
+    if company.is_dormant(stage0, ccfg.wake_when, resume.prev_ctx) and not events.has_wake_eligible(db, ccfg.id, ccfg.wake_when) {
       let __dt := tr.trail(db, ccfg.id, "company_dormant", str.join(["{\"iter\":", int.to_str(done), ",\"stage\":\"", company.stage_to_str(stage0), "\"}"], ""))
       let __dp := io.print(str.join(["[company] dormant (stage=", company.stage_to_str(stage0), ", wake_when not met)"], ""))
       { company_id: ccfg.id, iterations: done, last_verdict: resume.prev_ctx.last_verdict, stopped_by: "dormant" }

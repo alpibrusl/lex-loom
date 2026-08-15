@@ -292,6 +292,33 @@ to literally one function. An already-resolved decision cannot be
 re-decided; the decision history read from resolved rows plus deferral
 trail events *is* the board minutes, append-only by construction.
 
+**Event-driven wakes** *(landed since — HB2, #214)*. Real-world events stop
+waiting for the next tick to be noticed. An append-only `company_events`
+ledger (`src/events.lex`; named to avoid lex-trail's own `events` table)
+records a **closed vocabulary** of kinds — board_note, operate_signal,
+incident, support_item, research_request, content_request, webhook — with
+unknown kinds *refused, never stored*. Writers: `add_board_note` itself
+(the one ingestion point), operate sync bridges run from the scheduler's
+monitor pass (an open incident and a *moved* revenue reading each event
+exactly once, keyed on the underlying row), the three A2A skill servers
+when configured with `LOOM_EVENTS_DB`/`LOOM_EVENTS_COMPANY`, and a
+token-gated generic webhook `POST /api/events/:company_id`. The `wake_when`
+grammar becomes a disjunction of atoms joined by ` or `, where an atom is
+an existing grounded-ctx predicate **or a bare event kind** — so
+`wake_when board_note or support_item` is manifest-declared wake policy,
+and an event of an undeclared kind is recorded but wakes nothing (opt-in,
+proven live: the non-opted company holds the same event and stays dormant).
+The scheduler classifies a dormant company with an unconsumed declared-kind
+event as `event_wake`, and between full ticks a cheap `EVENT_POLL_MS`
+scan (default 2s) cuts the tick sleep short — a board note wakes a dormant
+company in ~1s against a 60s tick in the demo. The runner's own dormancy
+gate is event-aware too, and events are consumed only *after* the run
+returns, each getting its one-shot `consumed_at`/`consumed_by` mark naming
+the run that absorbed it — replaying the table is the wake history
+(`loom events_cmd`). Events are **data, never instruction**: ledger rows
+carry ids and indexes (a note's index, an item's id), never caller text,
+and nothing from an event body is ever spliced into a prompt (#118 §2.7).
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

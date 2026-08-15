@@ -61,6 +61,8 @@ import "./migrate" as migrate
 
 import "./company" as company
 
+import "./events" as events
+
 import "./gates" as gates
 
 import "./org" as org
@@ -81,7 +83,7 @@ import "./transport" as tr
 
 # One scheduling decision: action is "run" or "skip"; reason is the specific
 # branch that fired (max_iterations | sunset | backlog_reactivation | stopped |
-# board_note_override | dormant | woken | due).
+# board_note_override | dormant | event_wake | woken | due).
 type SchedDecision = { action :: Str, reason :: Str }
 
 fn run_decision(reason :: Str) -> SchedDecision {
@@ -98,19 +100,22 @@ fn skip_decision(reason :: Str) -> SchedDecision {
 #   run decision would be a pointless invocation); Sunset and stopped are
 #   terminal-unless-overridden; dormancy is the cheap steady state; anything
 #   left is due.
-fn classify(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool, parked :: Str) -> SchedDecision {
+# `has_wake_event` (HB2, #214): an unconsumed event of a kind this company's
+# wake_when opted into exists — computed against the DB by classify_company,
+# passed in here so the classifier stays pure and testable.
+fn classify(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool, parked :: Str, has_wake_event :: Bool) -> SchedDecision {
   if parked == "pending" {
     skip_decision("parked")
   } else {
     if parked == "resolved" {
       run_decision("gate_resolved")
     } else {
-      classify_unparked(stage, cfg, ctx, start_idx, has_backlog, has_notes)
+      classify_unparked(stage, cfg, ctx, start_idx, has_backlog, has_notes, has_wake_event)
     }
   }
 }
 
-fn classify_unparked(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool) -> SchedDecision {
+fn classify_unparked(stage :: company.LifecycleStage, cfg :: company.CompanyCfg, ctx :: company.IterCtx, start_idx :: Int, has_backlog :: Bool, has_notes :: Bool, has_wake_event :: Bool) -> SchedDecision {
   if start_idx > cfg.max_iterations {
     skip_decision("max_iterations")
   } else {
@@ -134,7 +139,11 @@ fn classify_unparked(stage :: company.LifecycleStage, cfg :: company.CompanyCfg,
         }
       } else {
         if company.is_dormant(stage, cfg.wake_when, ctx) {
-          skip_decision("dormant")
+          if has_wake_event {
+            run_decision("event_wake")
+          } else {
+            skip_decision("dormant")
+          }
         } else {
           if stage == Maintenance {
             run_decision("woken")
@@ -212,7 +221,8 @@ fn classify_company(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read, fs_w
         Some(_) => true,
       }
       let has_notes := not list.is_empty(company.pending_board_notes(db, company_id))
-      Some((cfg, classify(stage, cfg, resume.prev_ctx, resume.start_idx, has_backlog, has_notes, parked_state(db, company_id))))
+      let has_wake_event := events.has_wake_eligible(db, company_id, cfg.wake_when)
+      Some((cfg, classify(stage, cfg, resume.prev_ctx, resume.start_idx, has_backlog, has_notes, parked_state(db, company_id), has_wake_event)))
     },
   }
 }
@@ -277,6 +287,13 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
                 let __p := io.print(str.join(["[scheduler] RUN ", company_id, " (", d.reason, ")"], ""))
                 let __seed := pool_seed.seed(db)
                 let __res := company_runner.run_company(db, cfg, api_max, evolve)
+                let consumed := events.consume_all(db, company_id, str.join(["scheduler:", d.reason, ":iter-", int.to_str(resume.start_idx)], ""))
+                let __ct := if consumed > 0 {
+                  let __t2 := tr.trail(db, company_id, "events_consumed", str.join(["{\"count\":", int.to_str(consumed), ",\"reason\":\"", d.reason, "\",\"iter\":", int.to_str(resume.start_idx), "}"], ""))
+                  io.print(str.join(["[scheduler] ", company_id, ": ", int.to_str(consumed), " event(s) consumed by this run"], ""))
+                } else {
+                  ()
+                }
                 1
               } else {
                 let why := if d.action == "run" {
@@ -291,6 +308,7 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
                   ()
                 }
                 let __m := monitor_company(db, company_id)
+                let __ev := events.sync_operate_events(db, company_id)
                 0
               }
             },
@@ -332,14 +350,62 @@ fn tick(workspace :: Str, api_max :: Int, evolve :: Bool, max_runs :: Int) -> [e
   run_companies(workspace, ids, api_max, evolve, max_runs)
 }
 
-fn sched_loop(workspace :: Str, tick_ms :: Int, api_max :: Int, evolve :: Bool, max_runs :: Int, ticks_done :: Int, max_ticks :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+# HB2 (#214): the cheap between-tick poll — does ANY company in the workspace
+# have an unconsumed event of a kind its wake_when opted into? Read-only, no
+# migrate, no classify: a missing table or unreadable DB is simply "no".
+fn any_wake_event(workspace :: Str) -> [sql, fs_read, fs_write, proc] Bool {
+  list.fold(discover(workspace), false, fn (found :: Bool, cid0 :: Str) -> [sql, fs_read, fs_write, proc] Bool {
+    if found {
+      true
+    } else {
+      let cid := str.trim(cid0)
+      match conn.open(str.join([workspace, "/", cid, "/company.db"], "")) {
+        Err(_) => false,
+        Ok(db) => match company.load_company(db, cid) {
+          None => false,
+          Some(cfg) => events.has_wake_eligible(db, cid, cfg.wake_when),
+        },
+      }
+    }
+  })
+}
+
+# HB2: sleep between full ticks in EVENT_POLL_MS slices. The moment a
+# wake-eligible event lands, the wait ends and the next tick starts
+# immediately — a board note posted to a dormant company wakes it within
+# seconds even when TICK_MS is minutes. EVENT_POLL_MS=0 restores the plain
+# HB1 sleep.
+fn wait_between_ticks(workspace :: Str, remaining_ms :: Int, poll_ms :: Int) -> [io, time, sql, fs_read, fs_write, proc] Unit {
+  if remaining_ms <= 0 {
+    ()
+  } else {
+    if poll_ms <= 0 {
+      let __s := time.sleep_ms(remaining_ms)
+      ()
+    } else {
+      let slice := if poll_ms < remaining_ms {
+        poll_ms
+      } else {
+        remaining_ms
+      }
+      let __s := time.sleep_ms(slice)
+      if any_wake_event(workspace) {
+        io.print("[scheduler] EVENT WAKE — an opted-in event arrived; starting the next tick early")
+      } else {
+        wait_between_ticks(workspace, remaining_ms - slice, poll_ms)
+      }
+    }
+  }
+}
+
+fn sched_loop(workspace :: Str, tick_ms :: Int, poll_ms :: Int, api_max :: Int, evolve :: Bool, max_runs :: Int, ticks_done :: Int, max_ticks :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let started := tick(workspace, api_max, evolve, max_runs)
   let __p := io.print(str.join(["[scheduler] tick ", int.to_str(ticks_done + 1), " done — ", int.to_str(started), " run(s) started"], ""))
   if max_ticks > 0 and ticks_done + 1 >= max_ticks {
     io.print("[scheduler] MAX_TICKS reached — exiting")
   } else {
-    let __s := time.sleep_ms(tick_ms)
-    sched_loop(workspace, tick_ms, api_max, evolve, max_runs, ticks_done + 1, max_ticks)
+    let __w := wait_between_ticks(workspace, tick_ms, poll_ms)
+    sched_loop(workspace, tick_ms, poll_ms, api_max, evolve, max_runs, ticks_done + 1, max_ticks)
   }
 }
 
@@ -364,6 +430,7 @@ fn parse_int_or(s :: Str, fallback :: Int) -> Int {
 # Entry point (see bin/loom-scheduler.sh). Environment:
 #   LOOM_WORKSPACE    — where companies live      (default: $HOME/loom-companies)
 #   TICK_MS           — sleep between ticks       (default: 60000)
+#   EVENT_POLL_MS     — between-tick event poll   (default: 2000; 0 disables)
 #   MAX_RUNS_PER_TICK — company runs per tick cap (default: 1)
 #   MAX_TICKS         — 0 = run forever           (default: 0)
 #   MAX_API_CALLS     — per-run LLM budget        (default: 200)
@@ -371,6 +438,7 @@ fn parse_int_or(s :: Str, fallback :: Int) -> Int {
 fn run_scheduler() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let workspace := get_env("LOOM_WORKSPACE", str.concat(get_env("HOME", "/root"), "/loom-companies"))
   let tick_ms := parse_int_or(get_env("TICK_MS", "60000"), 60000)
+  let poll_ms := parse_int_or(get_env("EVENT_POLL_MS", "2000"), 2000)
   let max_runs := parse_int_or(get_env("MAX_RUNS_PER_TICK", "1"), 1)
   let max_ticks := parse_int_or(get_env("MAX_TICKS", "0"), 0)
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
@@ -380,7 +448,7 @@ fn run_scheduler() -> [env, io, time, crypto, random, sql, fs_read, fs_write, ne
   } else {
     evolve_flag != "false"
   }
-  let __p := io.print(str.join(["[scheduler] workspace=", workspace, " tick_ms=", int.to_str(tick_ms), " max_runs_per_tick=", int.to_str(max_runs), " max_ticks=", int.to_str(max_ticks)], ""))
-  sched_loop(workspace, tick_ms, api_max, evolve, max_runs, 0, max_ticks)
+  let __p := io.print(str.join(["[scheduler] workspace=", workspace, " tick_ms=", int.to_str(tick_ms), " event_poll_ms=", int.to_str(poll_ms), " max_runs_per_tick=", int.to_str(max_runs), " max_ticks=", int.to_str(max_ticks)], ""))
+  sched_loop(workspace, tick_ms, poll_ms, api_max, evolve, max_runs, 0, max_ticks)
 }
 

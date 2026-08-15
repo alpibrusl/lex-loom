@@ -39,7 +39,7 @@ fn ctx_with(idx :: Int, verdict :: Str, spend_cents :: Int) -> company.IterCtx {
 
 # A fresh company (Ideation, nothing recorded) is simply due.
 fn test_fresh_company_runs() -> Result[Unit, Str] {
-  let d := scheduler.classify(Ideation, cfg_with("", "", 3), ctx_with(1, "", 0), 1, false, false, "")
+  let d := scheduler.classify(Ideation, cfg_with("", "", 3), ctx_with(1, "", 0), 1, false, false, "", false)
   check("fresh company is due to run", d.action == "run" and d.reason == "due")
 }
 
@@ -47,72 +47,93 @@ fn test_fresh_company_runs() -> Result[Unit, Str] {
 # resume_point's fresh default ctx has idx 1, which would otherwise make
 # `iter ge 1` "hold" before the company ever ran once.
 fn test_stop_when_needs_history() -> Result[Unit, Str] {
-  let d := scheduler.classify(Ideation, cfg_with("iter ge 1", "", 3), ctx_with(1, "", 0), 1, false, false, "")
+  let d := scheduler.classify(Ideation, cfg_with("iter ge 1", "", 3), ctx_with(1, "", 0), 1, false, false, "", false)
   check("fresh company with iter ge 1 stop still runs", d.action == "run" and d.reason == "due")
 }
 
 # Past max_iterations nothing runs, whatever else holds — proceed would refuse.
 fn test_max_iterations_is_absolute() -> Result[Unit, Str] {
-  let d := scheduler.classify(Growth, cfg_with("", "", 2), ctx_with(2, "passed", 0), 3, true, true, "")
+  let d := scheduler.classify(Growth, cfg_with("", "", 2), ctx_with(2, "passed", 0), 3, true, true, "", false)
   check("past max_iterations skips even with backlog+notes", d.action == "skip" and d.reason == "max_iterations")
 }
 
 # Sunset is terminal — unless a backlog item is queued (the strategist's
 # earlier "stop" meant "this goal is done", not "the company is done").
 fn test_sunset_stays_down_without_backlog() -> Result[Unit, Str] {
-  let d := scheduler.classify(Sunset, cfg_with("", "", 5), ctx_with(2, "passed", 0), 3, false, false, "")
+  let d := scheduler.classify(Sunset, cfg_with("", "", 5), ctx_with(2, "passed", 0), 3, false, false, "", false)
   check("sunset without backlog skips", d.action == "skip" and d.reason == "sunset")
 }
 
 fn test_sunset_reactivates_via_backlog() -> Result[Unit, Str] {
-  let d := scheduler.classify(Sunset, cfg_with("", "", 5), ctx_with(2, "passed", 0), 3, true, false, "")
+  let d := scheduler.classify(Sunset, cfg_with("", "", 5), ctx_with(2, "passed", 0), 3, true, false, "", false)
   check("sunset with backlog runs", d.action == "run" and d.reason == "backlog_reactivation")
 }
 
 # The acceptance criterion for #213: a company stopped by its stop_when
 # condition STAYS stopped — the scheduler must not resurrect it on its own.
 fn test_stopped_company_stays_stopped() -> Result[Unit, Str] {
-  let d := scheduler.classify(Growth, cfg_with("spend ge 1.00", "", 5), ctx_with(2, "passed", 250), 3, false, false, "")
+  let d := scheduler.classify(Growth, cfg_with("spend ge 1.00", "", 5), ctx_with(2, "passed", 250), 3, false, false, "", false)
   check("stop_when holding skips", d.action == "skip" and d.reason == "stopped")
 }
 
 # ...and the ONLY thing that overrides a stop is an explicit pending board
 # note: the board intervened, so the strategist gets one iteration to hear it.
 fn test_board_note_overrides_stop() -> Result[Unit, Str] {
-  let d := scheduler.classify(Growth, cfg_with("spend ge 1.00", "", 5), ctx_with(2, "passed", 250), 3, false, true, "")
+  let d := scheduler.classify(Growth, cfg_with("spend ge 1.00", "", 5), ctx_with(2, "passed", 250), 3, false, true, "", false)
   check("pending board note runs a stopped company", d.action == "run" and d.reason == "board_note_override")
 }
 
 # Maintenance with an unmet wake_when is the cheap dormant steady state.
 fn test_dormant_company_skips() -> Result[Unit, Str] {
-  let d := scheduler.classify(Maintenance, cfg_with("", "verdict-failed", 9), ctx_with(2, "passed", 0), 3, false, false, "")
+  let d := scheduler.classify(Maintenance, cfg_with("", "verdict-failed", 9), ctx_with(2, "passed", 0), 3, false, false, "", false)
   check("maintenance with unmet wake_when is dormant", d.action == "skip" and d.reason == "dormant")
 }
 
 # When the wake condition fires against the last grounded ctx, it wakes.
 fn test_wake_when_fires() -> Result[Unit, Str] {
-  let d := scheduler.classify(Maintenance, cfg_with("", "verdict-failed", 9), ctx_with(2, "failed", 0), 3, false, false, "")
+  let d := scheduler.classify(Maintenance, cfg_with("", "verdict-failed", 9), ctx_with(2, "failed", 0), 3, false, false, "", false)
   check("maintenance with met wake_when wakes", d.action == "run" and d.reason == "woken")
 }
 
 # stop_when wins over dormancy: a stopped Maintenance company with a firing
 # wake_when still stays down without a board note.
 fn test_stop_beats_wake() -> Result[Unit, Str] {
-  let d := scheduler.classify(Maintenance, cfg_with("spend ge 1.00", "verdict-failed", 9), ctx_with(2, "failed", 250), 3, false, false, "")
+  let d := scheduler.classify(Maintenance, cfg_with("spend ge 1.00", "verdict-failed", 9), ctx_with(2, "failed", 250), 3, false, false, "", false)
   check("stopped beats woken", d.action == "skip" and d.reason == "stopped")
+}
+
+# HB2 (#214): an unconsumed event of a declared kind wakes a dormant company
+# immediately — the manifest's wake_when opted in, the world delivered.
+fn test_event_wakes_dormant() -> Result[Unit, Str] {
+  let d := scheduler.classify(Maintenance, cfg_with("", "board_note or support_item", 9), ctx_with(2, "passed", 0), 3, false, false, "", true)
+  check("dormant company with a declared-kind event wakes", d.action == "run" and d.reason == "event_wake")
+}
+
+# ...but with no pending event the same event-kind wake_when stays dormant —
+# event atoms are never true against the pure ctx alone.
+fn test_event_wake_needs_an_event() -> Result[Unit, Str] {
+  let d := scheduler.classify(Maintenance, cfg_with("", "board_note or support_item", 9), ctx_with(2, "failed", 0), 3, false, false, "", false)
+  check("event-kind wake_when without an event is dormant", d.action == "skip" and d.reason == "dormant")
+}
+
+# stop_when still wins: an event cannot resurrect a stopped company (only a
+# board note override can, exactly as before).
+fn test_stop_beats_event_wake() -> Result[Unit, Str] {
+  let d := scheduler.classify(Maintenance, cfg_with("spend ge 1.00", "board_note", 9), ctx_with(2, "failed", 250), 3, false, false, "", true)
+  check("stopped beats event_wake", d.action == "skip" and d.reason == "stopped")
 }
 
 # GOV1 (#221): a parked company with an unresolved blocking gate stays put —
 # nothing but a board resolution moves it.
 fn test_parked_pending_skips() -> Result[Unit, Str] {
-  let d := scheduler.classify(Growth, cfg_with("", "", 5), ctx_with(2, "passed", 0), 2, true, true, "pending")
+  let d := scheduler.classify(Growth, cfg_with("", "", 5), ctx_with(2, "passed", 0), 2, true, true, "pending", false)
   check("pending gate keeps the company parked", d.action == "skip" and d.reason == "parked")
 }
 
 # ...and once every gate item is resolved, it is due to re-enter the SAME
 # iteration (approved gates seal, rejected gates cancel — decided in-sprint).
 fn test_parked_resolved_resumes() -> Result[Unit, Str] {
-  let d := scheduler.classify(Growth, cfg_with("", "", 5), ctx_with(2, "passed", 0), 2, false, false, "resolved")
+  let d := scheduler.classify(Growth, cfg_with("", "", 5), ctx_with(2, "passed", 0), 2, false, false, "resolved", false)
   check("resolved gates resume the company", d.action == "run" and d.reason == "gate_resolved")
 }
 
@@ -176,7 +197,7 @@ fn test_unknown_company_is_none() -> [sql, fs_read, fs_write, time] Result[Unit,
 }
 
 fn suite() -> [sql, fs_write, fs_read, time, io, random, crypto] List[Result[Unit, Str]] {
-  [test_fresh_company_runs(), test_stop_when_needs_history(), test_max_iterations_is_absolute(), test_sunset_stays_down_without_backlog(), test_sunset_reactivates_via_backlog(), test_stopped_company_stays_stopped(), test_board_note_overrides_stop(), test_dormant_company_skips(), test_wake_when_fires(), test_stop_beats_wake(), test_parked_pending_skips(), test_parked_resolved_resumes(), test_classify_company_round_trip(), test_unknown_company_is_none()]
+  [test_fresh_company_runs(), test_stop_when_needs_history(), test_max_iterations_is_absolute(), test_sunset_stays_down_without_backlog(), test_sunset_reactivates_via_backlog(), test_stopped_company_stays_stopped(), test_board_note_overrides_stop(), test_dormant_company_skips(), test_wake_when_fires(), test_stop_beats_wake(), test_event_wakes_dormant(), test_event_wake_needs_an_event(), test_stop_beats_event_wake(), test_parked_pending_skips(), test_parked_resolved_resumes(), test_classify_company_round_trip(), test_unknown_company_is_none()]
 }
 
 fn run_all() -> [io, sql, fs_write, fs_read, time, random, crypto] Unit {

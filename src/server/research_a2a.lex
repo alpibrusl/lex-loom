@@ -65,22 +65,40 @@ import "lex-web/body" as wbody
 
 import "../roles" as roles
 
+import "../events" as events
+
+# HB2 (#214): when configured with a company event ledger (LOOM_EVENTS_DB +
+# LOOM_EVENTS_COMPANY), each inbound research request appends one
+# `research_request` event — the REQUEST's arrival is the event; the query
+# text stays out of the ledger (events are data, never instruction).
+fn record_request_event(ev_db :: Str, ev_cid :: Str) -> [io, sql, fs_write, time, random, crypto] Unit {
+  if str.is_empty(ev_db) or str.is_empty(ev_cid) {
+    ()
+  } else {
+    match events.record_inbound(ev_db, ev_cid, "research_request", "research_a2a", "{}") {
+      Err(e) => io.print(str.concat("[research-a2a] event ledger write failed: ", e)),
+      Ok(_) => (),
+    }
+  }
+}
+
 # ── Skill: web_search ─────────────────────────────────────────────────────────
-fn skill_web_search() -> srv.Skill {
+fn skill_web_search(ev_db :: Str, ev_cid :: Str) -> srv.Skill {
   let params := { title: "WebSearch", description: "Search the public web (DuckDuckGo) and return result titles + snippets", fields: [s.required_str("query", [])] }
   { capability: cap.inbound("research.web_search", "Search the web for `query`. Returns {results} or {error}. Read-only — keyless DuckDuckGo lookup, no write path. Requires Authorization: Bearer <RESEARCH_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let query := str_field(msg_to_json(m), "query")
     if str.is_empty(query) {
       error_outcome("query is required")
     } else {
+      let __ev := record_request_event(ev_db, ev_cid)
       ok_outcome(jv.stringify(roles.fetch_web_search(query)))
     }
   } }
 }
 
 # ── AgentDef factory ──────────────────────────────────────────────────────────
-fn make_research_agent(base_url :: Str) -> srv.AgentDef {
-  let sk := skill_web_search()
+fn make_research_agent(base_url :: Str, ev_db :: Str, ev_cid :: Str) -> srv.AgentDef {
+  let sk := skill_web_search(ev_db, ev_cid)
   let agent_card := card.make("loom-research", "Token-gated, keyless competitive/market web search for one company's own research role. See RESEARCH_API_TOKEN.", "0.1.0", base_url, [sk.capability])
   srv.make_agent_def(agent_card, [sk])
 }
@@ -179,6 +197,9 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 #   BASE_URL             this agent's own public base URL  (default: http://localhost:<PORT>)
 #   RESEARCH_API_TOKEN   required — no default, no fallback. Unset refuses
 #                        to start rather than silently serving unauthenticated.
+#   LOOM_EVENTS_DB       optional — company DB whose `events` ledger records
+#                        inbound requests (HB2). LOOM_EVENTS_COMPANY names the
+#                        company; both must be set for ledger writes.
 fn serve_research_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Unit {
   let token := env_or("RESEARCH_API_TOKEN", "")
   if str.is_empty(token) {
@@ -189,7 +210,7 @@ fn serve_research_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs
       None => 9300,
     }
     let base_url := env_or("BASE_URL", str.concat("http://localhost:", int.to_str(port)))
-    let agent := make_research_agent(base_url)
+    let agent := make_research_agent(base_url, env_or("LOOM_EVENTS_DB", ""), env_or("LOOM_EVENTS_COMPANY", ""))
     let r := mount_gated(router.new(), agent, token)
     let __p1 := io.print("=== lex-loom research A2A server (token-gated) ===")
     let __p2 := io.print(str.concat("  port: ", int.to_str(port)))

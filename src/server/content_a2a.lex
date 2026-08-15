@@ -62,8 +62,25 @@ import "lex-web/body" as wbody
 
 import "../roles" as roles
 
+import "../events" as events
+
+# HB2 (#214): when configured with a company event ledger (LOOM_EVENTS_DB +
+# LOOM_EVENTS_COMPANY), each inbound publish request appends one
+# `content_request` event — the arrival is the event; the post's text stays
+# out of the ledger (events are data, never instruction).
+fn record_request_event(ev_db :: Str, ev_cid :: Str) -> [io, sql, fs_write, time, random, crypto] Unit {
+  if str.is_empty(ev_db) or str.is_empty(ev_cid) {
+    ()
+  } else {
+    match events.record_inbound(ev_db, ev_cid, "content_request", "content_a2a", "{}") {
+      Err(e) => io.print(str.concat("[content-a2a] event ledger write failed: ", e)),
+      Ok(_) => (),
+    }
+  }
+}
+
 # ── Skill: publish_content ────────────────────────────────────────────────────
-fn skill_publish_content() -> srv.Skill {
+fn skill_publish_content(ev_db :: Str, ev_cid :: Str) -> srv.Skill {
   let params := { title: "PublishContent", description: "Publish a blog post to the live product's own /loom/content endpoint", fields: [s.required_str("url", []), s.required_str("title", []), s.required_str("body", [])] }
   { capability: cap.inbound("content.publish", "POST {title, body} to `url` + \"/loom/content\". A real write — this endpoint requires Authorization: Bearer <CONTENT_PUBLISH_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let j := msg_to_json(m)
@@ -73,14 +90,15 @@ fn skill_publish_content() -> srv.Skill {
     if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
       error_outcome("url, title, and body are all required")
     } else {
+      let __ev := record_request_event(ev_db, ev_cid)
       ok_outcome(jv.stringify(roles.publish_content_core(url, title, body)))
     }
   } }
 }
 
 # ── AgentDef factory ──────────────────────────────────────────────────────────
-fn make_content_agent(base_url :: Str) -> srv.AgentDef {
-  let sk := skill_publish_content()
+fn make_content_agent(base_url :: Str, ev_db :: Str, ev_cid :: Str) -> srv.AgentDef {
+  let sk := skill_publish_content(ev_db, ev_cid)
   let agent_card := card.make("loom-content", "Token-gated blog publishing for one company's own content_creator role. A real write — see CONTENT_PUBLISH_TOKEN.", "0.1.0", base_url, [sk.capability])
   srv.make_agent_def(agent_card, [sk])
 }
@@ -185,6 +203,9 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 #   BASE_URL               this agent's own public base URL  (default: http://localhost:<PORT>)
 #   CONTENT_PUBLISH_TOKEN   required — no default, no fallback. Unset refuses
 #                           to start rather than silently serving unauthenticated.
+#   LOOM_EVENTS_DB          optional — company DB whose `events` ledger records
+#                           inbound requests (HB2). LOOM_EVENTS_COMPANY names
+#                           the company; both must be set for ledger writes.
 fn serve_content_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Unit {
   let token := env_or("CONTENT_PUBLISH_TOKEN", "")
   if str.is_empty(token) {
@@ -195,7 +216,7 @@ fn serve_content_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_
       None => 9301,
     }
     let base_url := env_or("BASE_URL", str.concat("http://localhost:", int.to_str(port)))
-    let agent := make_content_agent(base_url)
+    let agent := make_content_agent(base_url, env_or("LOOM_EVENTS_DB", ""), env_or("LOOM_EVENTS_COMPANY", ""))
     let r := mount_gated(router.new(), agent, token)
     let __p1 := io.print("=== lex-loom content A2A server (token-gated) ===")
     let __p2 := io.print(str.concat("  port: ", int.to_str(port)))

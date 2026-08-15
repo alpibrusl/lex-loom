@@ -67,22 +67,58 @@ import "lex-web/body" as wbody
 
 import "../roles" as roles
 
+import "../events" as events
+
+# ── HB2 (#214): inbound support items are wake events ─────────────────────────
+# When this server is configured with a company event ledger (LOOM_EVENTS_DB +
+# LOOM_EVENTS_COMPANY), every open support item a fetch observes is projected
+# into that company's append-only `events` table as a `support_item` event —
+# deduped by the item's id, so polling the same items twice writes nothing new.
+# The event stores the item's ID, never the customer's text: events are data
+# for the scheduler's wake decision, not instruction for any prompt. A company
+# whose wake_when doesn't declare `support_item` records the event and sleeps on.
+fn record_support_events(ev_db :: Str, ev_cid :: Str, result :: jv.Json) -> [io, sql, fs_write, time] Unit {
+  if str.is_empty(ev_db) or str.is_empty(ev_cid) {
+    ()
+  } else {
+    match jv.get_field(result, "items") {
+      Some(JList(items)) => {
+        let __each := list.map(items, fn (item :: jv.Json) -> [io, sql, fs_write, time] Unit {
+          let item_id := str_field(item, "id")
+          if str.is_empty(item_id) {
+            ()
+          } else {
+            match events.record_inbound_once(ev_db, str.join(["ev-support-", ev_cid, "-", item_id], ""), ev_cid, "support_item", "cx_a2a", str.join(["{\"item\":\"", item_id, "\"}"], "")) {
+              Err(e) => io.print(str.concat("[cx-a2a] event ledger write failed: ", e)),
+              Ok(_) => (),
+            }
+          }
+        })
+        ()
+      },
+      _ => (),
+    }
+  }
+}
+
 # ── Skill: fetch_support_items ────────────────────────────────────────────────
-fn skill_fetch_support_items() -> srv.Skill {
+fn skill_fetch_support_items(ev_db :: Str, ev_cid :: Str) -> srv.Skill {
   let params := { title: "FetchSupportItems", description: "Read items needing a human response from a company's live /loom/support endpoint", fields: [s.required_str("url", [])] }
   { capability: cap.inbound("support.fetch_items", "GET `url` + \"/loom/support\" and return {items:[{id,text,status}]} or {error}. Read-only. Requires Authorization: Bearer <CX_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
     let url := str_field(msg_to_json(m), "url")
     if str.is_empty(url) {
       error_outcome("url is required")
     } else {
-      ok_outcome(jv.stringify(roles.fetch_support_items(url)))
+      let result := roles.fetch_support_items(url)
+      let __ev := record_support_events(ev_db, ev_cid, result)
+      ok_outcome(jv.stringify(result))
     }
   } }
 }
 
 # ── AgentDef factory ──────────────────────────────────────────────────────────
-fn make_cx_agent(base_url :: Str) -> srv.AgentDef {
-  let sk := skill_fetch_support_items()
+fn make_cx_agent(base_url :: Str, ev_db :: Str, ev_cid :: Str) -> srv.AgentDef {
+  let sk := skill_fetch_support_items(ev_db, ev_cid)
   let agent_card := card.make("loom-cx", "Token-gated, read-only customer-support triage: fetches open support items for a company's own /loom/support endpoint. See CX_API_TOKEN.", "0.1.0", base_url, [sk.capability])
   srv.make_agent_def(agent_card, [sk])
 }
@@ -181,6 +217,10 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 #   BASE_URL      this agent's own public base URL  (default: http://localhost:<PORT>)
 #   CX_API_TOKEN  required — no default, no fallback. Unset refuses to
 #                 start rather than silently serving unauthenticated.
+#   LOOM_EVENTS_DB        optional — path to a company DB whose append-only
+#                         `events` ledger records inbound support items (HB2).
+#   LOOM_EVENTS_COMPANY   the company id those events belong to. Both must be
+#                         set for event recording; unset means no ledger writes.
 fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Unit {
   let token := env_or("CX_API_TOKEN", "")
   if str.is_empty(token) {
@@ -191,7 +231,7 @@ fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write
       None => 9200,
     }
     let base_url := env_or("BASE_URL", str.concat("http://localhost:", int.to_str(port)))
-    let agent := make_cx_agent(base_url)
+    let agent := make_cx_agent(base_url, env_or("LOOM_EVENTS_DB", ""), env_or("LOOM_EVENTS_COMPANY", ""))
     let r := mount_gated(router.new(), agent, token)
     let __p1 := io.print("=== lex-loom CX A2A server (token-gated) ===")
     let __p2 := io.print(str.concat("  port: ", int.to_str(port)))

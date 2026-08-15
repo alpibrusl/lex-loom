@@ -287,6 +287,22 @@ fn ddl_attestations_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_att_did ON attestations(agent_did, verified)"
 }
 
+# HB2 (#214): the append-only external-event ledger. Inserted, never edited,
+# never deleted; the only mutation anywhere is the one-shot consumption mark
+# (events.lex `consume_all`). There is deliberately no updated_at column —
+# a row's whole lifecycle is created → (optionally) consumed.
+# Named company_events, NOT events: lex-trail's schema owns a table called
+# `events` (hash-chained trail rows, incompatible columns) and the settlement
+# path opens a lex-trail log on the SAME connection loom migrates — the exact
+# collision operate_sweep already documents for `attestations`.
+fn ddl_events() -> Str {
+  "CREATE TABLE IF NOT EXISTS company_events (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', body_json TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, consumed_at TEXT NOT NULL DEFAULT '', consumed_by TEXT NOT NULL DEFAULT '')"
+}
+
+fn ddl_events_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_company_events ON company_events(company_id, consumed_at)"
+}
+
 fn try_ddl(db :: Db, stmt :: Str) -> [sql, fs_write] Unit {
   let __r := sql.exec(db, stmt, [])
   ()
@@ -351,7 +367,7 @@ fn mem_conndb(db :: Db) -> conn.ConnDb {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx(), ddl_assignments(), ddl_assignments_idx(), ddl_mission_ledger(), ddl_mission_ledger_idx(), ddl_role_defs(), ddl_role_defs_idx(), ddl_budget_envelopes(), ddl_budget_envelopes_idx(), ddl_allocations(), ddl_allocations_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx(), ddl_assignments(), ddl_assignments_idx(), ddl_mission_ledger(), ddl_mission_ledger_idx(), ddl_role_defs(), ddl_role_defs_idx(), ddl_budget_envelopes(), ddl_budget_envelopes_idx(), ddl_allocations(), ddl_allocations_idx(), ddl_events(), ddl_events_idx()]) {
     Err(e) => Err(e),
     Ok(_) => match mem.init_schema(mem_conndb(db)) {
       Err(e) => Err(e),

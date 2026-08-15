@@ -198,6 +198,31 @@ fn charge(db :: conn.ConnDb, company_id :: Str, role :: Str, cents :: Int) -> [s
 }
 
 # The same cost estimate the ledger v0 uses: chars -> tokens (/4) -> cents.
+# The one node-charge decision (#94), pure so it's directly testable:
+# `before`/`after` are (priced_cents, event_count) readings of the node's
+# usage owner around its invocation. New usage events → charge the priced
+# DELTA (real money; a reported-but-free local model charges 0, honestly).
+# No new events (provider reported nothing — proc executors, non-reporting
+# providers) → the historical artifact-size estimate.
+fn charge_basis(before :: (Int, Int), after :: (Int, Int), artifact_len :: Int) -> Int
+  examples {
+    charge_basis((0, 0), (7, 2), 4000) => 7,
+    charge_basis((5, 1), (5, 2), 4000) => 0,
+    charge_basis((0, 0), (0, 0), 4000) => 30,
+    charge_basis((9, 3), (9, 3), 4000) => 30
+  }
+{
+  match before {
+    (cents_before, n_before) => match after {
+      (cents_after, n_after) => if n_after > n_before {
+        cents_after - cents_before
+      } else {
+        artifact_cost_cents(artifact_len)
+      },
+    },
+  }
+}
+
 fn artifact_cost_cents(content_len :: Int) -> Int {
   content_len / 4 * 30 / 1000
 }

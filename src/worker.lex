@@ -80,6 +80,10 @@ import "./orchestrator" as orch
 
 import "./cast" as cast
 
+import "./budget" as budget
+
+import "./pricing" as pricing
+
 import "./defaults" as defaults
 
 fn get_env(key :: Str, fallback :: Str) -> [env] Str {
@@ -173,39 +177,77 @@ fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, pro
           match node_opt {
             None => Fail(str.join(["node not found in sprint graph: ", node_id], "")),
             Some(n) => {
-              let roster_entry := cast.cast_node(db, n, request, model, sprint_id)
-              let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: api_calls_max, roster: [roster_entry], trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
-              let outcome := orch.invoke_node_attempt(n, input_content, cfg, 1, "", None)
-              let __rep := if str.is_empty(roster_entry.pool_agent_id) {
-                ()
-              } else {
-                if outcome.attested {
-                  cast.increment_attestation(db, roster_entry.pool_agent_id)
-                } else {
-                  cast.record_bounce(db, roster_entry.pool_agent_id)
-                }
-              }
-              let __wr := tr.write_node_result(db, sprint_id, node_id, phase, outcome.attested, outcome.artifact, outcome.reason)
-              let __wt := tr.trail(db, sprint_id, "worker_node_executed", str.join(["{\"worker\":\"", worker_id, "\",\"node\":\"", node_id, "\",\"attested\":", if outcome.attested {
-                "true"
-              } else {
-                "false"
-              }, "}"], ""))
-              let __tl2 := io.print(str.join(["[loom/worker ", worker_id, "] done node=", node_id, " attested=", if outcome.attested {
-                "true"
-              } else {
-                "false"
-              }], ""))
-              if outcome.attested {
-                Done
-              } else {
-                Fail(outcome.reason)
+              let cid := company_of_sprint(sprint_id)
+              match budget.check_role(db, cid, n.role) {
+                Exhausted => {
+                  let __esc := budget.escalate_exhausted(db, cid, str.concat("role:", n.role), n.role)
+                  let __t := tr.trail(db, sprint_id, "node_refused_budget", str.join(["{\"node\":\"", n.id, "\",\"role\":\"", n.role, "\"}"], ""))
+                  let reason := str.join(["BUDGET: spend envelope exhausted for role '", n.role, "' — refused at dispatch"], "")
+                  let __wr0 := tr.write_node_result(db, sprint_id, node_id, phase, false, "", reason)
+                  let __p0 := io.print(str.join(["[loom/worker ", worker_id, "] node ", n.id, " (", n.role, ") REFUSED — spend envelope exhausted"], ""))
+                  Done
+                },
+                _ => execute_gated_node(db, n, sprint_id, node_id, phase, request, model, api_calls_max, input_content, cid, worker_id),
               }
             },
           }
         }
       }
     },
+  }
+}
+
+# Run one budget-cleared node: cast, execute via the shared orchestrator
+# logic, record reputation + result + trail, then charge the role's
+# envelope its REAL priced usage (#94) — the delta of llm_usage recorded
+# under the node's "<sprint>#<node>" owner across this invocation — with
+# the artifact-size estimate only when no usage was reported.
+fn execute_gated_node(db :: conn.ConnDb, n :: graph.Node, sprint_id :: Str, node_id :: Str, phase :: Str, request :: Str, model :: Str, api_calls_max :: Int, input_content :: Str, cid :: Str, worker_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] jobs.WorkOutcome {
+  let roster_entry := cast.cast_node(db, n, request, model, sprint_id)
+  let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: api_calls_max, roster: [roster_entry], trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
+  let usage_before := pricing.usage_cost_cents(db, orch.node_cost_owner(sprint_id, n.id), false)
+  let outcome := orch.invoke_node_attempt(n, input_content, cfg, 1, "", None)
+  let usage_after := pricing.usage_cost_cents(db, orch.node_cost_owner(sprint_id, n.id), false)
+  let artifact_len := match tr.artifact_get(db, outcome.artifact) {
+    Ok(content) => str.len(content),
+    Err(_) => 0,
+  }
+  let cost := budget.charge_basis(usage_before, usage_after, artifact_len)
+  let __c := budget.charge(db, cid, n.role, cost)
+  let __w1 := budget.warn_if_needed(db, cid, "total")
+  let __w2 := budget.warn_if_needed(db, cid, str.concat("role:", n.role))
+  let __rep := if str.is_empty(roster_entry.pool_agent_id) {
+    ()
+  } else {
+    if outcome.attested {
+      cast.increment_attestation(db, roster_entry.pool_agent_id)
+    } else {
+      cast.record_bounce(db, roster_entry.pool_agent_id)
+    }
+  }
+  let __wr := tr.write_node_result(db, sprint_id, node_id, phase, outcome.attested, outcome.artifact, outcome.reason)
+  let __wt := tr.trail(db, sprint_id, "worker_node_executed", str.join(["{\"worker\":\"", worker_id, "\",\"node\":\"", node_id, "\",\"attested\":", if outcome.attested {
+    "true"
+  } else {
+    "false"
+  }, "}"], ""))
+  let __tl2 := io.print(str.join(["[loom/worker ", worker_id, "] done node=", node_id, " attested=", if outcome.attested {
+    "true"
+  } else {
+    "false"
+  }], ""))
+  if outcome.attested {
+    Done
+  } else {
+    Fail(outcome.reason)
+  }
+}
+
+# The company id a sprint belongs to ("<cid>/iter-N" -> "<cid>").
+fn company_of_sprint(sprint_id :: Str) -> Str {
+  match list.head(str.split(sprint_id, "/")) {
+    Some(cid) => cid,
+    None => sprint_id,
   }
 }
 

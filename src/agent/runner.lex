@@ -176,8 +176,8 @@ fn sum_usage_tokens(steps :: List[d.Step]) -> (Int, Int, Int) {
   })
 }
 
-fn usage_json(p :: Int, c :: Int, t :: Int) -> Str {
-  str.join(["{\"prompt_tokens\":", int.to_str(p), ",\"completion_tokens\":", int.to_str(c), ",\"total_tokens\":", int.to_str(t), "}"], "")
+fn usage_json(model :: Str, p :: Int, c :: Int, t :: Int) -> Str {
+  str.join(["{\"model\":\"", model, "\",\"prompt_tokens\":", int.to_str(p), ",\"completion_tokens\":", int.to_str(c), ",\"total_tokens\":", int.to_str(t), "}"], "")
 }
 
 # Records this call's real token usage against `cost_owner` (a sprint_id for
@@ -187,7 +187,7 @@ fn usage_json(p :: Int, c :: Int, t :: Int) -> Str {
 # straightforwardly by that owner id (#94). A no-op when cost_owner is empty
 # (proc_cmd/a2a_url paths never reach this branch anyway) or no provider in
 # this turn ever reported usage.
-fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
+fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, model :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
   if str.is_empty(cost_owner) {
     ()
   } else {
@@ -195,7 +195,7 @@ fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps :: Li
       (p, c, t) => if t == 0 {
         ()
       } else {
-        trace.record(db, run_id, cost_owner, "llm_usage", usage_json(p, c, t))
+        trace.record(db, run_id, cost_owner, "llm_usage", usage_json(model, p, c, t))
       },
     }
   }
@@ -776,7 +776,7 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, 
       }
       let _t2 := trace.record(db, run_id, def.id, "llm_start", "{}")
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
-      let __usage := record_usage(db, run_id, cost_owner, steps)
+      let __usage := record_usage(db, run_id, cost_owner, def.model_name, steps)
       let __ops := flush_op_calls(db, run_id, def.id)
       let delegated := delegation.flush_delegations(db, company_id, def.kind, delegation.delegations_file(run_id))
       let __dp := if delegated > 0 {

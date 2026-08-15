@@ -41,6 +41,8 @@ import "./transport" as tr
 
 import "./events" as events
 
+import "./pricing" as pricing
+
 import "./org" as org
 
 import "./operate_ledger" as oledger
@@ -469,16 +471,19 @@ fn json_int_field(j :: jv.Json, key :: Str) -> Int {
   }
 }
 
-# Prefers real token usage (real_usage_tokens) when any runner.step call under
-# this sprint reported it; falls back to the old char-count proxy for
-# providers that don't report usage, so cost tracking never silently drops to
-# zero just because one call in the chain used a non-reporting provider.
-fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Int {
-  let real_tokens := real_usage_tokens(db, sprint_id)
-  if real_tokens > 0 {
-    tokens_to_cents(real_tokens)
-  } else {
-    char_estimate_iteration_cost_cents(db, sprint_id)
+# Prefers REAL priced usage (#94): every llm_usage event recorded under this
+# sprint — including the node-scoped "<sprint>#<node>" owners the
+# orchestrator uses since #94's envelope slice — priced per model by
+# pricing.lex. Falls back to the old char-count proxy only when NO call
+# under this sprint reported usage; a reported-but-free run (local models)
+# is genuinely ~$0 and is NOT re-inflated with an estimate.
+fn estimate_iteration_cost_cents(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Int {
+  match pricing.usage_cost_cents(db, sprint_id, true) {
+    (cents, n) => if n > 0 {
+      cents
+    } else {
+      char_estimate_iteration_cost_cents(db, sprint_id)
+    },
   }
 }
 
@@ -493,15 +498,16 @@ fn strategist_cost_owner(company_id :: Str, idx :: Int) -> Str {
 # Adds this iteration's strategist call's real cost to the company's running
 # total (a no-op if the provider didn't report usage). Call exactly once per
 # iteration, alongside record_iteration_cost.
-fn record_strategist_cost(db :: conn.ConnDb, company_id :: Str, idx :: Int) -> [sql] Result[Int, Str] {
-  let tokens := real_usage_tokens(db, strategist_cost_owner(company_id, idx))
-  if tokens == 0 {
-    Ok(get_company_cost_cents(db, company_id))
-  } else {
-    match add_company_cost_cents(db, company_id, tokens_to_cents(tokens)) {
-      Err(e) => Err(e),
-      Ok(_) => Ok(get_company_cost_cents(db, company_id)),
-    }
+fn record_strategist_cost(db :: conn.ConnDb, company_id :: Str, idx :: Int) -> [sql, fs_read] Result[Int, Str] {
+  match pricing.usage_cost_cents(db, strategist_cost_owner(company_id, idx), false) {
+    (cents, n) => if n == 0 {
+      Ok(get_company_cost_cents(db, company_id))
+    } else {
+      match add_company_cost_cents(db, company_id, cents) {
+        Err(e) => Err(e),
+        Ok(_) => Ok(get_company_cost_cents(db, company_id)),
+      }
+    },
   }
 }
 
@@ -529,7 +535,7 @@ fn add_company_cost_cents(db :: conn.ConnDb, company_id :: Str, delta_cents :: I
 # Called regardless of success/failure — a failed iteration still cost real
 # LLM calls. Returns the NEW running total so callers (derive_ctx) don't need
 # a second query.
-fn record_iteration_cost(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str) -> [sql] Result[Int, Str] {
+fn record_iteration_cost(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str) -> [sql, fs_read] Result[Int, Str] {
   let delta := estimate_iteration_cost_cents(db, sprint_id)
   match add_company_cost_cents(db, company_id, delta) {
     Err(e) => Err(e),
@@ -2314,9 +2320,9 @@ fn real_economics_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
     }
     let spend := get_company_cost_cents(db, company_id)
     if str.contains(reading, "unreachable") {
-      str.join(["Revenue source configured but unreachable on the last check. Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
+      str.join(["Revenue source configured but unreachable on the last check. LLM spend so far: ", format_cents(spend), " (real usage where reported; estimate otherwise)."], "")
     } else {
-      str.join(["Revenue so far: ", format_cents(revenue_cents), settlement_citation(reading), ". Estimated LLM spend so far: ", format_cents(spend), " (rough proxy — not real billing data)."], "")
+      str.join(["Revenue so far: ", format_cents(revenue_cents), settlement_citation(reading), ". LLM spend so far: ", format_cents(spend), " (real usage where reported; estimate otherwise)."], "")
     }
   }
 }
@@ -2433,7 +2439,7 @@ fn board_report(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
       let decisions := list.map(recent_events(db, company_id, "goal_decision", 5), format_decision)
       let transitions := list.map(recent_events(db, company_id, "stage_transition", 5), format_stage_transition)
       let dossiers := escalation_dossiers_for_company(db, company_id)
-      str.join(["=== Board Report: ", company_id, " ===\n", parked_banner(db, company_id), "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Estimated spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (rough proxy — not real billing data)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Org chart (reporting lines):\n", org_chart_section(db, company_id), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
+      str.join(["=== Board Report: ", company_id, " ===\n", parked_banner(db, company_id), "Mission: ", cfg.goal, "\n", "Stage: ", stage_to_str(stage), "\n", "Iterations run: ", int.to_str(list.len(its)), "\n", "Spend so far: ", format_cents(get_company_cost_cents(db, company_id)), " (real provider usage where reported, priced per model; char-estimate otherwise)", "\n\n", "Real economics:\n", real_economics_section(db, company_id), "\n\n", "Distribution:\n", distribution_section(db, company_id), "\n\n", "Soft (cross-org mesh):\n", soft_section(cfg), "\n\n", "Shipped so far:\n", shipped_summary(db, company_id), "\n\n", "Backlog:\n", backlog_section(db, company_id), "\n\n", "Recent liveness checks:\n", operate_section(db, company_id), "\n\n", "Escalations needing review:\n", lines_or(dossiers, "(none)"), "\n\n", "Org chart (reporting lines):\n", org_chart_section(db, company_id), "\n\n", "Contacts (who to ask):\n", contacts_section(db, company_id), "\n\n", "Recent decisions:\n", lines_or(decisions, "(none yet)"), "\n\n", "Recent stage transitions:\n", lines_or(transitions, "(none yet)")], "")
     },
   }
 }

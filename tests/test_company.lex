@@ -1991,7 +1991,7 @@ fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, f
 # ── OP2 (#86): Strategist actually sees Operate signals ─────────────────────
 fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
   let iter_ctx := { idx: 2, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 3, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Add widget v2", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], "2026-07-06T12:00:00Z: down", "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "", "Add widget v2", iter_ctx)
   if str.contains(prompt, "OPERATE SIGNALS") {
     if str.contains(prompt, "down") {
       Ok(())
@@ -2005,7 +2005,7 @@ fn test_strategist_prompt_includes_operate_signals() -> Result[Unit, Str] {
 
 fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
   let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "first ship", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Ship v1", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a widget factory", "(empty)", [], "(no launched server for this company, or no liveness checks yet)", "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "", "Ship v1", iter_ctx)
   if str.contains(prompt, "no launched server") {
     Ok(())
   } else {
@@ -2020,7 +2020,7 @@ fn test_strategist_prompt_no_signals_yet() -> Result[Unit, Str] {
 # labelled section.
 fn test_strategist_prompt_includes_product_signals() -> Result[Unit, Str] {
   let iter_ctx := { idx: 3, last_verdict: "passed", digest_summary: "shipped feedback endpoint", accepted_count: 4, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "{\"summary\": \"3 projects, 40 feedback rows, avg score 6.2\"}", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Add sentiment trend", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "{\"summary\": \"3 projects, 40 feedback rows, avg score 6.2\"}", "(no revenue source configured)", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "", "Add sentiment trend", iter_ctx)
   if str.contains(prompt, "PRODUCT SIGNALS") {
     if str.contains(prompt, "40 feedback rows") {
       Ok(())
@@ -2088,7 +2088,7 @@ fn test_fetch_product_usage_reports_unreachable_cleanly() -> [proc] Result[Unit,
 # source, compared against LLM spend. loom never touches payments itself.
 fn test_strategist_prompt_includes_real_economics() -> Result[Unit, Str] {
   let iter_ctx := { idx: 4, last_verdict: "passed", digest_summary: "shipped pricing page", accepted_count: 5, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "(no product usage signal recorded yet)", "Revenue so far: $34.00. Estimated LLM spend so far: $12.50 (rough proxy — not real billing data).", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Add annual plan", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "(no product usage signal recorded yet)", "Revenue so far: $34.00. Estimated LLM spend so far: $12.50 (rough proxy — not real billing data).", "(no content published yet)", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "", "Add annual plan", iter_ctx)
   if str.contains(prompt, "REAL ECONOMICS") {
     if str.contains(prompt, "$34.00") {
       Ok(())
@@ -2209,7 +2209,7 @@ fn test_fetch_revenue_signal_reports_unreachable_cleanly() -> [proc] Result[Unit
 # self-reported claim of having written content.
 fn test_strategist_prompt_includes_distribution() -> Result[Unit, Str] {
   let iter_ctx := { idx: 5, last_verdict: "passed", digest_summary: "shipped launch blog post", accepted_count: 6, bounced_count: 0, spend_cents: 0 }
-  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "(no product usage signal recorded yet)", "(no revenue source configured)", "Published posts: 1. Total views recorded: 12.", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "Add a second post", iter_ctx)
+  let prompt := company_runner.strategist_prompt("Build a feedback tool", "feedback v1", [], "2026-07-06T12:00:00Z: up", "(no product usage signal recorded yet)", "(no revenue source configured)", "Published posts: 1. Total views recorded: 12.", "NO Lex ('build' role) node has EVER been accepted for this company, across every iteration so far.", "", "Add a second post", iter_ctx)
   if str.contains(prompt, "DISTRIBUTION") {
     if str.contains(prompt, "Total views recorded: 12") {
       Ok(())
@@ -2363,8 +2363,8 @@ fn test_strategist_prompt_differs_by_controller_metrics() -> [sql, fs_write, tim
               let iter_ctx := { idx: 1, last_verdict: "passed", digest_summary: "shipped the widget", accepted_count: 1, bounced_count: 0, spend_cents: 0 }
               let clean_operate := company.operate_section(db, clean)
               let rocky_operate := company.operate_section(db, rocky)
-              let clean_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], clean_operate, "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "build status n/a", "Add widget v2", iter_ctx)
-              let rocky_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], rocky_operate, "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "build status n/a", "Add widget v2", iter_ctx)
+              let clean_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], clean_operate, "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "build status n/a", "", "Add widget v2", iter_ctx)
+              let rocky_prompt := company_runner.strategist_prompt("Build a widget factory", "widget v1", [], rocky_operate, "(no product usage signal recorded yet)", "(no revenue source configured)", "(no content published yet)", "build status n/a", "", "Add widget v2", iter_ctx)
               if clean_prompt == rocky_prompt {
                 Err("identical build-loop state produced identical prompts despite divergent controller metrics")
               } else {

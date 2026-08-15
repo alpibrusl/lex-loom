@@ -82,7 +82,7 @@ fn ddl_agent_pool_idx() -> Str {
 # report, structurally gated on the ORG1 may_assign edge at write time.
 # status: offered -> accepted -> done | returned.
 fn ddl_assignments() -> Str {
-  "CREATE TABLE IF NOT EXISTS assignments (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, from_role TEXT NOT NULL, to_role TEXT NOT NULL, kind TEXT NOT NULL, params_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'offered', artifact_ref TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '')"
+  "CREATE TABLE IF NOT EXISTS assignments (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, from_role TEXT NOT NULL, to_role TEXT NOT NULL, kind TEXT NOT NULL, params_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'offered', artifact_ref TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', worker_agent_id TEXT NOT NULL DEFAULT '', rework_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '')"
 }
 
 fn ddl_assignments_idx() -> Str {
@@ -287,6 +287,8 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __24 := try_ddl(db, "ALTER TABLE companies ADD COLUMN soft_settlement TEXT NOT NULL DEFAULT ''")
   let __25 := try_ddl(db, "ALTER TABLE companies ADD COLUMN policy_isolation TEXT NOT NULL DEFAULT ''")
   let __26 := try_ddl(db, "ALTER TABLE attention_queue ADD COLUMN resolved_by TEXT NOT NULL DEFAULT ''")
+  let __27 := try_ddl(db, "ALTER TABLE assignments ADD COLUMN worker_agent_id TEXT NOT NULL DEFAULT ''")
+  let __28 := try_ddl(db, "ALTER TABLE assignments ADD COLUMN rework_count INTEGER NOT NULL DEFAULT 0")
   ()
 }
 

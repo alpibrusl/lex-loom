@@ -24,14 +24,11 @@ import "../src/migrate" as migrate
 
 import "../src/dag_view" as dagv
 
-# "sqlite::memory:" is shared across separate `lex run` invocations, not just
-# within one process (confirmed directly while writing these tests: a fixed
-# row id like "g1" collided with a leftover row from an earlier run of this
-# same file with "UNIQUE constraint failed"). Every row id/sprint id below
-# gets a random suffix via uniq() so repeat runs never collide.
-fn fresh_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+# Each open is a fresh per-run file DB (#242 — the old shared "memory" DB
+# even collided across separate `lex run` invocations). Row/sprint ids keep
+# their uniq() suffixes for disjointness within a connection.
+fn fresh_db() -> [sql, fs_write, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),

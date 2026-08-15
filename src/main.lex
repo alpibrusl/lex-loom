@@ -19,7 +19,7 @@
 #
 # Environment:
 #   DB_PATH       — SQLite file path         (default: loom.db)
-#   MODEL         — LLM model name           (default: gemma4:latest)
+#   MODEL         — LLM model name           (default: defaults.model())
 #   REQUEST       — project request text     (default: built-in toy request)
 #   SPRINT_ID     — sprint identifier        (default: sprint-1)
 #   MAX_API_CALLS — max LLM node invocations (default: 200; matches sprint manifest budget)
@@ -52,6 +52,8 @@ import "./orchestrator" as orch
 import "./digest" as dg
 
 import "./cast" as cast
+
+import "./defaults" as defaults
 
 import "./pool_seed" as pool_seed
 
@@ -146,7 +148,7 @@ fn init_db() -> [env, sql, fs_write] Unit {
 # ── run_sprint_cmd ────────────────────────────────────────────────────────────
 fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
   let request := get_env("REQUEST", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
   let max_api_calls := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
@@ -625,9 +627,13 @@ fn events_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
 # ── company_monitor_cmd ────────────────────────────────────────────────────────
 # Health-checks a company's latest iteration OUTSIDE the iteration loop, and
 # records the result into the same company_operate_signals table the
-# strategist's prompt reads from (#102). Meant to be run from cron/a systemd
-# timer against a company that isn't actively iterating right now, so
-# monitoring doesn't stop just because the loom isn't currently running.
+# strategist's prompt reads from (#102).
+#
+# Repositioned since HB1/#242: this is a MANUAL/DEBUG tool now. The original
+# "run from cron/a systemd timer" role is owned by the scheduler daemon
+# (`bin/loom-scheduler.sh`), whose every tick gives each not-run company this
+# exact sweep — plus the operate event bridges the standalone command does
+# not run. Use this only to force one sweep by hand while diagnosing.
 #
 #   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write,time,proc \
 #     src/main.lex company_monitor_cmd
@@ -762,7 +768,7 @@ fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
 # A persistent goal that produces a series of iterating looms (#53).
 fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
   let company_id := get_env("COMPANY_ID", "acme")
   let goal := get_env("GOAL", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "3"), 3)
@@ -836,6 +842,16 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
 # One company, N concurrent product tracks sharing the same staff pool (#78).
 # Seed tracks via TRACK_COUNT + TRACK_<n>_ID/TRACK_<n>_GOAL (n = 1..TRACK_COUNT);
 # seeding is idempotent, so a re-invoked portfolio only advances existing tracks.
+#
+# DEPRECATED (#242): portfolio tracks predate the scheduler and are the weaker
+# of two "many products" mechanisms — all tracks share ONE company DB, run
+# sequentially, and have no per-track governance (no budget envelopes, no
+# event wakes, no board surface of their own). The workspace-of-companies
+# model is strictly stronger: bootstrap each product line as its OWN company
+# (`bin/bootstrap-company.sh <manifest> --no-run` into $LOOM_WORKSPACE) and
+# let `bin/loom-scheduler.sh` run them concurrently under MAX_RUNS_PER_TICK,
+# each with its full governance surface. This command keeps working for
+# existing portfolio DBs but warns loudly; removal is a later major.
 fn build_track_seed(n :: Int, count :: Int) -> [env] List[(Str, Str)] {
   if n > count {
     []
@@ -852,8 +868,11 @@ fn build_track_seed(n :: Int, count :: Int) -> [env] List[(Str, Str)] {
 }
 
 fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+  let __warn1 := io.print("[portfolio] DEPRECATED (#242): portfolio tracks share one DB, run sequentially, and have no per-track governance.")
+  let __warn2 := io.print("[portfolio]   Prefer one company per product line in a workspace: bin/bootstrap-company.sh <manifest> --no-run, then bin/loom-scheduler.sh")
+  let __warn3 := io.print("[portfolio]   (concurrent runs, budget envelopes, event wakes, and a board surface per company). This command still works for existing portfolio DBs.")
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", "gemma4:latest"))
+  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
   let portfolio_id := get_env("PORTFOLIO_ID", "acme")
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "1"), 1)
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)

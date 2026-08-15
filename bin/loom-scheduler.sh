@@ -25,11 +25,16 @@
 #   MAX_TICKS         — 0 = run forever            (default: 0)
 #   MAX_API_CALLS     — per-run LLM budget         (default: 200)
 #   EVOLVE            — strategist on/off          (default: 1)
-#   EXEC_MODE         — "inline" (default here): the scheduler launches no
-#                       queue workers (that's HB3), so sprint nodes run
-#                       in-process. Set EXEC_MODE=queue ONLY if you run
-#                       `src/worker.lex run_worker` processes yourself against
-#                       each company DB.
+#   EXEC_MODE         — "inline" (default here). The two entrypoints default
+#                       DIFFERENTLY, on purpose (#242): run-company.sh runs
+#                       ONE company and launches/tears down its own workers,
+#                       so it defaults to "queue" (crash-surviving builds);
+#                       this daemon owns MANY companies and launches no
+#                       workers of its own, so it defaults to "inline"
+#                       (in-process fan-out). Set EXEC_MODE=queue ONLY if
+#                       you run `src/worker.lex run_worker` processes
+#                       yourself against each company DB — since HB3,
+#                       several workers per DB are safe.
 #
 # Provider keys: same as run-company.sh — set OPENCODE_API_KEY (or the usual
 # provider keys); falls back to the credentials file, then Ollama.

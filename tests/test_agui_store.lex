@@ -8,6 +8,8 @@ import "std.list" as list
 
 import "std.str" as str
 
+import "std.crypto" as crypto
+
 import "std.io" as io
 
 import "lex-orm/src/connection" as conn
@@ -22,9 +24,8 @@ import "../src/migrate" as migrate
 
 import "../src/agui_store" as agui_store
 
-fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+fn fresh_db() -> [sql, fs_write, time, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),
@@ -42,7 +43,7 @@ fn sample_steps() -> List[d.Step] {
   [StepDelta(TextChunk("hello from a sprint node")), StepDone(AssistantMsg("hello from a sprint node", []))]
 }
 
-fn test_persist_then_load_round_trips() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_persist_then_load_round_trips() -> [env, sql, fs_read, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -75,7 +76,7 @@ fn test_persist_then_load_round_trips() -> [env, sql, fs_read, fs_write, time] R
   }
 }
 
-fn test_load_latest_returns_none_for_unknown_sprint() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_load_latest_returns_none_for_unknown_sprint() -> [env, sql, fs_read, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => match agui_store.load_latest_agui_events(db, "no-such-sprint") {
@@ -85,7 +86,7 @@ fn test_load_latest_returns_none_for_unknown_sprint() -> [env, sql, fs_read, fs_
   }
 }
 
-fn test_load_latest_prefers_the_most_recent_row() -> [env, sql, fs_read, fs_write, time] Result[Unit, Str] {
+fn test_load_latest_prefers_the_most_recent_row() -> [env, sql, fs_read, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -103,11 +104,11 @@ fn test_load_latest_prefers_the_most_recent_row() -> [env, sql, fs_read, fs_writ
   }
 }
 
-fn suite() -> [env, sql, fs_read, fs_write, time] List[Result[Unit, Str]] {
+fn suite() -> [env, sql, fs_read, fs_write, time, random] List[Result[Unit, Str]] {
   [test_persist_then_load_round_trips(), test_load_latest_returns_none_for_unknown_sprint(), test_load_latest_prefers_the_most_recent_row()]
 }
 
-fn run_all() -> [io, env, sql, fs_read, fs_write, time] Unit {
+fn run_all() -> [io, env, sql, fs_read, fs_write, time, random] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> [io] Int {
     match r {
       Ok(_) => n,

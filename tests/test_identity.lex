@@ -8,6 +8,8 @@ import "std.io" as io
 
 import "std.str" as str
 
+import "std.crypto" as crypto
+
 import "std.int" as int
 
 import "std.sql" as sql
@@ -22,11 +24,10 @@ import "../src/identity" as identity
 
 import "../src/cast" as cast
 
-# "sqlite::memory:" is one shared store per process — every test uses its own
-# agent/sprint ids to keep rows disjoint (same rule as test_ops.lex).
-fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+# Each open is a fresh per-run file DB (#242); per-test agent/sprint ids
+# keep rows disjoint within a connection (same rule as test_ops.lex).
+fn fresh_db() -> [sql, fs_write, time, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),

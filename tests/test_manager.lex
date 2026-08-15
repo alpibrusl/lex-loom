@@ -50,9 +50,8 @@ fn check(name :: Str, cond :: Bool) -> Result[Unit, Str] {
   }
 }
 
-# agent_pool casting is role-scoped, not company-scoped, and the shared
-# sqlite::memory: database persists across tests in one process — so each
-# test gets its OWN file DB, or every test would cast the previous test's
+# agent_pool casting is role-scoped, not company-scoped — so each test gets
+# its OWN file DB (#242), or every test would cast the previous test's
 # manager agent.
 fn open_db() -> [sql, fs_write, random, crypto] Result[conn.ConnDb, Str] {
   let path := str.join(["/tmp/loom-org3-test-", crypto.random_str_hex(8), ".db"], "")

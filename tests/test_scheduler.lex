@@ -11,6 +11,8 @@ import "std.list" as list
 
 import "std.str" as str
 
+import "std.crypto" as crypto
+
 import "std.io" as io
 
 import "lex-orm/src/connection" as conn
@@ -139,7 +141,7 @@ fn test_parked_resolved_resumes() -> Result[Unit, Str] {
 
 # Round-trip against a real DB: the fact-gathering feeds the pure core.
 fn test_classify_company_round_trip() -> [sql, fs_read, fs_write, time, io, random, crypto] Result[Unit, Str] {
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open memory db"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate: ", e)),
@@ -183,8 +185,8 @@ fn test_classify_company_round_trip() -> [sql, fs_read, fs_write, time, io, rand
 }
 
 # An unknown company id is refused, not guessed at.
-fn test_unknown_company_is_none() -> [sql, fs_read, fs_write, time] Result[Unit, Str] {
-  match conn.open("sqlite::memory:") {
+fn test_unknown_company_is_none() -> [sql, fs_read, fs_write, time, random] Result[Unit, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open memory db"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate: ", e)),

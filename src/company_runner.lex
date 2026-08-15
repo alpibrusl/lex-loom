@@ -32,6 +32,8 @@ import "./transport" as tr
 
 import "./delegation" as delegation
 
+import "./manager" as manager
+
 import "./org" as org
 
 type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: Str, stopped_by :: Str }
@@ -52,8 +54,8 @@ fn board_notes_section(notes :: List[Str]) -> Str {
 
 # Pure prompt construction, split out from decide_next so it's testable
 # without a real LLM call or a live DB (#86).
-fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, product_signals :: Str, economics :: Str, distribution :: Str, build_status :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
-  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nREAL ECONOMICS (revenue read from a human-configured, read-only source, compared against estimated LLM spend — loom never touches payments itself):\n", economics, "\n\nDISTRIBUTION (real posts published via the Content Creator's publish_content tool, and real view counts read back from the product itself — not a self-reported claim of having written content, actual reach):\n", distribution, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, product_signals :: Str, economics :: Str, distribution :: Str, build_status :: Str, mgmt :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
+  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nREAL ECONOMICS (revenue read from a human-configured, read-only source, compared against estimated LLM spend — loom never touches payments itself):\n", economics, "\n\nDISTRIBUTION (real posts published via the Content Creator's publish_content tool, and real view counts read back from the product itself — not a self-reported claim of having written content, actual reach):\n", distribution, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, mgmt, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
 }
 
 # Pure, testable: whether pending notes should be marked consumed given the
@@ -99,7 +101,8 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   let economics := company.real_economics_section(db, ccfg.id)
   let distribution := company.distribution_section(db, ccfg.id)
   let build_status := company.build_status_section(db, ccfg.id)
-  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, product_signals, economics, distribution, build_status, current_goal, ctx)
+  let mgmt := manager.reports_section(db, ccfg.id)
+  let prompt := strategist_prompt(ccfg.goal, shipped, notes, operate, product_signals, economics, distribution, build_status, mgmt, current_goal, ctx)
   let reply := strategist_reply_with_retry(db, agent, prompt, company.strategist_cost_owner(ccfg.id, ctx.idx), 0)
   let __sc := company.record_strategist_cost(db, ccfg.id, ctx.idx)
   let decision := company.parse_strategist_decision(reply)
@@ -142,17 +145,25 @@ fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sq
 # artifact lands back on the assignment; a failed one is `returned` and the
 # return escalates up the reporting lines.
 fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id :: Str, api_max :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
-  let offered := delegation.load_by_status(db, ccfg.id, "offered")
+  let offered := delegation.load_for_drain(db, ccfg.id)
   if list.is_empty(offered) {
     ()
   } else {
     let __p := io.print(str.join(["[company] draining ", int.to_str(list.len(offered)), " delegated assignment(s)"], ""))
     let __each := list.map(offered, fn (a :: delegation.Assignment) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+      let request := delegation.prompt_for_assignment(a)
       let __acc := delegation.set_status(db, a.id, "accepted", "", "")
       let node := delegation.node_for(a)
       let g := { id: sprint_id, phase: Implementation, nodes: [node], edges: [] }
-      let request := delegation.prompt_for(a.kind, a.goal)
       let roster := cast.select_roster(db, g, request, ccfg.model, sprint_id)
+      let worker := list.fold(roster, "", fn (acc :: Str, e :: cast.RosterEntry) -> Str {
+        if str.is_empty(acc) and e.node_id == node.id {
+          e.pool_agent_id
+        } else {
+          acc
+        }
+      })
+      let __w := delegation.set_worker(db, a.id, worker)
       let trail_none :: Option[tlog.Log] := None
       let acfg := { id: sprint_id, request: request, model: ccfg.model, db: db, api_calls_max: api_max, roster: roster, trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: ccfg.policy_isolation }
       let pr := orch.run_phase(g, Implementation, "", [], acfg)
@@ -202,6 +213,8 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   }
   let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
   let __assignments := drain_assignments(db, ccfg, sprint_id, api_max)
+  let __reviews := manager.review_assignments(db, ccfg, sprint_id, api_max)
+  let __reports := manager.record_reports(db, ccfg.id)
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }

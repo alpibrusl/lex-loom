@@ -83,9 +83,9 @@ fn prompt_for(kind :: Str, goal :: Str) -> Str {
 }
 
 # ── Model ────────────────────────────────────────────────────────────────────
-type Assignment = { id :: Str, company_id :: Str, from_role :: Str, to_role :: Str, kind :: Str, goal :: Str, status :: Str, artifact_ref :: Str, reason :: Str }
+type Assignment = { id :: Str, company_id :: Str, from_role :: Str, to_role :: Str, kind :: Str, goal :: Str, status :: Str, artifact_ref :: Str, reason :: Str, worker_agent_id :: Str, rework_count :: Int }
 
-type AssignmentRow = { id :: Str, company_id :: Str, from_role :: Str, to_role :: Str, kind :: Str, params_json :: Str, status :: Str, artifact_ref :: Str, reason :: Str }
+type AssignmentRow = { id :: Str, company_id :: Str, from_role :: Str, to_role :: Str, kind :: Str, params_json :: Str, status :: Str, artifact_ref :: Str, reason :: Str, worker_agent_id :: Str, rework_count :: Int }
 
 fn goal_of(params_json :: Str) -> Str {
   match jv.parse(params_json) {
@@ -98,7 +98,7 @@ fn goal_of(params_json :: Str) -> Str {
 }
 
 fn row_to_assignment(r :: AssignmentRow) -> Assignment {
-  { id: r.id, company_id: r.company_id, from_role: r.from_role, to_role: r.to_role, kind: r.kind, goal: goal_of(r.params_json), status: r.status, artifact_ref: r.artifact_ref, reason: r.reason }
+  { id: r.id, company_id: r.company_id, from_role: r.from_role, to_role: r.to_role, kind: r.kind, goal: goal_of(r.params_json), status: r.status, artifact_ref: r.artifact_ref, reason: r.reason, worker_agent_id: r.worker_agent_id, rework_count: r.rework_count }
 }
 
 # ── The structural gate ──────────────────────────────────────────────────────
@@ -142,6 +142,55 @@ fn offer(db :: conn.ConnDb, company_id :: Str, from_role :: Str, to_role :: Str,
   }
 }
 
+# ── Rework cycle (ORG3, lex-loom#218) ────────────────────────────────────────
+# A manager review may return a `done` assignment for rework. The rework
+# round count is bounded — past the cap the assignment is finally `returned`
+# and escalates, so a worker/manager disagreement can never loop forever.
+fn max_rework_rounds() -> Int {
+  2
+}
+
+fn set_worker(db :: conn.ConnDb, id :: Str, worker_agent_id :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let q := ormq.for_dialect({ sql: "UPDATE assignments SET worker_agent_id=?, updated_at=? WHERE id=?", params: [PStr(worker_agent_id), PStr(now), PStr(id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(err) => Err(err.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+fn send_to_rework(db :: conn.ConnDb, id :: Str, notes :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  let now := time.now_str()
+  let q := ormq.for_dialect({ sql: "UPDATE assignments SET status='rework', reason=?, rework_count=rework_count+1, updated_at=? WHERE id=?", params: [PStr(notes), PStr(now), PStr(id)] }, db.dialect)
+  match sql.exec(db.handle, q.sql, q.params) {
+    Err(err) => Err(err.message),
+    Ok(_) => Ok(()),
+  }
+}
+
+# What the drain picks up each iteration: fresh offers plus manager-returned
+# rework, oldest first.
+fn load_for_drain(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] List[Assignment] {
+  let q := ormq.for_dialect({ sql: "SELECT id, company_id, from_role, to_role, kind, params_json, status, artifact_ref, reason, worker_agent_id, rework_count FROM assignments WHERE company_id=? AND status IN ('offered', 'rework') ORDER BY created_at ASC", params: [PStr(company_id)] }, db.dialect)
+  let rows :: Result[List[AssignmentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, row_to_assignment),
+  }
+}
+
+# The prompt an assignment's worker node actually receives. First round is
+# the kind's fixed template; a rework round appends the manager's notes —
+# still a constant frame, the notes are data.
+fn prompt_for_assignment(a :: Assignment) -> Str {
+  let base := prompt_for(a.kind, a.goal)
+  if a.rework_count > 0 and a.status == "rework" {
+    str.join([base, "\n\nREWORK: your manager returned the previous attempt with these notes — address them: ", a.reason], "")
+  } else {
+    base
+  }
+}
+
 # ── State transitions + queries ──────────────────────────────────────────────
 fn set_status(db :: conn.ConnDb, id :: Str, status :: Str, artifact_ref :: Str, reason :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
@@ -153,7 +202,7 @@ fn set_status(db :: conn.ConnDb, id :: Str, status :: Str, artifact_ref :: Str, 
 }
 
 fn load_by_status(db :: conn.ConnDb, company_id :: Str, status :: Str) -> [sql, fs_read] List[Assignment] {
-  let q := ormq.for_dialect({ sql: "SELECT id, company_id, from_role, to_role, kind, params_json, status, artifact_ref, reason FROM assignments WHERE company_id=? AND status=? ORDER BY created_at ASC", params: [PStr(company_id), PStr(status)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, company_id, from_role, to_role, kind, params_json, status, artifact_ref, reason, worker_agent_id, rework_count FROM assignments WHERE company_id=? AND status=? ORDER BY created_at ASC", params: [PStr(company_id), PStr(status)] }, db.dialect)
   let rows :: Result[List[AssignmentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
@@ -162,7 +211,7 @@ fn load_by_status(db :: conn.ConnDb, company_id :: Str, status :: Str) -> [sql, 
 }
 
 fn get_assignment(db :: conn.ConnDb, id :: Str) -> [sql, fs_read] Option[Assignment] {
-  let q := ormq.for_dialect({ sql: "SELECT id, company_id, from_role, to_role, kind, params_json, status, artifact_ref, reason FROM assignments WHERE id=?", params: [PStr(id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT id, company_id, from_role, to_role, kind, params_json, status, artifact_ref, reason, worker_agent_id, rework_count FROM assignments WHERE id=?", params: [PStr(id)] }, db.dialect)
   let rows :: Result[List[AssignmentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => None,

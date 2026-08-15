@@ -179,6 +179,24 @@ file is flushed through the gated `offer` after the loop, which is where
 authorization lives. Managing roles (org-chart parents) get the tool
 injected automatically; leaf roles never see it.
 
+**Manager roles** *(landed since — ORG3, #218)*. A manager's judgment enters
+the system at exactly two auditable points. (1) *Review*: every `done`
+assignment whose to_role has a manager is put in front of that manager as
+an ordinary sprint node (cast, gated, trail-recorded); the manager's
+"artifact" is a verdict — accept, or return-with-notes — parsed
+mechanically, and an unparseable review changes nothing. (2) *Attestation*:
+an accept is a positive attestation on the worker's pool agent, a return is
+a bounce — manager judgment drives the SAME promotion/demotion ledger
+mechanical outcomes already feed (a repeatedly-returned worker retires per
+`cast.lex`'s existing ≤ −3 rule). Returns are bounded
+(`delegation.max_rework_rounds()`): a returned assignment goes back through
+the drain as a rework round carrying the manager's notes; past the cap it
+is finally `returned` and escalates up the reporting lines. The manager
+also reports upward: `manager_report` trail events aggregate its subtree,
+and the Strategist's prompt consumes that summary section — raw artifacts
+are reviewed by the manager, not re-read at the top. A flat company is
+untouched: no manager, no review, `done` stays final.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

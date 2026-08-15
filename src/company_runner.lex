@@ -30,6 +30,10 @@ import "./agent/runner" as runner
 
 import "./transport" as tr
 
+import "./delegation" as delegation
+
+import "./org" as org
+
 type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: Str, stopped_by :: Str }
 
 # Run one iteration, then recurse to the next unless we should stop.
@@ -131,6 +135,63 @@ fn graduate_backlog(db :: conn.ConnDb, company_id :: Str, at_iter :: Int) -> [sq
   }
 }
 
+# ORG2 (lex-loom#217): drain offered assignments before the iteration's main
+# sprint. Each becomes an ORDINARY sprint node under this iteration's sprint
+# id — cast from the pool (cast.select_roster, so ORG1's node_cast authority
+# trail applies), gated, attested, trail-recorded like any other work. The
+# artifact lands back on the assignment; a failed one is `returned` and the
+# return escalates up the reporting lines.
+fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id :: Str, api_max :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+  let offered := delegation.load_by_status(db, ccfg.id, "offered")
+  if list.is_empty(offered) {
+    ()
+  } else {
+    let __p := io.print(str.join(["[company] draining ", int.to_str(list.len(offered)), " delegated assignment(s)"], ""))
+    let __each := list.map(offered, fn (a :: delegation.Assignment) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+      let __acc := delegation.set_status(db, a.id, "accepted", "", "")
+      let node := delegation.node_for(a)
+      let g := { id: sprint_id, phase: Implementation, nodes: [node], edges: [] }
+      let request := delegation.prompt_for(a.kind, a.goal)
+      let roster := cast.select_roster(db, g, request, ccfg.model, sprint_id)
+      let trail_none :: Option[tlog.Log] := None
+      let acfg := { id: sprint_id, request: request, model: ccfg.model, db: db, api_calls_max: api_max, roster: roster, trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: ccfg.policy_isolation }
+      let pr := orch.run_phase(g, Implementation, "", [], acfg)
+      let outcome := list.fold(pr.outcomes, None, fn (acc :: Option[orch.NodeOutcome], o :: orch.NodeOutcome) -> Option[orch.NodeOutcome] {
+        match acc {
+          Some(_) => acc,
+          None => if o.node_id == node.id {
+            Some(o)
+          } else {
+            None
+          },
+        }
+      })
+      match outcome {
+        None => {
+          let __r := delegation.set_status(db, a.id, "returned", "", "no outcome recorded")
+          ()
+        },
+        Some(o) => if o.attested {
+          let __d := delegation.set_status(db, a.id, "done", o.artifact, "")
+          let __t := tr.trail(db, ccfg.id, "assignment_done", str.join(["{\"assignment\":\"", a.id, "\",\"to\":\"", a.to_role, "\",\"artifact\":\"", o.artifact, "\"}"], ""))
+          io.print(str.join(["[company] assignment ", delegation.node_id_for(a), " (", a.kind, " -> ", a.to_role, ") done, artifact ", str.slice(o.artifact, 0, 12)], ""))
+        } else {
+          let chain := org.escalation_chain(org.load_org(db, ccfg.id), a.to_role)
+          let chain_str := if list.is_empty(chain) {
+            "(flat — no reporting line)"
+          } else {
+            str.join(chain, " -> ")
+          }
+          let __r := delegation.set_status(db, a.id, "returned", "", o.reason)
+          let __t := tr.trail(db, ccfg.id, "assignment_returned", str.join(["{\"assignment\":\"", a.id, "\",\"to\":\"", a.to_role, "\",\"reason\":\"", company.json_escape(o.reason), "\",\"escalates_to\":\"", company.json_escape(chain_str), "\"}"], ""))
+          io.print(str.join(["[company] assignment ", delegation.node_id_for(a), " RETURNED (", str.slice(o.reason, 0, 80), ") — escalation path: ", chain_str], ""))
+        },
+      }
+    })
+    ()
+  }
+}
+
 fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let sprint_id := company.iteration_sprint_id(ccfg.id, k)
   let __carry := if k > 1 {
@@ -140,6 +201,7 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
     ()
   }
   let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
+  let __assignments := drain_assignments(db, ccfg, sprint_id, api_max)
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }

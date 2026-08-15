@@ -64,6 +64,10 @@ import "./trace" as trace
 
 import "../manifests" as manifests
 
+import "../org" as org
+
+import "../delegation" as delegation
+
 import "../tool_grant" as tool_grant
 
 import "../agui_store" as agui_store
@@ -713,7 +717,7 @@ fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
 # between-iteration call (e.g. the strategist) that has no sprint of its own.
 # Empty string means "don't record" (e.g. proc_cmd/a2a_url paths never touch
 # an LLM directly, so there is no usage to attribute).
-fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, policy_isolation :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env, approval] Str {
+fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, policy_isolation :: Str) -> [io, time, sql, concurrent, net, random, fs_read, fs_write, llm, proc, env, approval, crypto] Str {
   let run_id := trace.new_run_id()
   let _t1 := trace.record(db, run_id, def.id, "received", msg_json)
   let answer := if str.len(def.a2a_url) > 0 {
@@ -745,9 +749,21 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, 
       let granted_tools := list.filter(def.tools, fn (tl :: t.Tool) -> Bool {
         tool_grant.tool_allowed_under_manifest(tl.name, manifest_json)
       })
-      let all_tools := list.map(granted_tools, fn (tl :: t.Tool) -> t.Tool {
+      let base_wrapped := list.map(granted_tools, fn (tl :: t.Tool) -> t.Tool {
         wrap_tool(ops_path, tl)
       })
+      let company_id := match list.head(str.split(cost_owner, "/")) {
+        Some(cid) => cid,
+        None => cost_owner,
+      }
+      let manages_someone := not list.is_empty(list.filter(org.load_org(db, company_id), fn (edge :: org.OrgEdge) -> Bool {
+        edge.parent == def.kind
+      }))
+      let all_tools := if manages_someone {
+        list.concat(base_wrapped, [wrap_tool(ops_path, delegation.delegate_tool(delegation.delegations_file(run_id)))])
+      } else {
+        base_wrapped
+      }
       let the_model := prov.make_model_ref(def.provider.name, def.model_name)
       let base_opts := llm_agent.default_options()
       let opts := { temperature: base_opts.temperature, top_p: base_opts.top_p, max_steps: Some(max_steps_for(def.kind)), max_tokens: base_opts.max_tokens }
@@ -762,6 +778,12 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, 
       let steps := iter.to_list(llm_agent.run_loop(llm_def, conv))
       let __usage := record_usage(db, run_id, cost_owner, steps)
       let __ops := flush_op_calls(db, run_id, def.id)
+      let delegated := delegation.flush_delegations(db, company_id, def.kind, delegation.delegations_file(run_id))
+      let __dp := if delegated > 0 {
+        io.print(str.join(["[runner] ", def.id, " delegated ", int.to_str(delegated), " task(s) — queued as assignments"], ""))
+      } else {
+        ()
+      }
       let __agui := agui_store.persist_agui_events(db, run_id, cost_owner, def.id, steps)
       let out0 := extract_answer(steps)
       let out := if is_build_kind(def.kind) {

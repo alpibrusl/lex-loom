@@ -67,7 +67,7 @@ fn tool_names(tools :: List[t.Tool]) -> Str {
 # Real production code, called in the exact same shape src/agent/runner.lex's
 # LLM branch uses it: cast.select_roster for a real "build" node, then the
 # override resolution + tool filter step.
-fn report_cmd() -> [env, io, sql, fs_read, fs_write, time, random, net, proc] Unit {
+fn report_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto, net, proc] Unit {
   let db_path := get_env("DB_PATH", "demo/oa2-tool-filter-demo.db")
   let sprint_id := get_env("SPRINT_ID", "oa2-demo/iter-1")
   let policy_isolation := get_env("POLICY_ISOLATION", "")

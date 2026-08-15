@@ -73,6 +73,8 @@ import "./role_registry" as registry
 
 import "./budget" as budget
 
+import "./board" as board
+
 import "./company_runner" as company_runner
 
 import "./identity" as identity
@@ -508,7 +510,7 @@ fn attention_list_cmd() -> [env, io, sql, fs_read, fs_write, vcs] Unit {
   }
 }
 
-fn attention_resolve_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
+fn attention_resolve_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
   let id := get_env("ATTENTION_ID", "")
   let verdict := get_env("VERDICT", "")
@@ -533,22 +535,64 @@ fn attention_resolve_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
   }
 }
 
-fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [env, io, sql, fs_write, fs_read, time] Unit {
+# GOV4 (lex-loom#224): resolves route through board.decide — the ONE
+# authorized decide path the web API also calls, so the identity check can
+# never diverge between surfaces (#204's criterion, upgraded to one fn).
+fn resolve_attention_cmd_run(db_path :: Str, id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [env, io, sql, fs_write, fs_read, time, random, crypto] Unit {
   match conn.open(db_path) {
     Err(_) => io.print("[loom] FATAL open db"),
-    Ok(db) => match tr.get_attention(db, id) {
-      None => io.print(str.concat("[loom] no such attention item: ", id)),
-      Some(item) => {
-        let company_id := company.company_id_of_sprint(item.sprint_id)
-        if company.is_authorized_resolver(db, company_id, item.oracle, resolver_id) {
-          match tr.resolve_attention(db, id, verdict, reason, resolver_id) {
-            Err(e) => io.print(str.concat("[loom] resolve failed: ", e)),
-            Ok(_) => io.print(str.join(["[loom] ", id, " -> ", verdict, " (resolved_by=", resolver_id, ")"], "")),
-          }
-        } else {
-          io.print(str.join(["[loom] DENIED: ", resolver_id, " is not a registered contact for oracle '", item.oracle, "' on company '", company_id, "'"], ""))
-        }
+    Ok(db) => match board.decide(db, id, verdict, reason, resolver_id) {
+      Err(e) => io.print(str.concat("[loom] ", e)),
+      Ok(msg) => io.print(str.join(["[loom] ", id, " -> ", msg], "")),
+    },
+  }
+}
+
+# ── board_* commands (GOV4, lex-loom#224) ────────────────────────────────────
+# The board's decision surface: everything the company owes an answer on,
+# typed, aged, decidable, minuted.
+#
+#   COMPANY_ID=acme lex run ... src/main.lex board_pending_cmd
+#   COMPANY_ID=acme ATTENTION_ID=<id> VERDICT=approved|rejected|deferred \
+#     REASON="..." RESOLVER_ID=<contact> lex run ... src/main.lex board_decide_cmd
+#   COMPANY_ID=acme lex run ... src/main.lex board_minutes_cmd
+fn board_pending_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+    Ok(db) => io.print(board.sla_section(db, company_id)),
+  }
+}
+
+fn board_decide_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto] Unit {
+  let db_path := resolve_db_url()
+  let id := get_env("ATTENTION_ID", "")
+  if str.is_empty(id) {
+    io.print("[board] ATTENTION_ID is required")
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+      Ok(db) => match board.decide(db, id, get_env("VERDICT", ""), get_env("REASON", ""), get_env("RESOLVER_ID", "")) {
+        Err(e) => io.print(str.concat("[board] ", e)),
+        Ok(msg) => io.print(str.join(["[board] ", id, " -> ", msg], "")),
       },
+    }
+  }
+}
+
+fn board_minutes_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[board] FATAL: ", e)),
+    Ok(db) => {
+      let ms := board.minutes(db, company_id)
+      if list.is_empty(ms) {
+        io.print("[board] no decisions on record yet")
+      } else {
+        io.print(str.join(ms, "\n"))
+      }
     },
   }
 }
@@ -814,7 +858,7 @@ fn board_report_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
   let company_id := get_env("COMPANY_ID", "acme")
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[board] FATAL: ", e)),
-    Ok(db) => io.print(str.concat(company.board_report(db, company_id), budget.report_section(db, company_id))),
+    Ok(db) => io.print(str.join([board.sla_section(db, company_id), "\n", company.board_report(db, company_id), budget.report_section(db, company_id)], "")),
   }
 }
 

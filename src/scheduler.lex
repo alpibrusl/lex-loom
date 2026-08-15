@@ -63,6 +63,8 @@ import "./company" as company
 
 import "./gates" as gates
 
+import "./org" as org
+
 import "./company_runner" as company_runner
 
 import "./pool_seed" as pool_seed
@@ -157,9 +159,13 @@ fn parked_state(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Str {
 # GOV1 timeout: a pending blocking-gate item whose gate declared `<N>h` and
 # that has been pending longer escalates ONCE (trail `gate_escalated` + loud
 # print) and then stays parked — never an auto-approve, never silence.
+# ORG1 (#216): the escalation walks the company's reporting lines upward from
+# the gate's oracle before landing on the oracle itself — a company with an
+# org chart escalates through management; a flat company behaves as before.
 fn escalate_overdue(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read, fs_write, time, random, crypto, io] Unit {
   let idx := company.latest_iteration_idx(db, company_id)
   let sprint_id := company.iteration_sprint_id(company_id, idx)
+  let edges := org.load_org(db, company_id)
   let __each := list.map(tr.attention_pending_for_sprint(db, sprint_id), fn (item :: tr.AttentionRow) -> [sql, fs_read, fs_write, time, random, crypto, io] Unit {
     let hours := gates.blocking_timeout_hours(item.gate)
     if hours > 0 {
@@ -167,8 +173,14 @@ fn escalate_overdue(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read, fs_w
         found or o.id == item.id
       })
       if overdue and not tr.trail_contains(db, company_id, "gate_escalated", item.id) {
-        let __t := tr.trail(db, company_id, "gate_escalated", str.join(["{\"attention\":\"", item.id, "\",\"oracle\":\"", item.oracle, "\",\"node\":\"", item.node_id, "\",\"timeout_hours\":", int.to_str(hours), "}"], ""))
-        io.print(str.join(["[scheduler] ESCALATION ", company_id, ": gate for oracle '", item.oracle, "' pending past its ", int.to_str(hours), "h timeout (attention ", item.id, ") — still parked, board action required"], ""))
+        let chain := org.escalation_chain(edges, item.oracle)
+        let chain_str := if list.is_empty(chain) {
+          item.oracle
+        } else {
+          str.join([item.oracle, " -> ", str.join(chain, " -> ")], "")
+        }
+        let __t := tr.trail(db, company_id, "gate_escalated", str.join(["{\"attention\":\"", item.id, "\",\"oracle\":\"", item.oracle, "\",\"node\":\"", item.node_id, "\",\"timeout_hours\":", int.to_str(hours), ",\"chain\":\"", chain_str, "\"}"], ""))
+        io.print(str.join(["[scheduler] ESCALATION ", company_id, ": gate pending past its ", int.to_str(hours), "h timeout — escalation path: ", chain_str, " (attention ", item.id, ") — still parked, board action required"], ""))
       } else {
         ()
       }

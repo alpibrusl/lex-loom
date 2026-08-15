@@ -147,6 +147,19 @@ gate item is resolved, then re-enters the SAME iteration; `board_report`
 leads with a PARKED banner. Plain `human <oracle>` gates stay advisory —
 existing manifests are unchanged.
 
+**Reporting lines** *(landed since — ORG1, #216)*. `company.toml` gains an
+`[org]` table (`role = "manager"`) that flattens through bootstrap into
+`ORG_EDGES` and is validated at launch — a malformed spec, duplicate child,
+cycle, or unknown leaf role REFUSES to start the company (never a
+half-loaded org). Edges live in `relationships.lex` under the `org:` role
+prefix with a derived decision-rights contract
+(`reports_to`/`may_assign`/`reviews`/`escalates_to` — ORG2/ORG3 consume the
+middle two). Wired in today: every casting trail-records whose authority it
+ran under (`node_cast` with `authority`), the GOV1 gate-timeout escalation
+walks the chain upward (`legal -> eng_manager -> founder`) before landing on
+the oracle, and `board_report` renders the chart. A company with no `[org]`
+is exactly what it was: flat, oracle-direct.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

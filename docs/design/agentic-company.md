@@ -274,6 +274,24 @@ board both see on the next proposal. The invariant stays absolute: loom
 never moves real money; allocation governs internal spend authority only
 (#89's human gate untouched).
 
+**Board interface v2** *(landed since — GOV4, #224)*. Everything the
+company owes the board already flowed through GOV1's attention queue —
+blocking gates, budget escalations (GOV2), allocation proposals (GOV3),
+strategy proposals (ORG4), role approvals (ORG5), and now operate
+escalate-tier dossiers (queued from the heartbeat). GOV4 adds the
+*surface*: every pending item classifies into a decision **type** derived
+from its queue address, with its **age**; `loom board pending` /
+`GET /api/board/pending/*company` list them; `board_report` **leads** with
+the pending count and the oldest age, so a parked company is unmissable.
+`board.decide` is the ONE authorized write — RESOLVER_ID required and
+recorded, #165's registered-contact rule enforced, approve/reject/**defer**
+(a deferral is a recorded act that leaves the item pending, age still
+counting) — and the CLI command and the web API both call this exact
+function, upgrading #204's "same check in both paths" from mirrored code
+to literally one function. An already-resolved decision cannot be
+re-decided; the decision history read from resolved rows plus deferral
+trail events *is* the board minutes, append-only by construction.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

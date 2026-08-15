@@ -80,6 +80,8 @@ import "../series" as ser
 
 import "../company" as company
 
+import "../board" as board
+
 import "../operate_ledger" as oledger
 
 import "../agui_store" as agui_store
@@ -445,27 +447,59 @@ fn handle_list_attention(db_path :: Str, _c :: ctx.Ctx) -> [io, time, crypto, ra
   }
 }
 
-# resolve_attention_authorized mirrors main.lex's resolve_attention_cmd_run
-# exactly (lex-loom#165): resolver_id is required and always recorded; if
-# the company registered a relationships.lex contact for this item's
-# oracle, only that contact's id is authorized (an unconfigured oracle
-# stays open — same safe-default-when-unconfigured rule as everywhere
-# else this pattern is used).
-fn resolve_attention_authorized(db :: conn.ConnDb, item_id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [sql, fs_write, fs_read, time] Result[Unit, Str] {
-  if str.is_empty(resolver_id) {
-    Err("resolver_id is required — who is resolving this must always be on the record")
-  } else {
-    match tr.get_attention(db, item_id) {
-      None => Err(str.concat("no such attention item: ", item_id)),
-      Some(item) => {
-        let company_id := company.company_id_of_sprint(item.sprint_id)
-        if company.is_authorized_resolver(db, company_id, item.oracle, resolver_id) {
-          tr.resolve_attention(db, item_id, verdict, reason, resolver_id)
-        } else {
-          Err(str.join(["DENIED: ", resolver_id, " is not a registered contact for oracle '", item.oracle, "' on company '", company_id, "'"], ""))
-        }
+# GOV4 (lex-loom#224): the API's resolve path IS board.decide — the exact
+# function main.lex's CLI commands call. #165's identity rules (resolver
+# required + recorded; registered-contact-only when configured) and #204's
+# same-check-in-both-paths criterion are now literally one function.
+fn resolve_attention_authorized(db :: conn.ConnDb, item_id :: Str, verdict :: Str, reason :: Str, resolver_id :: Str) -> [sql, fs_write, fs_read, time, random, crypto] Result[Unit, Str] {
+  match board.decide(db, item_id, verdict, reason, resolver_id) {
+    Err(e) => Err(e),
+    Ok(_) => Ok(()),
+  }
+}
+
+# ── /api/board (GOV4, lex-loom#224) ──────────────────────────────────────────
+#
+# GET  /api/board/pending/*company_id — every decision the company owes the
+#                                       board: typed, aged, evidence-linked
+# POST /api/board/decide/:id          — approve/reject/defer with resolver
+#                                       identity (same board.decide as CLI)
+fn decision_to_json(d :: board.Decision) -> Str {
+  str.join(["{\"id\":", esc(d.id), ",\"type\":", esc(d.dtype), ",\"sprint_id\":", esc(d.sprint_id), ",\"node_id\":", esc(d.node_id), ",\"gate\":", esc(d.gate), ",\"oracle\":", esc(d.oracle), ",\"artifact_hash\":", esc(d.artifact_hash), ",\"age_hours\":", int.to_str(d.age_hours), "}"], "")
+}
+
+fn handle_board_pending(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  match ctx.path_param(c, "company_id") {
+    None => resp.bad_request("missing company id"),
+    Some(cid) => match open_loom_db(db_path) {
+      Err(_) => resp.internal_error(),
+      Ok(db) => {
+        let ds := board.pending_for_company(db, cid)
+        resp.json(str.join(["{\"company\":", esc(cid), ",\"count\":", int.to_str(list.len(ds)), ",\"oldest_age_hours\":", int.to_str(board.oldest_age_hours(ds)), ",\"pending\":[", str.join(list.map(ds, decision_to_json), ","), "]}"], ""))
       },
-    }
+    },
+  }
+}
+
+fn handle_board_decide(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  match ctx.path_param(c, "id") {
+    None => resp.bad_request("missing decision id"),
+    Some(item_id) => {
+      let body_j := match jv.parse(c.body) {
+        Ok(j) => j,
+        Err(_) => JObj([]),
+      }
+      let verdict := get_jv_str(body_j, "verdict")
+      let reason := get_jv_str(body_j, "reason")
+      let resolver_id := get_jv_str(body_j, "resolver_id")
+      match open_loom_db(db_path) {
+        Err(_) => resp.internal_error(),
+        Ok(db) => match board.decide(db, item_id, verdict, reason, resolver_id) {
+          Err(e) => resp.bad_request(e),
+          Ok(msg) => resp.json(str.join(["{\"id\":", esc(item_id), ",\"verdict\":", esc(verdict), ",\"resolved_by\":", esc(resolver_id), ",\"result\":", esc(msg), "}"], "")),
+        },
+      }
+    },
   }
 }
 
@@ -747,7 +781,13 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r12 := router.route_effectful(r11, "POST", "/api/attention/:id/reject", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_reject_attention(db_path, c)
   })
-  let r13 := router.route_effectful(r12, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  let r12b := router.route_effectful(r12, "GET", "/api/board/pending/*company_id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+    handle_board_pending(db_path, c)
+  })
+  let r12c := router.route_effectful(r12b, "POST", "/api/board/decide/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+    handle_board_decide(db_path, c)
+  })
+  let r13 := router.route_effectful(r12c, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_list_companies(db_path)
   })
   let r14 := router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {

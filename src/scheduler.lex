@@ -75,6 +75,8 @@ import "./role_registry" as role_registry
 
 import "./allocation" as allocation
 
+import "./board" as board
+
 import "./transport" as tr
 
 # One scheduling decision: action is "run" or "skip"; reason is the specific
@@ -257,6 +259,7 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
       },
       Ok(_) => {
         let __roles := role_registry.apply_resolved(db, company_id)
+        let __dossiers := board.queue_operate_dossiers(db, company_id)
         let __alloc := allocation.heartbeat(db, company_id, api_max)
         let __ceo := ceo.heartbeat(db, company_id, api_max)
         match classify_company(db, company_id) {

@@ -254,6 +254,26 @@ the board report renders per-envelope utilization with WARNING/EXHAUSTED
 flags. ORG3 managers see their reports' roles' remaining balances inline.
 Refuse, don't downgrade: there is no overdraft anywhere in this path.
 
+**The allocation loop** *(landed since — GOV3, #223)*. Revenue stops being
+information-only: on the scheduler heartbeat, when the company has declared
+envelopes AND a settlement-verified revenue reading, the finance function
+(an ordinary cast node, role `finance`) is consulted and may PROPOSE the
+next period's envelope allocation — strictly parsed JSON, every change a
+valid scope with positive integer cents, and always carrying a
+**falsifiable prediction** ("verified revenue ≥ X by iteration K", #118's
+effect-contract discipline; an unfalsifiable proposal is refused).
+Proposals are **board decisions**: they park in the attention queue with
+evidence attached, envelopes change only via an APPROVED attention row,
+and the applied caps run as the approving board member (GOV2's
+`budget_envelope_set` trail names them). Rejection = current envelopes
+stand, disposition ledgered. Once the predicted iteration is reached, the
+applied allocation is **graded** hit/miss against the current verified
+reading — trailed, stored on the `allocations` row — and the company's
+allocation hit rate is part of the evidence the finance agent and the
+board both see on the next proposal. The invariant stays absolute: loom
+never moves real money; allocation governs internal spend authority only
+(#89's human gate untouched).
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

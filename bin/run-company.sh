@@ -27,7 +27,11 @@
 # survives an individual worker crashing (reclaim_stale requeues its
 # orphaned job for another worker) instead of taking the whole run down
 # with it. Set EXEC_MODE=inline to go back to the old single-process
-# in-process fan-out (no workers launched).
+# in-process fan-out (no workers launched). Note the deliberate divergence
+# (#242): loom-scheduler.sh defaults EXEC_MODE=inline because the daemon
+# owns many companies and launches no workers of its own; this script owns
+# ONE company and manages its workers' whole lifecycle, so queue is safe
+# to default here.
 #
 # WORKER_COUNT > 1 is supported since HB3 (lex-loom#215): loom is
 # SQLite-only, where lex-jobs' single-statement claim is atomic under the
@@ -46,7 +50,7 @@ if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; t
 fi
 
 : "${COMPANY_ID:=acme}"
-: "${MODEL:=gemma4:latest}"
+: "${MODEL:=qwen3-coder:30b}"  # keep in sync with src/defaults.lex (the one place the fallback model lives)
 : "${MAX_ITERATIONS:=3}"
 : "${STOP_WHEN:=}"
 : "${MAX_API_CALLS:=200}"

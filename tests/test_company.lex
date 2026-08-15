@@ -165,8 +165,7 @@ fn company_eq(a :: company.CompanyCfg, b :: company.CompanyCfg) -> Bool {
 }
 
 fn test_company_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -216,8 +215,7 @@ fn run_iter_roundtrip(db :: conn.ConnDb, id :: Str) -> [sql, fs_write, time] Res
 # save_company/load_company and shows up in board_report — schema +
 # persistence only, no mesh behavior.
 fn test_board_report_shows_soft_section_when_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -253,8 +251,7 @@ fn test_board_report_shows_soft_section_when_configured() -> [sql, fs_write, fs_
 }
 
 fn test_board_report_soft_section_defaults_not_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -281,8 +278,7 @@ fn test_board_report_soft_section_defaults_not_configured() -> [sql, fs_write, f
 # else the new /api/companies* endpoints use is an existing per-company
 # function called once per id from this list.
 fn test_list_companies_returns_seeded_ids() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -334,8 +330,7 @@ fn seed_pool_agent(db :: conn.ConnDb, id :: Str, role :: Str, tags_json :: Str, 
 }
 
 fn test_save_company_registers_in_registry() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -359,8 +354,7 @@ fn test_save_company_registers_in_registry() -> [sql, fs_write, fs_read, time, c
 }
 
 fn test_add_contact_and_resolve_returns_human() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -389,8 +383,7 @@ fn test_add_contact_and_resolve_returns_human() -> [sql, fs_write, fs_read, time
 }
 
 fn test_add_pool_agent_contact_and_resolve_returns_pool_agent() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -422,8 +415,7 @@ fn test_add_pool_agent_contact_and_resolve_returns_pool_agent() -> [sql, fs_writ
 }
 
 fn test_resolve_oracle_contacts_empty_when_none_configured() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -451,8 +443,7 @@ fn test_company_id_of_sprint_extracts_prefix() -> Result[Unit, Str] {
 }
 
 fn test_is_authorized_resolver_true_when_no_contacts_registered() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -472,8 +463,7 @@ fn test_is_authorized_resolver_true_when_no_contacts_registered() -> [sql, fs_wr
 }
 
 fn test_is_authorized_resolver_true_for_the_registered_contact() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -496,8 +486,7 @@ fn test_is_authorized_resolver_true_for_the_registered_contact() -> [sql, fs_wri
 }
 
 fn test_is_authorized_resolver_false_for_an_unregistered_id_once_a_contact_exists() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -520,8 +509,7 @@ fn test_is_authorized_resolver_false_for_an_unregistered_id_once_a_contact_exist
 }
 
 fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -549,8 +537,7 @@ fn test_contacts_section_lists_configured_contacts() -> [sql, fs_write, fs_read,
 # Structured counterpart to contacts_section -- what the Company Detail UI
 # renders as a real "Contacts" section instead of a preformatted text block.
 fn test_all_contacts_returns_oracle_and_resolved_contact() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -584,8 +571,7 @@ fn exec(db :: conn.ConnDb, s :: Str) -> [sql, fs_write] Unit {
 }
 
 fn test_persist_memory() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -613,8 +599,7 @@ fn test_persist_memory() -> [sql, fs_read, fs_write, time, crypto, random] Resul
 }
 
 fn test_persist_brand_memory_writes_to_all_reader_agents() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -645,8 +630,7 @@ fn test_persist_brand_memory_writes_to_all_reader_agents() -> [sql, fs_read, fs_
 }
 
 fn test_persist_brand_memory_noop_when_no_brand_artifact() -> [sql, fs_read, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -738,11 +722,10 @@ fn test_iteration_sprint_id() -> Result[Unit, Str] {
   }
 }
 
-# NOTE: this environment's "sqlite::memory:" connection is apparently keyed by
-# the literal URL string and can persist across SEPARATE process invocations
-# (confirmed empirically), not just within one process. Db-backed tests must
-# therefore use a fresh random id each run rather than a fixed literal, or they
-# can silently observe state left behind by an earlier `lex run` invocation.
+# NOTE (#242): every open below is a fresh per-run file DB — the old shared
+# "sqlite::memory:" store (which persisted across separate process
+# invocations) is gone. Db-backed tests still use fresh random ids so rows
+# stay disjoint when one test makes several opens.
 fn rand_id(prefix :: Str) -> [crypto, random] Str {
   str.join([prefix, "-", crypto.random_str_hex(8)], "")
 }
@@ -814,8 +797,7 @@ fn test_stage_sunset_from_any_stage() -> Result[Unit, Str] {
 }
 
 fn test_stage_persistence_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -863,8 +845,7 @@ fn test_is_dormant() -> Result[Unit, Str] {
 }
 
 fn test_resume_point_fresh() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -889,8 +870,7 @@ fn test_resume_point_fresh() -> [sql, fs_write, time, crypto, random] Result[Uni
 }
 
 fn test_resume_point_after_iterations() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -925,8 +905,7 @@ fn test_resume_point_after_iterations() -> [sql, fs_write, time, crypto, random]
 }
 
 fn test_save_company_preserves_stage() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -978,8 +957,7 @@ fn test_strategist_add_no_goal_degrades() -> Result[Unit, Str] {
 }
 
 fn test_backlog_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1026,8 +1004,7 @@ fn test_track_company_id() -> Result[Unit, Str] {
 }
 
 fn test_portfolio_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1063,8 +1040,7 @@ fn test_portfolio_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Un
 }
 
 fn test_add_track_idempotent() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1107,8 +1083,7 @@ fn test_add_track_idempotent() -> [sql, fs_write, time, crypto, random] Result[U
 # to exercise run_portfolio's actual wiring: seed+select+run+status-update,
 # exactly the codepath that was previously completely unverified.
 fn test_run_portfolio_advances_and_completes_a_sunset_track() -> [env, sql, fs_write, fs_read, time, crypto, random, io, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1156,8 +1131,7 @@ fn test_run_portfolio_advances_and_completes_a_sunset_track() -> [env, sql, fs_w
 }
 
 fn test_run_portfolio_empty_seed_advances_nothing() -> [env, sql, fs_write, fs_read, time, crypto, random, io, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1175,8 +1149,7 @@ fn test_run_portfolio_empty_seed_advances_nothing() -> [env, sql, fs_write, fs_r
 }
 
 fn test_shipped_summary_empty() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1193,8 +1166,7 @@ fn test_shipped_summary_empty() -> [sql, fs_write, time, crypto, random] Result[
 }
 
 fn test_shipped_summary_lists_successes_only() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1224,8 +1196,7 @@ fn test_shipped_summary_lists_successes_only() -> [sql, fs_write, time, crypto, 
 }
 
 fn test_board_notes_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1263,8 +1234,7 @@ fn test_board_notes_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
 }
 
 fn test_board_report_contains_sections() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1339,8 +1309,7 @@ fn insert_test_graph(db :: conn.ConnDb, sprint_id :: Str, graph_json :: Str) -> 
 # no error logged anywhere. find_build_artifact must match by the graph's
 # recorded node ROLE (ground truth), not by guessing from the node_id text.
 fn test_find_build_artifact_matches_by_role_not_node_name() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1369,8 +1338,7 @@ fn test_find_build_artifact_matches_by_role_not_node_name() -> [sql, fs_write, t
 # No sprint_graphs row at all (e.g. a malformed/missing record) must still
 # fall back to the old substring heuristic rather than finding nothing.
 fn test_find_build_artifact_falls_back_without_a_graph_row() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1393,8 +1361,7 @@ fn test_find_build_artifact_falls_back_without_a_graph_row() -> [sql, fs_write, 
 }
 
 fn test_find_build_artifact_none_when_neither_matches() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1417,8 +1384,7 @@ fn test_find_build_artifact_none_when_neither_matches() -> [sql, fs_write, time,
 # scoped or accepted, yet the Strategist declared the mission complete. This
 # is the ground-truth signal that should have stopped that from happening.
 fn test_has_shipped_build_node_false_when_only_py_build_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1448,8 +1414,7 @@ fn test_has_shipped_build_node_false_when_only_py_build_accepted() -> [sql, fs_w
 }
 
 fn test_has_shipped_build_node_true_when_a_build_node_was_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1479,8 +1444,7 @@ fn test_has_shipped_build_node_true_when_a_build_node_was_accepted() -> [sql, fs
 }
 
 fn test_has_shipped_build_node_false_when_build_node_was_never_accepted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1510,8 +1474,7 @@ fn test_has_shipped_build_node_false_when_build_node_was_never_accepted() -> [sq
 }
 
 fn test_build_status_section_wording_matches_shipped_state() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1536,8 +1499,7 @@ fn test_build_status_section_wording_matches_shipped_state() -> [sql, fs_write, 
 # wrong. build_status_section must distinguish "drifted away after
 # shipping once" from "shipped recently" and from "never shipped at all".
 fn test_build_status_section_true_when_most_recent_iteration_shipped_build() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1570,8 +1532,7 @@ fn test_build_status_section_true_when_most_recent_iteration_shipped_build() -> 
 }
 
 fn test_build_status_section_flags_drift_when_recent_iteration_dropped_lex() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1615,8 +1576,7 @@ fn test_build_status_section_flags_drift_when_recent_iteration_dropped_lex() -> 
 }
 
 fn test_find_launch_url_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1639,8 +1599,7 @@ fn test_find_launch_url_from_artifact() -> [sql, fs_write, time, crypto, random]
 }
 
 fn test_find_launch_url_none_for_cli() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1659,8 +1618,7 @@ fn test_find_launch_url_none_for_cli() -> [sql, fs_write, time, crypto, random] 
 }
 
 fn test_find_deploy_url_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1685,8 +1643,7 @@ fn test_find_deploy_url_from_artifact() -> [sql, fs_write, time, crypto, random]
 # The Strategist should see the real production URL, not a stale localhost
 # demo, once a company has actually deployed (#101/#102).
 fn test_liveness_target_prefers_deploy_over_launch() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1716,8 +1673,7 @@ fn test_liveness_target_prefers_deploy_over_launch() -> [sql, fs_write, time, cr
 }
 
 fn test_liveness_target_falls_back_to_launch() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1744,8 +1700,7 @@ fn test_liveness_target_falls_back_to_launch() -> [sql, fs_write, time, crypto, 
 }
 
 fn test_liveness_target_none_for_cli() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1764,8 +1719,7 @@ fn test_liveness_target_none_for_cli() -> [sql, fs_write, time, crypto, random] 
 }
 
 fn test_operate_signal_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1821,8 +1775,7 @@ fn test_check_remote_errors_no_service_name_is_clean() -> [proc] Result[Unit, St
 }
 
 fn test_find_deploy_service_name_from_artifact() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1845,8 +1798,7 @@ fn test_find_deploy_service_name_from_artifact() -> [sql, fs_write, time, crypto
 }
 
 fn test_find_deploy_service_name_none_when_absent() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1868,8 +1820,7 @@ fn test_find_deploy_service_name_none_when_absent() -> [sql, fs_write, time, cry
 # on top of the liveness line -- distinguishing "up but throwing" from
 # "up and clean" is the whole point of this signal (#102 bug-fixing follow-up).
 fn test_operate_section_includes_errors_when_present() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1895,8 +1846,7 @@ fn test_operate_section_includes_errors_when_present() -> [sql, fs_write, time, 
 }
 
 fn test_operate_section_omits_errors_section_when_none_recorded() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1919,8 +1869,7 @@ fn test_operate_section_omits_errors_section_when_none_recorded() -> [sql, fs_wr
 }
 
 fn test_board_report_shows_operate_section() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -1955,8 +1904,7 @@ fn test_board_report_shows_operate_section() -> [sql, fs_write, fs_read, time, c
 # must NOT leak into the "Escalations needing review" section, always
 # showing "(none)" rather than every pending contract.
 fn test_board_report_omits_non_escalate_pending_contracts() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2033,8 +1981,7 @@ fn test_strategist_prompt_includes_product_signals() -> Result[Unit, Str] {
 }
 
 fn test_product_signals_section_no_signal_yet() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2052,8 +1999,7 @@ fn test_product_signals_section_no_signal_yet() -> [sql, fs_write, time, crypto,
 }
 
 fn test_product_signals_section_reads_latest_recorded_signal() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2101,8 +2047,7 @@ fn test_strategist_prompt_includes_real_economics() -> Result[Unit, Str] {
 }
 
 fn test_real_economics_section_no_revenue_configured() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2120,8 +2065,7 @@ fn test_real_economics_section_no_revenue_configured() -> [sql, fs_write, time, 
 }
 
 fn test_real_economics_section_reads_latest_recorded_signal() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2148,8 +2092,7 @@ fn test_real_economics_section_reads_latest_recorded_signal() -> [sql, fs_write,
 }
 
 fn test_real_economics_section_reports_unreachable_without_inventing_zero() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2172,8 +2115,7 @@ fn test_real_economics_section_reports_unreachable_without_inventing_zero() -> [
 }
 
 fn test_check_and_record_revenue_noop_when_unset() -> [env, sql, fs_write, time, crypto, random, proc] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2222,8 +2164,7 @@ fn test_strategist_prompt_includes_distribution() -> Result[Unit, Str] {
 }
 
 fn test_distribution_section_no_content_published_yet() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2241,8 +2182,7 @@ fn test_distribution_section_no_content_published_yet() -> [sql, fs_write, time,
 }
 
 fn test_distribution_section_sums_posts_and_views() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2269,8 +2209,7 @@ fn test_distribution_section_sums_posts_and_views() -> [sql, fs_write, time, cry
 }
 
 fn test_distribution_section_reports_unreachable() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2324,8 +2263,7 @@ fn seed_metrics_incident(db :: conn.ConnDb, cid :: Str, tag :: Str, status :: St
 }
 
 fn test_operate_section_no_controller_data_yet() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2347,8 +2285,7 @@ fn test_operate_section_no_controller_data_yet() -> [sql, fs_write, time, crypto
 # operate-ledger profiles diverge — a heavy-escalation, low-hit-rate company
 # must not read the same as a clean one, independent of the last QA verdict.
 fn test_strategist_prompt_differs_by_controller_metrics() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2398,8 +2335,7 @@ fn insert_test_usage(db :: conn.ConnDb, owner_id :: Str, total_tokens :: Int) ->
 }
 
 fn test_real_usage_tokens_sums_multiple_calls() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2425,8 +2361,7 @@ fn test_real_usage_tokens_sums_multiple_calls() -> [sql, fs_write, time, crypto,
 }
 
 fn test_real_usage_tokens_zero_when_none_recorded() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2448,8 +2383,7 @@ fn test_real_usage_tokens_zero_when_none_recorded() -> [sql, fs_write, time, cry
 # real spend). 500 tokens * 30 cents/1k = 15 cents, NOT whatever the (much
 # larger) artifact char count would estimate.
 fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2480,8 +2414,7 @@ fn test_estimate_iteration_cost_prefers_real_tokens() -> [sql, fs_write, time, c
 # involved doesn't report it) must fall back to the char-count proxy rather
 # than silently reporting zero cost.
 fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2510,8 +2443,7 @@ fn test_estimate_iteration_cost_falls_back_to_char_estimate() -> [sql, fs_write,
 # strategist usage adds on top of the first's rather than being invisible to
 # real_usage_tokens (which sums only the exact owner id it's given).
 fn test_record_strategist_cost_adds_per_iteration() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2583,8 +2515,7 @@ fn test_spend_condition() -> Result[Unit, Str] {
 }
 
 fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2628,8 +2559,7 @@ fn test_cost_ledger_roundtrip() -> [sql, fs_write, time, crypto, random] Result[
 }
 
 fn test_board_report_shows_spend() -> [sql, fs_write, fs_read, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2696,8 +2626,7 @@ fn test_should_consume_notes_empty_is_noop() -> Result[Unit, Str] {
 }
 
 fn test_resume_point_marks_running_as_interrupted() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2724,8 +2653,7 @@ fn test_resume_point_marks_running_as_interrupted() -> [sql, fs_write, time, cry
 }
 
 fn test_resume_point_leaves_terminal_status_alone() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2752,8 +2680,7 @@ fn test_resume_point_leaves_terminal_status_alone() -> [sql, fs_write, time, cry
 }
 
 fn test_graduate_backlog_marks_previous_done() -> [sql, fs_write, time, crypto, random, io] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2847,8 +2774,7 @@ fn build_degraded_episode(db :: conn.ConnDb, cid :: Str) -> [sql, time] Result[S
 }
 
 fn test_operate_sweep_diagnoses_and_proposes_contract() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2882,8 +2808,7 @@ fn test_operate_sweep_diagnoses_and_proposes_contract() -> [sql, fs_write, time,
 # still-diagnosed incident (`diagnosed_without_action` excludes incidents
 # that already have an operate_actions row).
 fn test_operate_sweep_does_not_double_propose() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),
@@ -2912,8 +2837,7 @@ fn test_operate_sweep_does_not_double_propose() -> [sql, fs_write, time, crypto,
 }
 
 fn test_operate_sweep_noop_on_empty_company() -> [sql, fs_write, time, crypto, random] Result[Unit, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),

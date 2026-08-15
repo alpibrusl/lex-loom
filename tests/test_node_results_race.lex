@@ -32,9 +32,8 @@ import "../src/migrate" as migrate
 
 import "../src/transport" as tr
 
-fn fresh_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+fn fresh_db() -> [sql, fs_write, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),
@@ -43,8 +42,8 @@ fn fresh_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
   }
 }
 
-# "sqlite::memory:" is shared across separate `lex run` invocations — random
-# suffixes keep repeat runs from colliding on a fixed sprint/node id.
+# Each open is a fresh per-run file DB (#242); random suffixes keep
+# sprint/node ids unique within a connection.
 fn uniq(prefix :: Str) -> [random] Str {
   str.join([prefix, "-", crypto.random_str_hex(6)], "")
 }

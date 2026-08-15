@@ -22,10 +22,12 @@ import "lex-llm/src/message" as msg
 
 import "lex-llm/src/delta" as d
 
+import "./defaults" as defaults
+
 fn check_model() -> [env, io, net, llm, proc, approval] Unit {
   let model_name := match env.get("OLLAMA_MODEL") {
     Some(m) => m,
-    None => "gemma4:latest",
+    None => defaults.model(),
   }
   let __p0 := io.print(str.concat("[debug] testing model: ", model_name))
   let provider := providers.ollama_local()

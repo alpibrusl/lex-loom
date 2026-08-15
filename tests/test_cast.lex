@@ -32,14 +32,11 @@ import "../src/cast" as cast
 
 import "../src/graph" as graph
 
-# "sqlite::memory:" is shared across separate `lex run` invocations, not just
-# within one process (confirmed directly: state from an earlier run of THIS
-# file was still visible on a later, independent run). Fixed ids are not
-# enough on their own — every seeded agent_pool row uses a random suffix
-# (uniq()) so repeat runs of this same file never collide with leftover rows.
-fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+# Each open is a fresh per-run file DB (#242 — the old shared "memory" DB
+# even persisted across separate `lex run` invocations). Random id suffixes
+# (uniq()) still keep seeded rows disjoint within one connection.
+fn fresh_db() -> [sql, fs_write, time, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),

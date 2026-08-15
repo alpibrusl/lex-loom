@@ -88,8 +88,8 @@ fn outcome_for(outcomes :: List[orch.NodeOutcome], node_id :: Str) -> Option[orc
   })
 }
 
-fn open_db() -> [sql, fs_write] Result[conn.ConnDb, Str] {
-  match conn.open("sqlite::memory:") {
+fn open_db() -> [sql, fs_write, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open memory db"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(e),

@@ -5,14 +5,15 @@
 # the class despite a healthy lifetime rate), dwell/concurrency blocking,
 # the precondition re-check, and oscillation detection.
 #
-# Assumes a FRESH store (this suite's own convention throughout: `rm -f
-# "sqlite::memory:"` before a clean verification run; CI always starts
-# from a fresh checkout). Uses distinct subsystems/companies per test to
-# avoid cross-test dwell/concurrency interference within one run.
+# Each open gets a fresh per-run file DB (#242 — the shared-memory-DB
+# hack is gone). Uses distinct subsystems/companies per test to avoid
+# cross-test dwell/concurrency interference within one run.
 
 import "std.sql" as sql
 
 import "std.str" as str
+
+import "std.crypto" as crypto
 
 import "std.int" as int
 
@@ -43,8 +44,7 @@ import "../src/effects" as eff
 import "../src/actuation" as act
 
 fn open_db() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),

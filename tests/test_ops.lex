@@ -7,6 +7,8 @@ import "std.list" as list
 
 import "std.str" as str
 
+import "std.crypto" as crypto
+
 import "std.int" as int
 
 import "std.sql" as sql
@@ -51,11 +53,10 @@ fn call_arg() -> jv.Json {
   JObj([("x", JStr("1"))])
 }
 
-# "sqlite::memory:" is one shared store per process, not one per open — so
-# every test uses its own agent id to keep its trace rows disjoint.
-fn fresh_db() -> [sql, fs_write, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+# Each open is a fresh per-run file DB (#242); per-test agent ids keep
+# trace rows disjoint within a connection.
+fn fresh_db() -> [sql, fs_write, time, random] Result[conn.ConnDb, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(m) => Err(str.concat("migrate failed: ", m)),
@@ -106,7 +107,7 @@ fn invoke_n(tl :: t.Tool, times :: Int) -> [net, io, proc] Unit {
 
 # Wrapped handlers record each executed invocation; flush replays them into
 # traces with the invoking agent id and the tool's ok/err outcome.
-fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time] Result[Unit, Str] {
+fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -149,7 +150,7 @@ fn test_wrap_preserves_name() -> Result[Unit, Str] {
 }
 
 # End-to-end into the verifier: ops within the role's policy verify clean.
-fn test_verify_operations_within_grant() -> [net, io, proc, sql, fs_write, time] Result[Unit, Str] {
+fn test_verify_operations_within_grant() -> [net, io, proc, sql, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -180,7 +181,7 @@ fn test_verify_operations_within_grant() -> [net, io, proc, sql, fs_write, time]
 
 # A tool outside the role's canonical policy that actually executes is counted
 # as exceeded — the trail proves the excess operation, not just the grant.
-fn test_verify_operations_exceeded() -> [net, io, proc, sql, fs_write, time] Result[Unit, Str] {
+fn test_verify_operations_exceeded() -> [net, io, proc, sql, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -205,7 +206,7 @@ fn test_verify_operations_exceeded() -> [net, io, proc, sql, fs_write, time] Res
 }
 
 # flush removes the ops file: a second flush finds nothing and adds no rows.
-fn test_flush_is_drained() -> [net, io, proc, sql, fs_write, time] Result[Unit, Str] {
+fn test_flush_is_drained() -> [net, io, proc, sql, fs_write, time, random] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -225,11 +226,11 @@ fn test_flush_is_drained() -> [net, io, proc, sql, fs_write, time] Result[Unit, 
   }
 }
 
-fn suite() -> [net, io, proc, sql, fs_write, time] List[Result[Unit, Str]] {
+fn suite() -> [net, io, proc, sql, fs_write, time, random] List[Result[Unit, Str]] {
   [test_wrap_preserves_name(), test_wrap_and_flush(), test_verify_operations_within_grant(), test_verify_operations_exceeded(), test_flush_is_drained()]
 }
 
-fn run_all() -> [net, io, proc, sql, fs_write, time] Unit {
+fn run_all() -> [net, io, proc, sql, fs_write, time, random] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> [io] Int {
     match r {
       Ok(_) => n,

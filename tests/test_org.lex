@@ -101,7 +101,7 @@ fn test_org_chart_rendering() -> Result[Unit, Str] {
 
 # Save -> load -> re-save round-trip against the real relationships store.
 fn test_db_round_trip() -> [sql, fs_read, fs_write, random, time] Result[Unit, Str] {
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open memory db"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate: ", e)),

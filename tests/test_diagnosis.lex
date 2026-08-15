@@ -10,6 +10,8 @@ import "std.sql" as sql
 
 import "std.str" as str
 
+import "std.crypto" as crypto
+
 import "std.int" as int
 
 import "std.list" as list
@@ -35,8 +37,7 @@ import "../src/sensing" as sensing
 import "../src/diagnosis" as diag
 
 fn open_db() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),

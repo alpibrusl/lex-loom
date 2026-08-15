@@ -46,8 +46,8 @@ fn check(name :: Str, cond :: Bool) -> Result[Unit, Str] {
   }
 }
 
-# Per-test file DB: agent_pool casting is role-scoped, and the shared
-# sqlite::memory: DB persists across tests in one process.
+# Per-test file DB (#242): agent_pool casting is role-scoped, so tests
+# must not share a database or they cast each other's agents.
 fn open_db() -> [sql, fs_write, random, crypto] Result[conn.ConnDb, Str] {
   let path := str.join(["/tmp/loom-org4-test-", crypto.random_str_hex(8), ".db"], "")
   match conn.open(path) {

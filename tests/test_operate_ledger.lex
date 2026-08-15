@@ -1,13 +1,15 @@
 # tests — operate ledger (#118/#120, CTL2): schema, backfill, replay,
 # budget refusal, disposition semantics.
 #
-# Note: conn.open("sqlite::memory:") is backed by a shared on-disk file in
+# Note: conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) is backed by a shared on-disk file in
 # this environment (fresh per CI checkout, persistent across local runs),
 # so every test uses a time-suffixed company id to stay idempotent.
 
 import "std.sql" as sql
 
 import "std.str" as str
+
+import "std.crypto" as crypto
 
 import "std.int" as int
 
@@ -30,8 +32,7 @@ import "../src/migrate" as migrate
 import "../src/operate_ledger" as ledger
 
 fn open_db() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[conn.ConnDb, Str] {
-  let __clean :: Result[Unit, Str] := fs.remove("sqlite::memory:")
-  match conn.open("sqlite::memory:") {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => Err(str.concat("migrate failed: ", e)),

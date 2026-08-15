@@ -69,6 +69,8 @@ import "./company_runner" as company_runner
 
 import "./pool_seed" as pool_seed
 
+import "./ceo" as ceo
+
 import "./transport" as tr
 
 # One scheduling decision: action is "run" or "skip"; reason is the specific
@@ -249,39 +251,42 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
         let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": migrate failed: ", e], ""))
         0
       },
-      Ok(_) => match classify_company(db, company_id) {
-        None => {
-          let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": no company row in ", db_path, " — not bootstrapped?"], ""))
-          let __a := tr.push_attention(db, str.join([company_id, "/scheduler"], ""), "scheduler", "config", "board", "")
-          0
-        },
-        Some(pair) => match pair {
-          (cfg, d) => {
-            let stage := company.load_stage(db, company_id)
-            let resume := company.resume_point(db, company_id)
-            let __t := tr.trail(db, company_id, "scheduler_decision", decision_json(d, stage, resume.start_idx))
-            if d.action == "run" and runs_left > 0 {
-              let __p := io.print(str.join(["[scheduler] RUN ", company_id, " (", d.reason, ")"], ""))
-              let __seed := pool_seed.seed(db)
-              let __res := company_runner.run_company(db, cfg, api_max, evolve)
-              1
-            } else {
-              let why := if d.action == "run" {
-                "run_cap_reached"
-              } else {
-                d.reason
-              }
-              let __p := io.print(str.join(["[scheduler] skip ", company_id, " (", why, ")"], ""))
-              let __esc := if why == "parked" {
-                escalate_overdue(db, company_id)
-              } else {
-                ()
-              }
-              let __m := monitor_company(db, company_id)
-              0
-            }
+      Ok(_) => {
+        let __ceo := ceo.heartbeat(db, company_id, api_max)
+        match classify_company(db, company_id) {
+          None => {
+            let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": no company row in ", db_path, " — not bootstrapped?"], ""))
+            let __a := tr.push_attention(db, str.join([company_id, "/scheduler"], ""), "scheduler", "config", "board", "")
+            0
           },
-        },
+          Some(pair) => match pair {
+            (cfg, d) => {
+              let stage := company.load_stage(db, company_id)
+              let resume := company.resume_point(db, company_id)
+              let __t := tr.trail(db, company_id, "scheduler_decision", decision_json(d, stage, resume.start_idx))
+              if d.action == "run" and runs_left > 0 {
+                let __p := io.print(str.join(["[scheduler] RUN ", company_id, " (", d.reason, ")"], ""))
+                let __seed := pool_seed.seed(db)
+                let __res := company_runner.run_company(db, cfg, api_max, evolve)
+                1
+              } else {
+                let why := if d.action == "run" {
+                  "run_cap_reached"
+                } else {
+                  d.reason
+                }
+                let __p := io.print(str.join(["[scheduler] skip ", company_id, " (", why, ")"], ""))
+                let __esc := if why == "parked" {
+                  escalate_overdue(db, company_id)
+                } else {
+                  ()
+                }
+                let __m := monitor_company(db, company_id)
+                0
+              }
+            },
+          },
+        }
       },
     },
   }

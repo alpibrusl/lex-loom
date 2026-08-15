@@ -58,6 +58,8 @@ import "./transport" as tr
 
 import "./delegation" as delegation
 
+import "./budget" as budget
+
 import "./company" as company
 
 # ── Verdict model ────────────────────────────────────────────────────────────
@@ -252,13 +254,13 @@ fn report_for(db :: conn.ConnDb, company_id :: Str, manager_role :: Str) -> [sql
       a.status == status
     }))
   }
-  let lines := list.map(mine, fn (a :: delegation.Assignment) -> Str {
+  let lines := list.map(mine, fn (a :: delegation.Assignment) -> [sql, fs_read] Str {
     let note := if str.is_empty(a.reason) {
       ""
     } else {
       str.join([" — ", clip(a.reason, 80)], "")
     }
-    str.join(["  * ", a.kind, " -> ", a.to_role, ": ", a.status, note], "")
+    str.join(["  * ", a.kind, " -> ", a.to_role, ": ", a.status, note, budget.remaining_line(db, company_id, a.to_role)], "")
   })
   str.join([manager_role, " team: ", int.to_str(count_of("approved")), " approved, ", int.to_str(count_of("done")), " awaiting review, ", int.to_str(count_of("rework")), " in rework, ", int.to_str(count_of("returned")), " returned, ", int.to_str(count_of("offered")), " queued.\n", str.join(lines, "\n")], "")
 }

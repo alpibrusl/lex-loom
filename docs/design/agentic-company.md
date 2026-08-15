@@ -237,6 +237,23 @@ the ledger: who proposed, what grants, who approved. Approved roles cast
 through the same `cast.cast_node` path as builtins (`loom-dyn-<kind>`) —
 no side channel.
 
+**Budget authority** *(landed since — GOV2, #222)*. Budget stops being one
+global kill switch: an envelope is *authority to spend up to X* (integer
+cents, always), declared per scope — `total`, or `role:<kind>` — in
+`[budget.envelopes]` (validated at launch, refuse-on-invalid) or by the
+board's `budget_set_cmd` (RESOLVER_ID required; every change trailed with
+its actor — no agent code path can raise its own cap). Enforcement is at
+dispatch: an exhausted role envelope refuses that role's nodes (the
+subtree stops; unrelated roles in the same phase continue) and an
+exhausted `total` refuses to start the next iteration
+(`stopped_by: "budget"`) — both escalate ONCE into the board's attention
+queue with the ORG1 chain on the trail. Charges are atomic increments
+using the cost ledger's own estimate, so utilization is the exact sum of
+charges and can never go negative; 80% trails a `budget_warning` once and
+the board report renders per-envelope utilization with WARNING/EXHAUSTED
+flags. ORG3 managers see their reports' roles' remaining balances inline.
+Refuse, don't downgrade: there is no overdraft anywhere in this path.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

@@ -91,6 +91,14 @@ org_edges = ",".join(f"{child}:{parent}" for child, parent in org_table.items())
 roles_table = m.get("roles", {}) if isinstance(m.get("roles", {}), dict) else {}
 role_packs = ",".join(str(x) for x in roles_table.get("packs", []) if str(x).strip())
 
+# GOV2 (lex-loom#222): [budget.envelopes] declares per-scope spend caps in
+# integer cents: total = 5000, "role:build" = 2000. Flattened to
+# "scope:cents,..." for BUDGET_ENVELOPES; run_company_cmd validates and
+# REFUSES to start on an invalid declaration.
+budget_table = m.get("budget", {}) if isinstance(m.get("budget", {}), dict) else {}
+envelopes_table = budget_table.get("envelopes", {}) if isinstance(budget_table.get("envelopes", {}), dict) else {}
+budget_envelopes = ",".join(f"{k}:{v}" for k, v in envelopes_table.items())
+
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
@@ -101,6 +109,7 @@ out = {
     "CPOLICY_ISOLATION": policy_isolation,
     "CORG_EDGES": org_edges,
     "CROLE_PACKS": role_packs,
+    "CBUDGET_ENVELOPES": budget_envelopes,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -221,7 +230,7 @@ fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
-  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' bin/run-company.sh"
+  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' bin/run-company.sh"
   exit 0
 fi
 
@@ -231,5 +240,5 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
-  ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" \
+  ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" \
   bin/run-company.sh

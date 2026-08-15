@@ -105,6 +105,14 @@ fn ddl_role_defs_idx() -> Str {
   "CREATE INDEX IF NOT EXISTS idx_role_defs_company ON role_defs(company_id, kind, status)"
 }
 
+fn ddl_budget_envelopes() -> Str {
+  "CREATE TABLE IF NOT EXISTS budget_envelopes (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, scope TEXT NOT NULL, cap_cents INTEGER NOT NULL, spent_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '')"
+}
+
+fn ddl_budget_envelopes_idx() -> Str {
+  "CREATE INDEX IF NOT EXISTS idx_budget_envelopes_company ON budget_envelopes(company_id)"
+}
+
 fn ddl_attention_queue() -> Str {
   "CREATE TABLE IF NOT EXISTS attention_queue (id TEXT PRIMARY KEY, sprint_id TEXT NOT NULL, node_id TEXT NOT NULL, gate TEXT NOT NULL, oracle TEXT NOT NULL, artifact_hash TEXT NOT NULL DEFAULT '', verdict TEXT NOT NULL DEFAULT 'pending', rejection_reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '', resolved_by TEXT NOT NULL DEFAULT '')"
 }
@@ -335,7 +343,7 @@ fn mem_conndb(db :: Db) -> conn.ConnDb {
 }
 
 fn run(db :: Db) -> [sql, fs_write] Result[Unit, Str] {
-  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx(), ddl_assignments(), ddl_assignments_idx(), ddl_mission_ledger(), ddl_mission_ledger_idx(), ddl_role_defs(), ddl_role_defs_idx()]) {
+  match run_step(db, [ddl_agents(), ddl_relationships(), ddl_rel_idx(), ddl_agent_state(), ddl_traces(), ddl_traces_idx(), ddl_sprint_graphs(), ddl_sprint_graphs_idx(), ddl_phase_transitions(), ddl_artifacts(), ddl_digests(), ddl_digests_idx(), ddl_tightened_specs(), ddl_tightened_specs_idx(), ddl_node_results(), ddl_node_results_idx(), ddl_agent_pool(), ddl_agent_pool_idx(), ddl_attention_queue(), ddl_attention_queue_idx(), ddl_sprint_runs(), ddl_sprint_runs_idx(), ddl_companies(), ddl_company_iterations(), ddl_company_iterations_idx(), ddl_attestations(), ddl_attestations_idx(), ddl_company_backlog(), ddl_company_backlog_idx(), ddl_portfolio_tracks(), ddl_portfolio_tracks_idx(), ddl_company_board_notes(), ddl_company_board_notes_idx(), ddl_company_operate_signals(), ddl_company_operate_signals_idx(), ddl_operate_incidents(), ddl_operate_incidents_idx(), ddl_operate_actions(), ddl_operate_actions_idx(), ddl_operate_effects(), ddl_operate_effects_idx(), ddl_operate_evidence(), ddl_operate_evidence_idx(), ddl_operate_tier_state(), ddl_node_agui_events(), ddl_node_agui_events_idx(), ddl_assignments(), ddl_assignments_idx(), ddl_mission_ledger(), ddl_mission_ledger_idx(), ddl_role_defs(), ddl_role_defs_idx(), ddl_budget_envelopes(), ddl_budget_envelopes_idx()]) {
     Err(e) => Err(e),
     Ok(_) => match mem.init_schema(mem_conndb(db)) {
       Err(e) => Err(e),

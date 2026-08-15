@@ -2,15 +2,23 @@
 #
 # Pulls node-jobs from the "loom:node" queue and executes them.
 #
-# Multiple worker processes are NOT currently safe to run concurrently
-# against the same DB, on either backend (lex-loom#197) — the vendored
-# lex-jobs v0.1's own README states plainly "v1 is safe with a single
-# worker per queue"; multi-worker safety needs SELECT...FOR UPDATE SKIP
-# LOCKED, a v2 follow-up that hasn't shipped. bin/run-company.sh (the
-# one caller that decides how many worker processes to launch) refuses
-# to start with WORKER_COUNT > 1 for exactly this reason — this file
-# doesn't self-enforce it, since one worker process has no way to know
-# how many siblings are running against the same DB.
+# HB3 (lex-loom#215/#197): multiple worker processes against the same DB
+# are now supported. The safety argument is backend-specific and loom is
+# SQLite-only (migrate.lex hardcodes the dialect): jobs.try_claim is ONE
+# statement — UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING — and
+# SQLite executes a whole statement under the database write lock, so two
+# claimers can never both own the same job (proven under contention in
+# tests/test_concurrency.lex, 12 parallel claimers / zero double-claims).
+# The race lex-jobs' README warns about is the POSTGRES snapshot race
+# (needs SELECT ... FOR UPDATE SKIP LOCKED, still a v2 follow-up there) —
+# if loom ever grows a Postgres path, multi-worker must be re-gated.
+# Two loom-side changes complete the story:
+#   - a claim/ack error is TRANSIENT (e.g. SQLITE_BUSY while a sibling
+#     writes): log, back off one poll interval, keep serving — before
+#     this, any claim error silently ended the worker's loop for good.
+#   - every executed node is trail-recorded (`worker_node_executed`, with
+#     this worker's WORKER_ID) so "no node ran twice" is auditable from
+#     the trail, not inferred from logs.
 #
 # execute_node_job builds a real orchestrator.SprintCfg from the job payload
 # and calls orchestrator.invoke_node_attempt directly — the SAME gate
@@ -31,6 +39,8 @@
 #   DB_PATH      — SQLite / Postgres connection (default: loom.db)
 #   MODEL        — fallback LLM model name (default: claude-haiku-4-5-20251001)
 #   POLL_MS      — queue poll interval in ms (default: 500)
+#   WORKER_ID    — this worker's name in logs + trail attribution
+#                  (default: a fresh random "w-<hex>")
 #   RECLAIM_LEASE_SECONDS — reclaim 'running' jobs orphaned by a dead worker
 #                           after this many seconds (default: 300; 0 disables)
 
@@ -41,6 +51,8 @@ import "std.io" as io
 import "std.str" as str
 
 import "std.sql" as sql
+
+import "std.crypto" as crypto
 
 import "std.int" as int
 
@@ -100,7 +112,7 @@ fn default_api_calls_max() -> Int {
 # bounce/possible-retire on denial) rather than waiting for a whole-sprint
 # batch update, since a queue-driven sprint has no single synchronous
 # "sprint completed" moment to batch at.
-fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] jobs.WorkOutcome {
+fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, provider :: prov.Provider, worker_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] jobs.WorkOutcome {
   match jv.parse(payload) {
     Err(_) => Fail("invalid JSON payload"),
     Ok(j) => {
@@ -172,7 +184,12 @@ fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, pro
                 }
               }
               let __wr := tr.write_node_result(db, sprint_id, node_id, phase, outcome.attested, outcome.artifact, outcome.reason)
-              let __tl2 := io.print(str.join(["[loom/worker] done node=", node_id, " attested=", if outcome.attested {
+              let __wt := tr.trail(db, sprint_id, "worker_node_executed", str.join(["{\"worker\":\"", worker_id, "\",\"node\":\"", node_id, "\",\"attested\":", if outcome.attested {
+                "true"
+              } else {
+                "false"
+              }, "}"], ""))
+              let __tl2 := io.print(str.join(["[loom/worker ", worker_id, "] done node=", node_id, " attested=", if outcome.attested {
                 "true"
               } else {
                 "false"
@@ -222,30 +239,34 @@ fn sq(s :: Str) -> Str {
   str.replace(s, "'", "''")
 }
 
-fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider, lease_seconds :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, provider :: prov.Provider, lease_seconds :: Int, worker_id :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   match jobs.try_claim(db.handle, queue) {
-    Err(e) => io.print(str.concat("[loom/worker] claim error: ", e)),
+    Err(e) => {
+      let __p := io.print(str.join(["[loom/worker ", worker_id, "] claim error (transient, backing off): ", e], ""))
+      let __s := time.sleep_ms(poll_ms)
+      poll_loop(db, queue, poll_ms, model, provider, lease_seconds, worker_id)
+    },
     Ok(None) => {
       let __rc := if lease_seconds > 0 {
         match jobs.reclaim_stale(db.handle, queue, lease_seconds) {
-          Err(e) => io.print(str.concat("[loom/worker] reclaim error: ", e)),
+          Err(e) => io.print(str.join(["[loom/worker ", worker_id, "] reclaim error: ", e], "")),
           Ok(0) => (),
-          Ok(n) => io.print(str.join(["[loom/worker] reclaimed ", int.to_str(n), " stale job(s)"], "")),
+          Ok(n) => io.print(str.join(["[loom/worker ", worker_id, "] reclaimed ", int.to_str(n), " stale job(s)"], "")),
         }
       } else {
         ()
       }
       let __s := time.sleep_ms(poll_ms)
-      poll_loop(db, queue, poll_ms, model, provider, lease_seconds)
+      poll_loop(db, queue, poll_ms, model, provider, lease_seconds, worker_id)
     },
     Ok(Some(job)) => {
-      let outcome := execute_node_job(db, job.payload, model, provider)
+      let outcome := execute_node_job(db, job.payload, model, provider, worker_id)
       let __ack := match outcome {
         Done => jobs.ack(db.handle, job.id),
         Retry(reason) => jobs.retry_or_fail(db.handle, job, reason),
         Fail(reason) => jobs.fail(db.handle, job.id, reason),
       }
-      poll_loop(db, queue, poll_ms, model, provider, lease_seconds)
+      poll_loop(db, queue, poll_ms, model, provider, lease_seconds, worker_id)
     },
   }
 }
@@ -261,15 +282,16 @@ fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, 
     None => 300,
     Some(n) => n,
   }
-  let __p := io.print(str.join(["[loom/worker] starting db=", db_path, " poll_ms=", int.to_str(poll_ms), " reclaim_lease_seconds=", int.to_str(lease_seconds)], ""))
+  let worker_id := get_env("WORKER_ID", str.concat("w-", crypto.random_str_hex(4)))
+  let __p := io.print(str.join(["[loom/worker ", worker_id, "] starting db=", db_path, " poll_ms=", int.to_str(poll_ms), " reclaim_lease_seconds=", int.to_str(lease_seconds)], ""))
   match conn.open(db_path) {
     Err(_) => io.print("[loom/worker] FATAL open db"),
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => io.print(str.concat("[loom/worker] FATAL migrate: ", e)),
       Ok(_) => {
         let provider := roles.make_provider()
-        let __p2 := io.print("[loom/worker] listening on loom:node queue")
-        poll_loop(db, tr.node_queue(), poll_ms, model, provider, lease_seconds)
+        let __p2 := io.print(str.join(["[loom/worker ", worker_id, "] listening on loom:node queue"], ""))
+        poll_loop(db, tr.node_queue(), poll_ms, model, provider, lease_seconds, worker_id)
       },
     },
   }

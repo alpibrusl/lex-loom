@@ -319,6 +319,32 @@ the run that absorbed it — replaying the table is the wake history
 carry ids and indexes (a note's index, an item's id), never caller text,
 and nothing from an event body is ever spliced into a prompt (#118 §2.7).
 
+**True concurrency** *(landed since — HB3, #215)*. The last artificial
+serialization points are gone. **Multi-worker**: the #197 refusal in
+`run-company.sh` is lifted — loom is SQLite-only, where lex-jobs'
+single-statement claim (`UPDATE ... WHERE id=(SELECT ...) RETURNING`) is
+atomic under the database write lock, so two workers can never own the
+same job (the race its README warns about is Postgres-specific; if a
+Postgres path ever lands, re-gate). Loom-side: a claim error is now
+treated as transient (back off one poll, keep serving — it used to
+silently end the worker loop), and every execution is trail-recorded as
+`worker_node_executed` with the worker's `WORKER_ID`, so "each node ran
+exactly once, and by whom" is auditable from the trail. **Scheduler**:
+a tick is now plan → run → monitor — classification and governance
+heartbeats stay sequential, then the first `MAX_RUNS_PER_TICK`
+run-classified companies fan out **concurrently** via `list.par_map`
+(each company is its own SQLite file; nothing shared), making the cap a
+true concurrency cap; everyone else gets the monitor sweep as before.
+**Money under contention**: `budget.charge` and the cost ledger were
+already single-statement relative UPDATEs — `tests/test_concurrency.lex`
+proves it: 8 parallel writers land an exact total, 12 parallel claimers
+on 6 jobs produce zero double-claims, and an envelope charged past its
+cap by racing writers still trips `Exhausted` on the true integer-cents
+sum. Live proof (`demo/hb3-concurrency-roundtrip.sh`): two real worker
+processes complete a 6-node sprint with a 3/3 split and zero duplicated
+executions; a 3-company workspace runs all three inside one tick, with
+`run_cap_reached` enforced at cap 2 and no cross-company trail bleed.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

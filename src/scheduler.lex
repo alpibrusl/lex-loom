@@ -11,7 +11,10 @@
 #      DB is the single source of truth; the scheduler keeps no state of its
 #      own, so a kill/restart resumes cleanly by construction).
 #   2. run     — at most MAX_RUNS_PER_TICK companies per tick go through the
-#      exact same company_runner.run_company path a manual invocation uses.
+#      exact same company_runner.run_company path a manual invocation uses;
+#      since HB3 (#215) they run CONCURRENTLY (list.par_map — each company
+#      is its own SQLite file, so parallel runs share no DB), making
+#      MAX_RUNS_PER_TICK a true concurrency cap.
 #   3. monitor — companies NOT run this tick still get the between-run
 #      revenue/liveness sweep (the company_monitor_cmd logic), so operate
 #      signals accrue and a dormant company's wake_when can become true.
@@ -39,7 +42,9 @@
 #   LOOM_WORKSPACE=~/loom-companies bin/loom-scheduler.sh
 #
 # EXEC_MODE stays whatever the environment says (loom-scheduler.sh defaults it
-# to "inline": this scheduler launches no queue workers — that's HB3).
+# to "inline"): this scheduler launches no queue workers of its own — run
+# worker.lex processes yourself (WORKER_COUNT in run-company.sh) for queue
+# mode; since HB3 several workers per company DB are safe.
 
 import "std.str" as str
 
@@ -252,20 +257,28 @@ fn decision_json(d :: SchedDecision, stage :: company.LifecycleStage, start_idx 
   str.join(["{\"action\":\"", d.action, "\",\"reason\":\"", d.reason, "\",\"stage\":\"", company.stage_to_str(stage), "\",\"next_iter\":", int.to_str(start_idx), "}"], "")
 }
 
-# Handle one discovered company: open its DB (refuse loudly on failure),
-# classify, trail the decision, then run or monitor. Returns 1 if a company
-# run was started (counts against MAX_RUNS_PER_TICK), else 0.
-fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve :: Bool, runs_left :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Int {
+# ── HB3 (#215): the tick is plan → run (concurrent) → monitor ────────────────
+# Phase 1 (sequential, cheap): open each company's DB, run the governance
+# heartbeats, classify, trail the decision. Phase 2 (CONCURRENT): the first
+# MAX_RUNS_PER_TICK run-classified companies fan out via list.par_map — each
+# company lives in its OWN SQLite file, so parallel runs share nothing but
+# the trail format. Phase 3 (sequential, cheap): everyone else gets the
+# monitor sweep. MAX_RUNS_PER_TICK is now a true concurrency cap, not a
+# one-at-a-time budget.
+# Plan one discovered company: open its DB (refuse loudly on failure), run
+# the governance passes, classify, trail the decision. None = nothing more
+# to do this tick (unopenable / unbootstrapped, already reported loudly).
+fn plan_company(workspace :: Str, company_id :: Str, api_max :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Option[SchedDecision] {
   let db_path := str.join([workspace, "/", company_id, "/company.db"], "")
   match conn.open(db_path) {
     Err(_) => {
       let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": cannot open ", db_path, " — refusing to guess (fix or remove the directory)"], ""))
-      0
+      None
     },
     Ok(db) => match migrate.run(db.handle) {
       Err(e) => {
         let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": migrate failed: ", e], ""))
-        0
+        None
       },
       Ok(_) => {
         let __roles := role_registry.apply_resolved(db, company_id)
@@ -276,45 +289,64 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
           None => {
             let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": no company row in ", db_path, " — not bootstrapped?"], ""))
             let __a := tr.push_attention(db, str.join([company_id, "/scheduler"], ""), "scheduler", "config", "board", "")
-            0
+            None
           },
           Some(pair) => match pair {
-            (cfg, d) => {
+            (_, d) => {
               let stage := company.load_stage(db, company_id)
               let resume := company.resume_point(db, company_id)
               let __t := tr.trail(db, company_id, "scheduler_decision", decision_json(d, stage, resume.start_idx))
-              if d.action == "run" and runs_left > 0 {
-                let __p := io.print(str.join(["[scheduler] RUN ", company_id, " (", d.reason, ")"], ""))
-                let __seed := pool_seed.seed(db)
-                let __res := company_runner.run_company(db, cfg, api_max, evolve)
-                let consumed := events.consume_all(db, company_id, str.join(["scheduler:", d.reason, ":iter-", int.to_str(resume.start_idx)], ""))
-                let __ct := if consumed > 0 {
-                  let __t2 := tr.trail(db, company_id, "events_consumed", str.join(["{\"count\":", int.to_str(consumed), ",\"reason\":\"", d.reason, "\",\"iter\":", int.to_str(resume.start_idx), "}"], ""))
-                  io.print(str.join(["[scheduler] ", company_id, ": ", int.to_str(consumed), " event(s) consumed by this run"], ""))
-                } else {
-                  ()
-                }
-                1
-              } else {
-                let why := if d.action == "run" {
-                  "run_cap_reached"
-                } else {
-                  d.reason
-                }
-                let __p := io.print(str.join(["[scheduler] skip ", company_id, " (", why, ")"], ""))
-                let __esc := if why == "parked" {
-                  escalate_overdue(db, company_id)
-                } else {
-                  ()
-                }
-                let __m := monitor_company(db, company_id)
-                let __ev := events.sync_operate_events(db, company_id)
-                0
-              }
+              Some(d)
             },
           },
         }
       },
+    },
+  }
+}
+
+# Run one planned company (phase 2 — executes inside par_map, so it opens
+# its own fresh connection; migrate already ran in plan_company this tick).
+fn run_planned(workspace :: Str, company_id :: Str, reason :: Str, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Int {
+  let db_path := str.join([workspace, "/", company_id, "/company.db"], "")
+  match conn.open(db_path) {
+    Err(_) => {
+      let __p := io.print(str.join(["[scheduler] SKIP ", company_id, ": cannot reopen ", db_path, " for its run"], ""))
+      0
+    },
+    Ok(db) => match company.load_company(db, company_id) {
+      None => 0,
+      Some(cfg) => {
+        let resume := company.resume_point(db, company_id)
+        let __seed := pool_seed.seed(db)
+        let __res := company_runner.run_company(db, cfg, api_max, evolve)
+        let consumed := events.consume_all(db, company_id, str.join(["scheduler:", reason, ":iter-", int.to_str(resume.start_idx)], ""))
+        let __ct := if consumed > 0 {
+          let __t2 := tr.trail(db, company_id, "events_consumed", str.join(["{\"count\":", int.to_str(consumed), ",\"reason\":\"", reason, "\",\"iter\":", int.to_str(resume.start_idx), "}"], ""))
+          io.print(str.join(["[scheduler] ", company_id, ": ", int.to_str(consumed), " event(s) consumed by this run"], ""))
+        } else {
+          ()
+        }
+        1
+      },
+    },
+  }
+}
+
+# Monitor one company that is NOT running this tick (phase 3).
+fn monitor_pass(workspace :: Str, company_id :: Str, why :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, proc] Unit {
+  let db_path := str.join([workspace, "/", company_id, "/company.db"], "")
+  match conn.open(db_path) {
+    Err(_) => (),
+    Ok(db) => {
+      let __esc := if why == "parked" {
+        escalate_overdue(db, company_id)
+      } else {
+        ()
+      }
+      let __m := monitor_company(db, company_id)
+      let __ev := events.sync_operate_events(db, company_id)
+      ()
     },
   }
 }
@@ -332,22 +364,62 @@ fn discover(workspace :: Str) -> [proc] List[Str] {
   }
 }
 
-fn run_companies(workspace :: Str, ids :: List[Str], api_max :: Int, evolve :: Bool, runs_left :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Int {
-  match list.head(ids) {
-    None => 0,
-    Some(cid) => {
-      let started := handle_company(workspace, str.trim(cid), api_max, evolve, runs_left)
-      started + run_companies(workspace, list.tail(ids), api_max, evolve, runs_left - started)
-    },
-  }
+# Partition planned companies into the capped run set (in discovery order)
+# and the monitor set, preserving the reason each landed where it did.
+type TickPlan = { runs :: List[(Str, Str)], monitors :: List[(Str, Str)] }
+
+fn partition_plans(plans :: List[(Str, SchedDecision)], max_runs :: Int) -> TickPlan {
+  list.fold(plans, { runs: [], monitors: [] }, fn (acc :: TickPlan, p :: (Str, SchedDecision)) -> TickPlan {
+    match p {
+      (cid, d) => if d.action == "run" {
+        if list.len(acc.runs) < max_runs {
+          { runs: list.concat(acc.runs, [(cid, d.reason)]), monitors: acc.monitors }
+        } else {
+          { runs: acc.runs, monitors: list.concat(acc.monitors, [(cid, "run_cap_reached")]) }
+        }
+      } else {
+        { runs: acc.runs, monitors: list.concat(acc.monitors, [(cid, d.reason)]) }
+      },
+    }
+  })
 }
 
-# One tick: discover, then classify/run/monitor every company. Returns the
-# number of company runs started this tick.
+# One tick: discover, plan every company, fan the capped run set out
+# CONCURRENTLY, monitor the rest. Returns the number of runs started.
 fn tick(workspace :: Str, api_max :: Int, evolve :: Bool, max_runs :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Int {
   let ids := discover(workspace)
   let __p := io.print(str.join(["[scheduler] tick: ", int.to_str(list.len(ids)), " company(ies) in ", workspace], ""))
-  run_companies(workspace, ids, api_max, evolve, max_runs)
+  let plans := list.fold(ids, [], fn (acc :: List[(Str, SchedDecision)], cid0 :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] List[(Str, SchedDecision)] {
+    let cid := str.trim(cid0)
+    match plan_company(workspace, cid, api_max) {
+      None => acc,
+      Some(d) => list.concat(acc, [(cid, d)]),
+    }
+  })
+  let plan := partition_plans(plans, max_runs)
+  let __pr := list.map(plan.runs, fn (r :: (Str, Str)) -> [io] Unit {
+    match r {
+      (cid, reason) => io.print(str.join(["[scheduler] RUN ", cid, " (", reason, ")"], "")),
+    }
+  })
+  let __ps := list.map(plan.monitors, fn (m :: (Str, Str)) -> [io] Unit {
+    match m {
+      (cid, why) => io.print(str.join(["[scheduler] skip ", cid, " (", why, ")"], "")),
+    }
+  })
+  let started := list.par_map(plan.runs, fn (r :: (Str, Str)) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Int {
+    match r {
+      (cid, reason) => run_planned(workspace, cid, reason, api_max, evolve),
+    }
+  })
+  let __mon := list.map(plan.monitors, fn (m :: (Str, Str)) -> [env, io, time, crypto, random, sql, fs_read, fs_write, proc] Unit {
+    match m {
+      (cid, why) => monitor_pass(workspace, cid, why),
+    }
+  })
+  list.fold(started, 0, fn (a :: Int, n :: Int) -> Int {
+    a + n
+  })
 }
 
 # HB2 (#214): the cheap between-tick poll — does ANY company in the workspace

@@ -29,11 +29,11 @@
 # with it. Set EXEC_MODE=inline to go back to the old single-process
 # in-process fan-out (no workers launched).
 #
-# WORKER_COUNT > 1 is refused (lex-loom#197): the vendored lex-jobs v0.1
-# README states plainly "v1 is safe with a single worker per queue" —
-# multi-worker safety needs SELECT...FOR UPDATE SKIP LOCKED, tracked as a
-# v2 follow-up that hasn't shipped. Don't raise this without confirming
-# lex-jobs actually has that fix.
+# WORKER_COUNT > 1 is supported since HB3 (lex-loom#215): loom is
+# SQLite-only, where lex-jobs' single-statement claim is atomic under the
+# database write lock — the race its README warns about is Postgres-only.
+# If loom ever grows a Postgres path, re-gate multi-worker until lex-jobs
+# ships SELECT...FOR UPDATE SKIP LOCKED.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -91,18 +91,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ "$EXEC_MODE" = "queue" ] && [ "$WORKER_COUNT" -gt 1 ]; then
-  echo "[run-company] FATAL: WORKER_COUNT=$WORKER_COUNT with EXEC_MODE=queue — refusing to start (lex-loom#197)." >&2
-  echo "[run-company]   lex-jobs v0.1's own README: \"v1 is safe with a single worker per queue\" — multi-worker" >&2
-  echo "[run-company]   safety needs SELECT...FOR UPDATE SKIP LOCKED, a v2 follow-up that hasn't shipped yet." >&2
-  echo "[run-company]   Set WORKER_COUNT=1, or use EXEC_MODE=inline (no workers, in-process fan-out)." >&2
-  exit 1
-fi
+# HB3 (lex-loom#215): WORKER_COUNT > 1 is supported. loom is SQLite-only,
+# where lex-jobs' single-statement claim (UPDATE ... WHERE id=(SELECT ...)
+# RETURNING) is atomic under the database write lock — two workers can never
+# own the same job (proven under contention in tests/test_concurrency.lex;
+# the old #197 refusal guarded against a race that is Postgres-specific).
+# Each worker gets a stable WORKER_ID so trail events attribute per worker.
 
 if [ "$EXEC_MODE" = "queue" ]; then
   echo "[run-company] EXEC_MODE=queue: launching $WORKER_COUNT worker process(es), logs in $WORKER_LOG_DIR"
   for i in $(seq 1 "$WORKER_COUNT"); do
-    lex run --max-steps 0 \
+    WORKER_ID="w$i" lex run --max-steps 0 \
       --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
       src/worker.lex run_worker > "$WORKER_LOG_DIR/worker-$i.log" 2>&1 &
     WORKER_PIDS+=("$!")

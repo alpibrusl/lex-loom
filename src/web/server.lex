@@ -82,6 +82,8 @@ import "../company" as company
 
 import "../board" as board
 
+import "../events" as events
+
 import "../operate_ledger" as oledger
 
 import "../agui_store" as agui_store
@@ -503,6 +505,39 @@ fn handle_board_decide(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, rando
   }
 }
 
+# ── /api/events (HB2, lex-loom#214) ──────────────────────────────────────────
+# The generic inbound-event webhook: POST {"kind","source","ref"} appends one
+# event to the company's append-only ledger. The kind must be in the closed
+# vocabulary (events.known_kinds) — an unknown kind is a 400, never stored.
+# The body is a REF (an opaque string the woken company can look up through
+# its own grounded paths), never free text destined for a prompt — events are
+# data, not instruction. Token-gated like every other /api route.
+fn handle_post_event(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  match ctx.path_param(c, "company_id") {
+    None => resp.bad_request("missing company id"),
+    Some(cid) => {
+      let body_j := match jv.parse(c.body) {
+        Ok(j) => j,
+        Err(_) => JObj([]),
+      }
+      let kind := get_jv_str(body_j, "kind")
+      let source := get_jv_str(body_j, "source")
+      let ref_str := get_jv_str(body_j, "ref")
+      match open_loom_db(db_path) {
+        Err(_) => resp.internal_error(),
+        Ok(db) => match events.record(db, cid, kind, if str.is_empty(source) {
+          "webhook"
+        } else {
+          source
+        }, str.join(["{\"ref\":", esc(ref_str), "}"], "")) {
+          Err(e) => resp.bad_request(e),
+          Ok(id) => resp.json(str.join(["{\"id\":", esc(id), ",\"company\":", esc(cid), ",\"kind\":", esc(kind), "}"], "")),
+        },
+      }
+    },
+  }
+}
+
 fn handle_approve_attention(db_path :: Str, c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
   match ctx.path_param(c, "id") {
     None => resp.bad_request("missing attention item id"),
@@ -787,7 +822,10 @@ fn build_loom_router(web_dir :: Str, db_path :: Str) -> router.Router {
   let r12c := router.route_effectful(r12b, "POST", "/api/board/decide/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_board_decide(db_path, c)
   })
-  let r13 := router.route_effectful(r12c, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+  let r12d := router.route_effectful(r12c, "POST", "/api/events/:company_id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
+    handle_post_event(db_path, c)
+  })
+  let r13 := router.route_effectful(r12d, "GET", "/api/companies", fn (_c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {
     handle_list_companies(db_path)
   })
   let r14 := router.route_effectful(r13, "GET", "/api/companies/:id", fn (c :: ctx.Ctx) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] resp.Response {

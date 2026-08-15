@@ -75,6 +75,8 @@ import "./budget" as budget
 
 import "./board" as board
 
+import "./events" as events
+
 import "./company_runner" as company_runner
 
 import "./identity" as identity
@@ -592,6 +594,29 @@ fn board_minutes_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
         io.print("[board] no decisions on record yet")
       } else {
         io.print(str.join(ms, "\n"))
+      }
+    },
+  }
+}
+
+# ── events_cmd (HB2, lex-loom#214) ───────────────────────────────────────────
+# The wake history: every external event recorded for a company, chronological,
+# with its one-shot consumption mark (which scheduler run absorbed it, when).
+# Replaying this ledger IS the audit of what woke what.
+#
+#   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write \
+#     src/main.lex events_cmd
+fn events_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[events] FATAL: ", e)),
+    Ok(db) => {
+      let hs := events.history(db, company_id)
+      if list.is_empty(hs) {
+        io.print(str.join(["[events] no events recorded for ", company_id], ""))
+      } else {
+        io.print(str.join(hs, "\n"))
       }
     },
   }

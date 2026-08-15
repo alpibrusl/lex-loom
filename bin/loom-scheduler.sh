@@ -17,6 +17,10 @@
 # Environment:
 #   LOOM_WORKSPACE    — where companies live       (default: ~/loom-companies)
 #   TICK_MS           — sleep between ticks        (default: 60000)
+#   EVENT_POLL_MS     — between-tick event poll    (default: 2000; 0 disables)
+#                       HB2 (#214): an unconsumed event of a kind a company's
+#                       wake_when opted into cuts the tick sleep short — a
+#                       board note wakes a dormant company within seconds.
 #   MAX_RUNS_PER_TICK — company runs per tick cap  (default: 1)
 #   MAX_TICKS         — 0 = run forever            (default: 0)
 #   MAX_API_CALLS     — per-run LLM budget         (default: 200)
@@ -39,15 +43,16 @@ fi
 
 : "${LOOM_WORKSPACE:=$HOME/loom-companies}"
 : "${TICK_MS:=60000}"
+: "${EVENT_POLL_MS:=2000}"
 : "${MAX_RUNS_PER_TICK:=1}"
 : "${MAX_TICKS:=0}"
 : "${MAX_API_CALLS:=200}"
 : "${EVOLVE:=1}"
 : "${EXEC_MODE:=inline}"
 
-export LOOM_WORKSPACE TICK_MS MAX_RUNS_PER_TICK MAX_TICKS MAX_API_CALLS EVOLVE EXEC_MODE
+export LOOM_WORKSPACE TICK_MS EVENT_POLL_MS MAX_RUNS_PER_TICK MAX_TICKS MAX_API_CALLS EVOLVE EXEC_MODE
 
-echo "[loom-scheduler] workspace=$LOOM_WORKSPACE tick_ms=$TICK_MS max_runs_per_tick=$MAX_RUNS_PER_TICK max_ticks=$MAX_TICKS exec_mode=$EXEC_MODE"
+echo "[loom-scheduler] workspace=$LOOM_WORKSPACE tick_ms=$TICK_MS event_poll_ms=$EVENT_POLL_MS max_runs_per_tick=$MAX_RUNS_PER_TICK max_ticks=$MAX_TICKS exec_mode=$EXEC_MODE"
 exec lex run --max-steps 0 \
   --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
   src/scheduler.lex run_scheduler

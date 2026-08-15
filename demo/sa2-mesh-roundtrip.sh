@@ -71,7 +71,7 @@ PIDS+=("$!")
 
 echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated)"
 ( cd "$REPO_ROOT" && PORT="$CX_PORT" CX_API_TOKEN="$CX_TOKEN" \
-    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval \
+    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
     src/server/cx_a2a.lex serve_cx_a2a ) &
 PIDS+=("$!")
 

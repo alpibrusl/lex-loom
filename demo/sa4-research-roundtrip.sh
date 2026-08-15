@@ -48,7 +48,7 @@ PIDS+=("$!")
 
 echo "+ starting loom's research A2A server on :$RESEARCH_PORT (token-gated)"
 PORT="$RESEARCH_PORT" RESEARCH_API_TOKEN="$RESEARCH_TOKEN" \
-  lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval \
+  lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
   src/server/research_a2a.lex serve_research_a2a &
 PIDS+=("$!")
 

@@ -1118,115 +1118,87 @@ fn monetization_handoff_agent(model :: Str) -> [env] runner.AgentDef {
 # Has no callers anywhere in the codebase today (kept as library API surface) —
 # [env] was added so its `deploy` branch can build a real deploy_hetzner tool the
 # same way `for_role` does, not because any caller currently needs it.
-fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {
-  let mk := fn (id :: Str, kind :: Str, sp :: Str) -> runner.AgentDef {
-    { id: id, kind: kind, system_prompt: sp, model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
-  }
-  if role == "pm" {
-    Some(mk("loom-pm", "pm", pm_system_prompt()))
-  } else {
-    if role == "architect" {
-      Some(mk("loom-architect", "architect", architect_system_prompt()))
-    } else {
-      if role == "build" {
-        Some({ id: "loom-build", kind: "build", system_prompt: build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
+# ── The data-driven roster (ORG5, lex-loom#220) ─────────────────────────────
+# Role behavior used to be a hardcoded 26-way if-chain here. It is now a
+# DATA list: one RoleSpec row per castable role, dispatched generically by
+# for_role. A builtin role's content (prompt + tools) still lives in its
+# constructor above — the single source of truth — and the spec row simply
+# names it, so adding a builtin role means adding one constructor and one
+# row. Runtime-created roles (role_registry.lex) never touch this list:
+# cast.lex consults the registry when for_role misses.
+#
+# The `make` closure signature is uniform (model, evidence_path, sprint_id)
+# — constructors that ignore an argument simply don't read it, exactly as
+# the old chain passed "" for them.
+type RoleSpec = { kind :: Str, make :: (Str, Str, Str) -> [env] runner.AgentDef }
+
+fn builtin_specs() -> [env] List[RoleSpec] {
+  [{ kind: "pm", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    pm(model)
+  } }, { kind: "architect", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    architect_agent(model)
+  } }, { kind: "build", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    build(model, sid)
+  } }, { kind: "py_build", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    py_build(model, sid)
+  } }, { kind: "qa", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    qa(model, ep, sid)
+  } }, { kind: "py_qa", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    py_qa(model, ep, sid)
+  } }, { kind: "devops", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    devops(model)
+  } }, { kind: "docs", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    docs(model)
+  } }, { kind: "security", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    security_agent(model, sid)
+  } }, { kind: "ux_designer", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    ux_designer(model)
+  } }, { kind: "brand_designer", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    brand_designer(model)
+  } }, { kind: "content_designer", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    content_designer(model)
+  } }, { kind: "fe_build", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    fe_build(model)
+  } }, { kind: "launch", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    launch(model, sid)
+  } }, { kind: "deploy", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    deploy(model, sid)
+  } }, { kind: "demo", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    demo(model)
+  } }, { kind: "brand_strategist", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    brand_strategist(model)
+  } }, { kind: "copywriter", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    copywriter(model)
+  } }, { kind: "content_creator", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    content_creator(model)
+  } }, { kind: "seo_specialist", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    seo_specialist(model)
+  } }, { kind: "finance", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    finance_agent(model)
+  } }, { kind: "legal", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    legal_agent(model)
+  } }, { kind: "cx", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    cx_agent(model)
+  } }, { kind: "research", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    research_agent(model)
+  } }, { kind: "monetization_handoff", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    monetization_handoff_agent(model)
+  } }, { kind: "scribe", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    scribe(model)
+  } }]
+}
+
+fn spec_for(role :: Str) -> [env] Option[RoleSpec] {
+  list.fold(builtin_specs(), None, fn (acc :: Option[RoleSpec], s :: RoleSpec) -> Option[RoleSpec] {
+    match acc {
+      Some(_) => acc,
+      None => if s.kind == role {
+        Some(s)
       } else {
-        if role == "py_build" {
-          Some({ id: "loom-py-build", kind: "py_build", system_prompt: py_build_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_build", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-        } else {
-          if role == "qa" {
-            Some({ id: "loom-qa", kind: "qa", system_prompt: qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-          } else {
-            if role == "py_qa" {
-              Some({ id: "loom-py-qa", kind: "py_qa", system_prompt: py_qa_system_prompt(), model_name: model, provider: p, tools: tools_of_role("py_qa", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-            } else {
-              if role == "devops" {
-                Some(mk("loom-devops", "devops", devops_system_prompt()))
-              } else {
-                if role == "docs" {
-                  Some(mk("loom-docs", "docs", docs_system_prompt()))
-                } else {
-                  if role == "security" {
-                    Some({ id: "loom-security", kind: "security", system_prompt: security_system_prompt(), model_name: model, provider: p, tools: tools_of_role("security", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-                  } else {
-                    if role == "ux_designer" {
-                      Some(mk("loom-ux-designer", "ux_designer", ux_designer_system_prompt()))
-                    } else {
-                      if role == "brand_designer" {
-                        Some(mk("loom-brand-designer", "brand_designer", brand_designer_system_prompt()))
-                      } else {
-                        if role == "content_designer" {
-                          Some(mk("loom-content-designer", "content_designer", content_designer_system_prompt()))
-                        } else {
-                          if role == "fe_build" {
-                            Some(mk("loom-fe-build", "fe_build", fe_build_system_prompt()))
-                          } else {
-                            if role == "launch" {
-                              Some({ id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("launch", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-                            } else {
-                              if role == "deploy" {
-                                Some({ id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("deploy", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id })
-                              } else {
-                                if role == "demo" {
-                                  Some(mk("loom-demo", "demo", "You are the Demo agent for a software sprint. Given the QA-attested implementation, the Launch agent's live evidence (URL + response), and any docs produced, write a concise stakeholder-facing summary: what was built, the live URL where it runs, actual response from the endpoint, and how to try it. If the Launch agent confirmed the server is live, lead with that URL and the actual HTTP response. Write for a non-technical audience."))
-                                } else {
-                                  if role == "brand_strategist" {
-                                    Some(mk("loom-brand-strategist", "brand_strategist", brand_strategist_system_prompt()))
-                                  } else {
-                                    if role == "copywriter" {
-                                      Some(mk("loom-copywriter", "copywriter", copywriter_system_prompt()))
-                                    } else {
-                                      if role == "content_creator" {
-                                        Some({ id: "loom-content-creator", kind: "content_creator", system_prompt: content_creator_system_prompt(), model_name: model, provider: p, tools: tools_of_role("content_creator", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" })
-                                      } else {
-                                        if role == "seo_specialist" {
-                                          Some(mk("loom-seo-specialist", "seo_specialist", seo_specialist_system_prompt()))
-                                        } else {
-                                          if role == "finance" {
-                                            Some(mk("loom-finance", "finance", finance_system_prompt()))
-                                          } else {
-                                            if role == "legal" {
-                                              Some(mk("loom-legal", "legal", legal_system_prompt()))
-                                            } else {
-                                              if role == "cx" {
-                                                Some({ id: "loom-cx", kind: "cx", system_prompt: cx_system_prompt(), model_name: model, provider: p, tools: tools_of_role("cx", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" })
-                                              } else {
-                                                if role == "research" {
-                                                  Some({ id: "loom-research", kind: "research", system_prompt: research_system_prompt(), model_name: model, provider: p, tools: tools_of_role("research", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" })
-                                                } else {
-                                                  if role == "monetization_handoff" {
-                                                    Some(mk("loom-monetization-handoff", "monetization_handoff", monetization_handoff_system_prompt()))
-                                                  } else {
-                                                    if role == "scribe" {
-                                                      Some(mk("loom-scribe", "scribe", "You are the Scribe for a software sprint. After reviewing the sprint trail and QA outcomes, produce a Digest: (1) what succeeded and why, (2) what failed and why, (3) concrete spec tightenings for next sprint, (4) suggested graph topology for sprint N+1. Be specific — name files, functions, and error messages."))
-                                                    } else {
-                                                      None
-                                                    }
-                                                  }
-                                                }
-                                              }
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+        None
+      },
     }
-  }
+  })
 }
 
 # Resolve a node role string to an AgentDef.
@@ -1235,120 +1207,19 @@ fn for_role_with_provider(role :: Str, model :: Str, p :: prov.Provider, evidenc
 # .system_prompt off the result). `sprint_id` scopes build/py_build/qa/py_qa/
 # security/launch/deploy's shared work dir (#156) — pass "" for callers that
 # never execute the returned agent's tools for real.
-# Every role `for_role` below can dispatch — the castable vocabulary an
+# Every role `for_role` can dispatch — the castable vocabulary an
 # [org] declaration's leaf roles are validated against (ORG1, lex-loom#216).
 # The list itself lives in role_kinds.lex (a leaf module) so org.lex and the
 # runner can read it without importing this file; this re-export keeps the
-# ORG1 API.
+# ORG1 API. tests/test_roles.lex asserts builtin_specs and role_kinds agree.
 fn known_kinds() -> List[Str] {
   role_kinds.known_kinds()
 }
 
 fn for_role(role :: Str, model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[runner.AgentDef] {
-  if role == "pm" {
-    Some(pm(model))
-  } else {
-    if role == "architect" {
-      Some(architect_agent(model))
-    } else {
-      if role == "build" {
-        Some(build(model, sprint_id))
-      } else {
-        if role == "py_build" {
-          Some(py_build(model, sprint_id))
-        } else {
-          if role == "qa" {
-            Some(qa(model, evidence_path, sprint_id))
-          } else {
-            if role == "py_qa" {
-              Some(py_qa(model, evidence_path, sprint_id))
-            } else {
-              if role == "devops" {
-                Some(devops(model))
-              } else {
-                if role == "docs" {
-                  Some(docs(model))
-                } else {
-                  if role == "security" {
-                    Some(security_agent(model, sprint_id))
-                  } else {
-                    if role == "ux_designer" {
-                      Some(ux_designer(model))
-                    } else {
-                      if role == "brand_designer" {
-                        Some(brand_designer(model))
-                      } else {
-                        if role == "content_designer" {
-                          Some(content_designer(model))
-                        } else {
-                          if role == "fe_build" {
-                            Some(fe_build(model))
-                          } else {
-                            if role == "launch" {
-                              Some(launch(model, sprint_id))
-                            } else {
-                              if role == "deploy" {
-                                Some(deploy(model, sprint_id))
-                              } else {
-                                if role == "demo" {
-                                  Some(demo(model))
-                                } else {
-                                  if role == "brand_strategist" {
-                                    Some(brand_strategist(model))
-                                  } else {
-                                    if role == "copywriter" {
-                                      Some(copywriter(model))
-                                    } else {
-                                      if role == "content_creator" {
-                                        Some(content_creator(model))
-                                      } else {
-                                        if role == "seo_specialist" {
-                                          Some(seo_specialist(model))
-                                        } else {
-                                          if role == "finance" {
-                                            Some(finance_agent(model))
-                                          } else {
-                                            if role == "legal" {
-                                              Some(legal_agent(model))
-                                            } else {
-                                              if role == "cx" {
-                                                Some(cx_agent(model))
-                                              } else {
-                                                if role == "research" {
-                                                  Some(research_agent(model))
-                                                } else {
-                                                  if role == "monetization_handoff" {
-                                                    Some(monetization_handoff_agent(model))
-                                                  } else {
-                                                    if role == "scribe" {
-                                                      Some(scribe(model))
-                                                    } else {
-                                                      None
-                                                    }
-                                                  }
-                                                }
-                                              }
-                                            }
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
+  match spec_for(role) {
+    None => None,
+    Some(s) => Some(s.make(model, evidence_path, sprint_id)),
   }
 }
 

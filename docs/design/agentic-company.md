@@ -218,6 +218,25 @@ the trail. Explicit non-goal, enforced by construction: the CEO has no
 spend/payment authority anywhere in this path — it proposes, the board
 disposes.
 
+**Data-driven roster** *(landed since — ORG5, #220)*. The 26-role if-chain
+in `roles.lex` is now a data list (`builtin_specs`) dispatched generically —
+behavior-identical, proven by the whole suite plus a vocabulary-coverage
+test. `[roles].packs` in `company.toml` is parsed and validated against a
+closed pack registry (core / web / content / finance / governance /
+research / security — a partition of the builtin vocabulary); an unknown
+pack REFUSES the launch, and declared packs shape `castable_kinds`
+(core + declared; no declaration keeps every builtin castable). Runtime
+role creation is **bounded**: an agent may propose a new role (prompt +
+tool profile + grant preset), but the tool profile must borrow an existing
+role's tool budget, the grant preset must be WITHIN the company's grant
+ceiling (`manifests.grant_within` over the real preset dims — installing
+never widens, so an agent-authored role can never carry a grant its
+company doesn't already hold), and the board must approve through the
+same attention queue as every other human decision. The `role_defs` row is
+the ledger: who proposed, what grants, who approved. Approved roles cast
+through the same `cast.cast_node` path as builtins (`loom-dyn-<kind>`) —
+no side channel.
+
 ---
 
 ## Smaller, already-diagnosed rough edges (not new, but worth closing)

@@ -84,6 +84,13 @@ policy_isolation = ",".join(f"{k}:{v}" for k, v in policy_isolation_table.items(
 org_table = m.get("org", {}) if isinstance(m.get("org", {}), dict) else {}
 org_edges = ",".join(f"{child}:{parent}" for child, parent in org_table.items())
 
+# ORG5 (lex-loom#220): [roles].packs names the optional role sets the
+# company staffs (e.g. packs = ["finance", "content"]). Flattened to a CSV
+# for ROLE_PACKS; run_company_cmd validates against the closed pack
+# registry and REFUSES to start on an unknown pack.
+roles_table = m.get("roles", {}) if isinstance(m.get("roles", {}), dict) else {}
+role_packs = ",".join(str(x) for x in roles_table.get("packs", []) if str(x).strip())
+
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
@@ -93,6 +100,7 @@ out = {
     "CSOFT_SETTLEMENT": soft_settlement,
     "CPOLICY_ISOLATION": policy_isolation,
     "CORG_EDGES": org_edges,
+    "CROLE_PACKS": role_packs,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -213,7 +221,7 @@ fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
-  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' bin/run-company.sh"
+  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' bin/run-company.sh"
   exit 0
 fi
 
@@ -223,5 +231,5 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   DB_PATH="$DIR/company.db" GOAL="$CGOAL" REVENUE_URL="$CREVENUE_URL" \
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
-  ORG_EDGES="$CORG_EDGES" \
+  ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" \
   bin/run-company.sh

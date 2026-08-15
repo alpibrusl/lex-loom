@@ -141,6 +141,52 @@ fn manifest_json_for_kind(kind :: Str, sprint_id :: Str) -> Str {
 # instead of the unconditional manifest_json_for_kind, so a company's
 # declared [policy.isolation] override actually changes what a node's
 # agent can do, not just what gets reported.
+# ── Grant ordering (ORG5, lex-loom#220) ──────────────────────────────────────
+# The two grant dimensions the 5 presets actually differ on, as data — the
+# SAME literals the manifest_json_* constructors above use. grant_within is
+# the structural "installing never widens" check for runtime role creation:
+# a proposed role's preset must not exceed the company's ceiling on EITHER
+# dimension. Unknown preset names get the Demo dims — the same
+# never-hand-out-authority-by-omission fallback manifest_json_for_preset
+# already applies.
+fn known_presets() -> List[Str] {
+  ["Design", "Implementation", "QA", "Retro", "Demo"]
+}
+
+fn preset_dims(preset :: Str) -> { fs :: Str, exec :: Str } {
+  if preset == "Implementation" {
+    { fs: "ReadWrite", exec: "Sandboxed" }
+  } else {
+    if preset == "QA" {
+      { fs: "ReadOnly", exec: "Sandboxed" }
+    } else {
+      { fs: "ReadOnly", exec: "None" }
+    }
+  }
+}
+
+fn fs_rank(fs :: Str) -> Int {
+  if fs == "ReadWrite" {
+    1
+  } else {
+    0
+  }
+}
+
+fn exec_rank(exec :: Str) -> Int {
+  if exec == "Sandboxed" {
+    1
+  } else {
+    0
+  }
+}
+
+fn grant_within(preset :: Str, ceiling :: Str) -> Bool {
+  let a := preset_dims(preset)
+  let b := preset_dims(ceiling)
+  fs_rank(a.fs) <= fs_rank(b.fs) and exec_rank(a.exec) <= exec_rank(b.exec)
+}
+
 fn lookup_override(overrides :: List[(Str, Str)], kind :: Str) -> Option[Str] {
   list.fold(overrides, None, fn (acc :: Option[Str], pair :: (Str, Str)) -> Option[Str] {
     match acc {

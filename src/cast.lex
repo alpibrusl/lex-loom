@@ -32,6 +32,8 @@ import "./manifests" as manifests
 
 import "./org" as org
 
+import "./role_registry" as registry
+
 import "./transport" as tr
 
 import "lex-orm/src/query" as ormq
@@ -156,7 +158,17 @@ fn empty_roster() -> Roster {
 fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read, fs_write, time, random, crypto] RosterEntry {
   let evidence_path := runner.qa_evidence_path(sprint_id, n.id)
   let candidates := load_pool_for_role(db, n.role)
-  let fallback := default_config_for_role(n.role, model, evidence_path, sprint_id)
+  let company_id := match list.head(str.split(sprint_id, "/")) {
+    Some(cid) => cid,
+    None => sprint_id,
+  }
+  let fallback := match roles.for_role(n.role, model, evidence_path, sprint_id) {
+    Some(c) => c,
+    None => match registry.lookup_active(db, company_id, n.role) {
+      Some(d) => registry.def_to_agent(d, model, sprint_id),
+      None => default_config_for_role(n.role, model, evidence_path, sprint_id),
+    },
+  }
   let entry := match best_agent(candidates, request) {
     None => { node_id: n.id, pool_agent_id: "", agent_config: fallback },
     Some(agent) => {

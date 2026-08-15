@@ -71,6 +71,8 @@ import "./pool_seed" as pool_seed
 
 import "./ceo" as ceo
 
+import "./role_registry" as role_registry
+
 import "./transport" as tr
 
 # One scheduling decision: action is "run" or "skip"; reason is the specific
@@ -252,6 +254,7 @@ fn handle_company(workspace :: Str, company_id :: Str, api_max :: Int, evolve ::
         0
       },
       Ok(_) => {
+        let __roles := role_registry.apply_resolved(db, company_id)
         let __ceo := ceo.heartbeat(db, company_id, api_max)
         match classify_company(db, company_id) {
           None => {

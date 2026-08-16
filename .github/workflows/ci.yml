@@ -32,6 +32,18 @@ jobs:
           [ "$fail" -eq 0 ]
       - name: Format check
         run: lex fmt --check src tests examples demo
+      # AGENTS.md is by convention a verbatim copy of `lex agent-guidelines`
+      # (lex-lang's authoritative agent contract). Nothing enforced that until
+      # now (#246): a toolchain bump that changes the guidelines must refresh
+      # the copy in the same PR, and this gate is what makes that happen.
+      - name: AGENTS.md drift gate
+        run: |
+          set -euo pipefail
+          lex agent-guidelines > /tmp/agent-guidelines.txt
+          if ! diff -u AGENTS.md /tmp/agent-guidelines.txt; then
+            echo "::error file=AGENTS.md::AGENTS.md has drifted from the pinned toolchain's guidelines. Fix: lex agent-guidelines > AGENTS.md"
+            exit 1
+          fi
       - name: Test
         run: |
           lex test --allow-effects \

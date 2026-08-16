@@ -55,6 +55,8 @@ import "./cast" as cast
 
 import "./defaults" as defaults
 
+import "./dump_config" as dump_config
+
 import "./pool_seed" as pool_seed
 
 import "./cloud" as cloud
@@ -148,7 +150,7 @@ fn init_db() -> [env, sql, fs_write] Unit {
 # ── run_sprint_cmd ────────────────────────────────────────────────────────────
 fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
+  let model := defaults.resolved_model()
   let sprint_id := get_env("SPRINT_ID", "sprint-1")
   let request := get_env("REQUEST", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
   let max_api_calls := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
@@ -170,7 +172,7 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
         get_env("REVIEW_TRANSITIONS", "") == "true"
       }
       let trail_log_none :: Option[tlog.Log] := None
-      let exec_mode := get_env("EXEC_MODE", "inline")
+      let exec_mode := defaults.resolved_exec_mode()
       let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: max_api_calls, roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: review, depth: 0, iter_ctx: None, exec_mode: exec_mode, policy_isolation: "" }
       let result := orch.run_sprint(cfg)
       let status := if result.success {
@@ -768,7 +770,7 @@ fn sprint_report() -> [env, io, sql, fs_read, fs_write] Unit {
 # A persistent goal that produces a series of iterating looms (#53).
 fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
+  let model := defaults.resolved_model()
   let company_id := get_env("COMPANY_ID", "acme")
   let goal := get_env("GOAL", "Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.")
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "3"), 3)
@@ -872,7 +874,7 @@ fn run_portfolio_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write
   let __warn2 := io.print("[portfolio]   Prefer one company per product line in a workspace: bin/bootstrap-company.sh <manifest> --no-run, then bin/loom-scheduler.sh")
   let __warn3 := io.print("[portfolio]   (concurrent runs, budget envelopes, event wakes, and a board surface per company). This command still works for existing portfolio DBs.")
   let db_path := resolve_db_url()
-  let model := get_env("MODEL", get_env("OLLAMA_MODEL", defaults.model()))
+  let model := defaults.resolved_model()
   let portfolio_id := get_env("PORTFOLIO_ID", "acme")
   let max_iterations := parse_int_or(get_env("MAX_ITERATIONS", "1"), 1)
   let api_max := parse_int_or(get_env("MAX_API_CALLS", "200"), 200)
@@ -1033,6 +1035,25 @@ fn add_pool_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, ran
         Ok(_) => io.print(str.join(["[contacts] ", company_id, "/", oracle, " -> agent:", agent_id], "")),
       },
     }
+  }
+}
+
+# ── dump_config_cmd (#247) ────────────────────────────────────────────────────
+# Print the company's effective configuration, one line per field, each
+# annotated with the layer that decided it (company row, env var, isolation
+# override, kind default, spend envelope). Values come from the same
+# resolution functions the runtime uses — see src/dump_config.lex.
+#   COMPANY_ID=acme lex run --allow-effects env,io,sql,fs_read,fs_write \
+#     src/main.lex dump_config_cmd
+fn dump_config_cmd() -> [env, io, sql, fs_read, fs_write] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[dump-config] FATAL: ", e)),
+    Ok(db) => match dump_config.dump(db, company_id) {
+      Err(e) => io.print(str.concat("[dump-config] FATAL: ", e)),
+      Ok(text) => io.print(text),
+    },
   }
 }
 

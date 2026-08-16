@@ -22,6 +22,8 @@ import "./orchestrator" as orch
 
 import "./cast" as cast
 
+import "./defaults" as defaults
+
 import "./company" as company
 
 import "./events" as events
@@ -233,14 +235,7 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
   let __p1 := io.print(str.join(["[company] iter ", int.to_str(k), " sprint=", sprint_id, " goal=", current_goal], ""))
   let trail_none :: Option[tlog.Log] := None
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }
-  let exec_mode := match env.get("EXEC_MODE") {
-    Some(m) => if str.is_empty(m) {
-      "inline"
-    } else {
-      m
-    },
-    None => "inline",
-  }
+  let exec_mode := defaults.resolved_exec_mode()
   let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx), exec_mode: exec_mode, policy_isolation: ccfg.policy_isolation }
   let result := orch.run_sprint(scfg)
   let mem_n := company.persist_iteration_memory(db, sprint_id)

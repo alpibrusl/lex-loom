@@ -58,6 +58,8 @@ import "lex-trail/src/log" as tlog
 
 import "./manifests" as manifests
 
+import "./authority" as authority
+
 import "./budget" as budget
 
 # ── Types ─────────────────────────────────────────────────────────────────────
@@ -227,6 +229,7 @@ fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option
         { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.join(["BUDGET: spend envelope exhausted for role '", n.role, "' — refused at dispatch"], "") }
       },
       _ => {
+        let __auth := authority.record_node_authority(cfg.db, cid, cfg.id, n.id, n.role, cfg.model, cfg.api_calls_max, cfg.policy_isolation, "inline")
         let usage_before := pricing.usage_cost_cents(cfg.db, node_cost_owner(cfg.id, n.id), false)
         let outcome := match n.expand {
           Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),

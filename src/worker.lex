@@ -80,6 +80,10 @@ import "./orchestrator" as orch
 
 import "./cast" as cast
 
+import "./company" as company
+
+import "./authority" as authority
+
 import "./budget" as budget
 
 import "./pricing" as pricing
@@ -187,7 +191,14 @@ fn execute_node_job(db :: conn.ConnDb, payload :: Str, model_default :: Str, pro
                   let __p0 := io.print(str.join(["[loom/worker ", worker_id, "] node ", n.id, " (", n.role, ") REFUSED — spend envelope exhausted"], ""))
                   Done
                 },
-                _ => execute_gated_node(db, n, sprint_id, node_id, phase, request, model, api_calls_max, input_content, cid, worker_id),
+                _ => {
+                  let policy := match company.load_company(db, cid) {
+                    None => "",
+                    Some(c) => c.policy_isolation,
+                  }
+                  let __auth := authority.record_node_authority(db, cid, sprint_id, node_id, n.role, model, api_calls_max, policy, worker_id)
+                  execute_gated_node(db, n, sprint_id, node_id, phase, request, model, api_calls_max, input_content, cid, worker_id)
+                },
               }
             },
           }

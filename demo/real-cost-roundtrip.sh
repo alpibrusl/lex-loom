@@ -81,6 +81,11 @@ SPENT2="$(q "$CDB" "SELECT spent_cents FROM budget_envelopes WHERE company_id='c
 [ "${SPENT2:-0}" -ge 1 ] && ok "envelope charged by the worker path (spent=${SPENT2}c, artifact fallback — proc reports no usage)" || bad "envelope not charged: '$SPENT2'"
 TRAIL="$(q "$CDB" "SELECT count(*) FROM traces WHERE event_kind='worker_node_executed'")"
 [ "${TRAIL:-0}" -ge 1 ] && ok "execution trail-attributed to the worker" || bad "no worker_node_executed trail"
+# #248: the allow-side stamp — the trail alone must say what the node was
+# ALLOWED to do at dispatch (resolved preset + envelope state at that moment).
+AUTH="$(q "$CDB" "SELECT data_json FROM traces WHERE event_kind='node_authority' ORDER BY rowid DESC LIMIT 1")"
+echo "$AUTH" | grep -q '"preset":' && ok "node_authority stamped at dispatch: $AUTH" || bad "no node_authority trail event"
+echo "$AUTH" | grep -q '"dispatcher":"cost-w"' && ok "authority names the dispatching worker" || bad "authority missing dispatcher: $AUTH"
 
 say "3. the ledger books REAL priced usage, not the estimate"
 LDB="$WS/ledger.db"

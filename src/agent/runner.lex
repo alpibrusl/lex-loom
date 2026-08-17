@@ -421,8 +421,12 @@ fn verify_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
 # the rn-expo-web path today), the compile gate ALSO runs the workspace's
 # real `npm run build` (expo export for rn-expo-web) with the node's files
 # overlaid onto a scratch copy of the app: workspace minus node_modules/
-# dist/.git/.expo, node_modules symlinked in (verified live: Metro resolves
-# through the symlink), sprint work dir copied on top. This is the ONLY
+# dist/.next/.git/.expo, node_modules HARDLINK-farmed in (cp -al, ~0.2s;
+# a symlink is not enough — Turbopack refuses a node_modules symlink that
+# points outside the project root, found live on the nextjs path — and the
+# scratch dir is a workspace SIBLING so the hardlinks stay on one
+# filesystem, with a plain-copy fallback if -al ever fails), sprint work
+# dir copied on top. This is the ONLY
 # check that sees `.tsx`/`.jsx` — ts_check stores them without a syntax
 # check (no node-builtin JSX parser), so the bundler output surfacing here
 # is where their errors reach the agent's repair loop. Refuse, don't
@@ -463,7 +467,7 @@ fn verify_compiles_at(ws_root :: Str, kind :: Str, sprint_id :: Str) -> [proc] R
     }
     let company := company_of_sprint(sprint_id)
     let count_tsx := if kind == "ts_build" {
-      "for f in *.tsx *.jsx; do [ -f \"$f\" ] && n=$((n+1)); done; "
+      "n=$((n + $(find . -type f \\( -name '*.tsx' -o -name '*.jsx' -o -name '*.ts' \\) 2>/dev/null | wc -l))); "
     } else {
       ""
     }
@@ -471,7 +475,7 @@ fn verify_compiles_at(ws_root :: Str, kind :: Str, sprint_id :: Str) -> [proc] R
       if str.is_empty(company) {
         ""
       } else {
-        str.join(["WSDIR=\"", ws_expr, "/", company, "\"; if [ -f \"$WSDIR/.loom-installed\" ]; then if [ ! -d \"$WSDIR/node_modules\" ]; then echo BRIDGE_FAIL; echo \"workspace $WSDIR has a .loom-installed marker but no node_modules/ -- the bootstrap install is gone; re-run bin/bootstrap-company.sh (delete the marker to force the install)\"; exit 1; fi; BR=$(mktemp -d \"${TMPDIR:-/tmp}/loom-bridge-XXXXXX\"); (cd \"$WSDIR\" && find . -maxdepth 1 -mindepth 1 ! -name node_modules ! -name dist ! -name .git ! -name .expo -exec cp -a {} \"$BR/\" \\;); ln -s \"$WSDIR/node_modules\" \"$BR/node_modules\"; cp -a ./. \"$BR/\"; out=$(cd \"$BR\" && npm run build 2>&1); rc=$?; rm -rf \"$BR\"; if [ $rc -ne 0 ]; then echo BRIDGE_FAIL; echo \"$out\" | tail -40; exit 1; fi; fi; "], "")
+        str.join(["WSDIR=\"", ws_expr, "/", company, "\"; if [ -f \"$WSDIR/.loom-installed\" ]; then if [ ! -d \"$WSDIR/node_modules\" ]; then echo BRIDGE_FAIL; echo \"workspace $WSDIR has a .loom-installed marker but no node_modules/ -- the bootstrap install is gone; re-run bin/bootstrap-company.sh (delete the marker to force the install)\"; exit 1; fi; BR=$(mktemp -d \"$WSDIR/../.loom-bridge-XXXXXX\"); (cd \"$WSDIR\" && find . -maxdepth 1 -mindepth 1 ! -name node_modules ! -name dist ! -name .next ! -name .git ! -name .expo -exec cp -a {} \"$BR/\" \\;); cp -al \"$WSDIR/node_modules\" \"$BR/node_modules\" 2>/dev/null || cp -a \"$WSDIR/node_modules\" \"$BR/node_modules\"; cp -a ./. \"$BR/\"; out=$(cd \"$BR\" && npm run build 2>&1); rc=$?; rm -rf \"$BR\"; if [ $rc -ne 0 ]; then echo BRIDGE_FAIL; echo \"$out\" | tail -40; exit 1; fi; fi; "], "")
       }
     } else {
       ""

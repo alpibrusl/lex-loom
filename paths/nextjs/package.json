@@ -1,0 +1,23 @@
+{
+  "name": "nextjs",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && cp -r public .next/standalone/public && cp -r .next/static .next/standalone/.next/static",
+    "start": "node .next/standalone/server.js",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "next": "16.3.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  },
+  "description": "lex-loom bootstrap-install golden path: Next.js (standalone output). Dependencies install ONCE at company bootstrap (.loom-install) - never during sprints."
+}

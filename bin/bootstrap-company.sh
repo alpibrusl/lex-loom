@@ -250,7 +250,7 @@ if [ -n "$CSOFT_MESH_URL" ]; then
   echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} settlement=${CSOFT_SETTLEMENT:-off}"
 fi
 if [ -n "$CPOLICY_ISOLATION" ]; then
-  echo "[bootstrap] policy.isolation → ${CPOLICY_ISOLATION} (reportable via cast.roster_grant_report; not yet enforced — OA2)"
+  echo "[bootstrap] policy.isolation → ${CPOLICY_ISOLATION} (enforced since OA2/#183: overrides mediate the LLM tool filter and lex-os exec; real-KVM Firecracker validation still open in #184)"
 fi
 
 if [ "$NORUN" = "--no-run" ]; then

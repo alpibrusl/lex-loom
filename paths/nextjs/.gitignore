@@ -1,0 +1,4 @@
+node_modules/
+.next/
+.loom-installed
+next-env.d.ts

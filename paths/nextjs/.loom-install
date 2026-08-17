@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# One-time bootstrap install for the nextjs path (#256 weight class). Run by
+# bin/bootstrap-company.sh in the scaffolded workspace — the ONE moment loom
+# runs a package install, at the same trust level as the git init /
+# gh repo create the bootstrap already performs. Sprint agents never run
+# this; the .loom-installed marker prevents silent re-installs.
+set -euo pipefail
+npm ci --no-audit --no-fund

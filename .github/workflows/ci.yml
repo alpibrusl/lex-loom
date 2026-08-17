@@ -112,3 +112,5 @@ jobs:
         run: lex pkg install
       - name: "Demo: BI1+BI2 rn-expo-web bootstrap-install + bridge roundtrip (#256)"
         run: bash demo/bi1-rn-expo-web-roundtrip.sh
+      - name: "Demo: BI3 nextjs bootstrap-install + bridge roundtrip (#256 weight class)"
+        run: bash demo/bi3-nextjs-roundtrip.sh

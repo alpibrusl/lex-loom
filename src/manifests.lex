@@ -212,8 +212,9 @@ fn preset_for_kind_with_overrides(kind :: Str, overrides :: List[(Str, Str)]) ->
   }
 }
 
-# The full manifest JSON a role kind would run under, given a company's
-# declared overrides. Not called by the real execution path yet — see the
+# The full manifest JSON a role kind runs under, given a company's declared
+# overrides. This IS the real execution path since OA2 (#183): runner.lex's
+# LLM tool filter and lex_os_exec_step both resolve through it — see the
 # overrides section header above.
 fn manifest_json_for_kind_with_overrides(kind :: Str, sprint_id :: Str, overrides :: List[(Str, Str)]) -> Str {
   manifest_json_for_preset(preset_for_kind_with_overrides(kind, overrides), sprint_id)

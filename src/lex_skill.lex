@@ -50,6 +50,12 @@ fn py_work_dir(sprint_id :: Str) -> Str {
   str.join(["/tmp/loom-py-work-", sanitize_sprint_id(sprint_id)], "")
 }
 
+# Node/TS builds get their own work dir for the same reason (#92 golden
+# paths). Must match runner.ts_work_dir().
+fn ts_work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-ts-work-", sanitize_sprint_id(sprint_id)], "")
+}
+
 # Concise Lex essentials — the must-knows for a model that has never seen Lex.
 # Kept small on purpose: it stays in the agent's conversation and is
 # re-serialized every turn, so a 20KB dump (full `lex agent-guidelines`) would
@@ -340,6 +346,52 @@ fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
   })
 }
 
+# ── ts_check ──────────────────────────────────────────────────────────────────
+# The Node/TS build gate (#92), symmetric with py_check. Writes `code` to
+# ts_work_dir/<filename> and syntax-checks it with Node itself: strip the
+# types (module.stripTypeScriptTypes — throws on TS syntax errors) and parse
+# the result as an ES module (vm.SourceTextModule — parse only, NEVER
+# evaluated, so a server file can't start listening from inside the gate).
+# Same strength class as py_compile: real, parseable code, no execution, no
+# npm install. `node --check` is NOT usable here — found by real probe on
+# Node 22, it parses every input as CommonJS regardless of extension or
+# --input-type, so both type annotations and import statements become bogus
+# SyntaxErrors.
+fn make_ts_check_tool(sprint_id :: Str) -> t.Tool {
+  let dir := ts_work_dir(sprint_id)
+  let params := { title: "TsCheck", description: "Syntax-check a .ts file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
+  t.define("ts_check", "Write `code` to <filename> and syntax-check it with Node (type-strip + ES-module parse, no execution). Returns {ok:'true'|'false', output:<parser errors or 'ok'>}. ALWAYS call this after writing each .ts file and repair until ok='true' before finishing. Never claim code parses without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let filename := match jv.get_field(args, "filename") {
+      Some(JStr(v)) => v,
+      _ => "app.ts",
+    }
+    let code := match jv.get_field(args, "code") {
+      Some(JStr(v)) => v,
+      _ => "",
+    }
+    let path := str.join([dir, "/", filename], "")
+    match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+      Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+      Ok(_) => {
+        let __w := io.write(path, code)
+        let cmd := str.join(["node --no-warnings --experimental-vm-modules -e 'const{stripTypeScriptTypes}=require(\"node:module\");const{SourceTextModule}=require(\"node:vm\");const fs=require(\"node:fs\");try{new SourceTextModule(stripTypeScriptTypes(fs.readFileSync(process.argv[1],\"utf8\")));process.exit(0)}catch(e){console.error(String(e&&e.message?e.message:e));process.exit(1)}' \"", path, "\" 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+        match proc.run("bash", ["-c", cmd]) {
+          Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+          Ok(r) => {
+            let combined := str.concat(r.stdout, r.stderr)
+            let ok := str.contains(combined, "##EXIT:0")
+            Ok(JObj([("ok", JStr(if ok {
+              "true"
+            } else {
+              "false"
+            })), ("output", JStr(combined))]))
+          },
+        }
+      },
+    }
+  })
+}
+
 # ── security_scan ─────────────────────────────────────────────────────────────
 # Grounds the security role's verdict in a real check instead of self-report:
 # greps both build work dirs for a curated set of known-dangerous patterns
@@ -371,7 +423,7 @@ fn parse_security_record(rec :: Str) -> jv.Json {
 fn make_security_scan_tool(sprint_id :: Str) -> t.Tool {
   let params := { title: "SecurityScan", description: "Scan the build work dirs for known-dangerous code patterns", fields: [] }
   t.define("security_scan", "Call this FIRST, before writing your verdict. Greps every file in the Lex and Python work dirs for hardcoded secrets, shell/eval injection, string-built SQL, and debug-mode-on. Returns {findings: [{severity, file, line, snippet}]} (empty list if none found). A GROUNDED check — you must not report PASS if this returns critical/high findings, and must not invent findings it did not report.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
-    let script := str.join(["scan() {\n", "  local dir=\"$1\"\n", "  [ -d \"$dir\" ] || return 0\n", "  cd \"$dir\" || return 0\n", "  local pats=(\n", "    'critical:(api_key|apikey|secret|password|passwd|token)[[:space:]]*[:=][[:space:]]*[\"'\"'\"'][A-Za-z0-9+/=_-]{8,}[\"'\"'\"']'\n", "    'critical:shell[[:space:]]*=[[:space:]]*True'\n", "    'critical:os\\.(system|popen)\\('\n", "    'critical:\\b(eval|exec)\\('\n", "    'high:execute\\((f[\"'\"'\"']|[\"'\"'\"'].*%s|[\"'\"'\"'].*\\+)'\n", "    'medium:debug[[:space:]]*=[[:space:]]*[Tt]rue'\n", "  )\n", "  for p in \"${pats[@]}\"; do\n", "    local sev=\"${p%%:*}\"\n", "    local rx=\"${p#*:}\"\n", "    grep -rniE \"$rx\" . --include='*.py' --include='*.lex' --include='*.js' 2>/dev/null | while IFS=: read -r f l snip; do\n", "      clean=$(echo \"$snip\" | sed -e 's/^[[:space:]]*//' -e 's/@@[FR]@@//g' | cut -c1-200)\n", "      printf '%s@@F@@%s@@F@@%s@@F@@%s@@R@@\\n' \"$sev\" \"${f#./}\" \"$l\" \"$clean\"\n", "    done\n", "  done\n", "}\n", "scan '", work_dir(sprint_id), "'\n", "scan '", py_work_dir(sprint_id), "'\n"], "")
+    let script := str.join(["scan() {\n", "  local dir=\"$1\"\n", "  [ -d \"$dir\" ] || return 0\n", "  cd \"$dir\" || return 0\n", "  local pats=(\n", "    'critical:(api_key|apikey|secret|password|passwd|token)[[:space:]]*[:=][[:space:]]*[\"'\"'\"'][A-Za-z0-9+/=_-]{8,}[\"'\"'\"']'\n", "    'critical:shell[[:space:]]*=[[:space:]]*True'\n", "    'critical:os\\.(system|popen)\\('\n", "    'critical:\\b(eval|exec)\\('\n", "    'high:execute\\((f[\"'\"'\"']|[\"'\"'\"'].*%s|[\"'\"'\"'].*\\+)'\n", "    'medium:debug[[:space:]]*=[[:space:]]*[Tt]rue'\n", "  )\n", "  for p in \"${pats[@]}\"; do\n", "    local sev=\"${p%%:*}\"\n", "    local rx=\"${p#*:}\"\n", "    grep -rniE \"$rx\" . --include='*.py' --include='*.lex' --include='*.js' --include='*.ts' --include='*.mts' 2>/dev/null | while IFS=: read -r f l snip; do\n", "      clean=$(echo \"$snip\" | sed -e 's/^[[:space:]]*//' -e 's/@@[FR]@@//g' | cut -c1-200)\n", "      printf '%s@@F@@%s@@F@@%s@@F@@%s@@R@@\\n' \"$sev\" \"${f#./}\" \"$l\" \"$clean\"\n", "    done\n", "  done\n", "}\n", "scan '", work_dir(sprint_id), "'\n", "scan '", py_work_dir(sprint_id), "'\n", "scan '", ts_work_dir(sprint_id), "'\n"], "")
     match proc.run("bash", ["-c", script]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("security_scan failed: ", msg))),
       Ok(r) => {

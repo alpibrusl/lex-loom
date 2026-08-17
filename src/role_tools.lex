@@ -25,31 +25,39 @@ fn tools_for(role :: Str) -> List[Str] {
     if role == "py_build" {
       ["py_check"]
     } else {
-      if role == "qa" {
-        ["lex_check", "lex_run"]
+      if role == "ts_build" {
+        ["ts_check"]
       } else {
-        if role == "py_qa" {
-          ["run_code"]
+        if role == "qa" {
+          ["lex_check", "lex_run"]
         } else {
-          if role == "launch" {
-            ["run_server"]
+          if role == "py_qa" {
+            ["run_code"]
           } else {
-            if role == "deploy" {
-              ["deploy_hetzner"]
+            if role == "ts_qa" {
+              ["run_node_code"]
             } else {
-              if role == "security" {
-                ["security_scan"]
+              if role == "launch" {
+                ["run_server"]
               } else {
-                if role == "content_creator" {
-                  ["publish_content"]
+                if role == "deploy" {
+                  ["deploy_hetzner"]
                 } else {
-                  if role == "cx" {
-                    ["fetch_support_items"]
+                  if role == "security" {
+                    ["security_scan"]
                   } else {
-                    if role == "research" {
-                      ["web_search"]
+                    if role == "content_creator" {
+                      ["publish_content"]
                     } else {
-                      []
+                      if role == "cx" {
+                        ["fetch_support_items"]
+                      } else {
+                        if role == "research" {
+                          ["web_search"]
+                        } else {
+                          []
+                        }
+                      }
                     }
                   }
                 }

@@ -73,7 +73,11 @@ fn rule_qa_dominates_demo(g :: graph.SprintGraph) -> List[Violation] {
       if n.role == "py_qa" {
         list.concat(acc, [n])
       } else {
-        acc
+        if n.role == "ts_qa" {
+          list.concat(acc, [n])
+        } else {
+          acc
+        }
       }
     }
   })
@@ -153,7 +157,7 @@ fn str_role_is(role :: Str, keyword :: Str) -> Bool {
 # metaspec and only fail at runtime with "unknown role" — after the design round
 # is already spent. Catch them up front. Keep in sync with roles.for_role.
 fn known_roles() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "fe_build", "qa", "py_qa", "devops", "deploy", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "monetization_handoff", "scribe"]
+  ["pm", "architect", "build", "py_build", "ts_build", "fe_build", "qa", "py_qa", "ts_qa", "devops", "deploy", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "monetization_handoff", "scribe"]
 }
 
 fn role_is_known(role :: Str) -> Bool {
@@ -233,7 +237,11 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
         if n.role == "py_build" {
           acc
         } else {
-          list.concat(acc, [{ rule: "compiles-gate-matches-role", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead."], "") }])
+          if n.role == "ts_build" {
+            acc
+          } else {
+            list.concat(acc, [{ rule: "compiles-gate-matches-role", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate 'spec compiles', but only build/py_build/ts_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead."], "") }])
+          }
         }
       }
     } else {
@@ -263,7 +271,11 @@ fn rule_build_role_requires_compiles_gate(g :: graph.SprintGraph) -> List[Violat
     let is_build_role := if n.role == "build" {
       true
     } else {
-      n.role == "py_build"
+      if n.role == "py_build" {
+        true
+      } else {
+        n.role == "ts_build"
+      }
     }
     let applies := if is_build_role {
       match n.expand {
@@ -277,7 +289,7 @@ fn rule_build_role_requires_compiles_gate(g :: graph.SprintGraph) -> List[Violat
       if str.trim(n.gate) == "spec compiles" {
         acc
       } else {
-        list.concat(acc, [{ rule: "build-role-requires-compiles-gate", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate '", n.gate, "', but build/py_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written."], "") }])
+        list.concat(acc, [{ rule: "build-role-requires-compiles-gate", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate '", n.gate, "', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written."], "") }])
       }
     } else {
       acc
@@ -317,9 +329,9 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
     check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
     check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
-    check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
+    check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build/ts_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
     check({ id: "g8", phase: graph.Intake, nodes: [{ id: "n1", role: "monetization_handoff", gate: "spec judge \"looks good\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "monetization-handoff-human-gated", message: "node n1 (role 'monetization_handoff') uses gate 'spec judge \"looks good\"', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')." }]),
-    check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
+    check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
   let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {

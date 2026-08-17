@@ -214,7 +214,7 @@ fn reverify_grounded(content :: Str, gate :: Str, scratch :: Str) -> [io, proc] 
   let toolcmd := if gates.is_shell_gate(gate) {
     gates.shell_command(gate)
   } else {
-    "ok=1; n=0; for f in *.lex; do [ -f \"$f\" ] && { n=$((n+1)); ${LEX:-lex} check \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.py; do [ -f \"$f\" ] && { n=$((n+1)); python3 -m py_compile \"$f\" >/dev/null 2>&1 || ok=0; }; done; [ $n -gt 0 ] && [ $ok -eq 1 ]"
+    "ok=1; n=0; for f in *.lex; do [ -f \"$f\" ] && { n=$((n+1)); ${LEX:-lex} check \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.py; do [ -f \"$f\" ] && { n=$((n+1)); python3 -m py_compile \"$f\" >/dev/null 2>&1 || ok=0; }; done; for f in *.ts *.mts; do [ -f \"$f\" ] && { n=$((n+1)); node --no-warnings --experimental-vm-modules -e 'const{stripTypeScriptTypes}=require(\"node:module\");const{SourceTextModule}=require(\"node:vm\");const fs=require(\"node:fs\");try{new SourceTextModule(stripTypeScriptTypes(fs.readFileSync(process.argv[1],\"utf8\")));process.exit(0)}catch(e){console.error(1);process.exit(1)}' \"$f\" >/dev/null 2>&1 || ok=0; }; done; [ $n -gt 0 ] && [ $ok -eq 1 ]"
   }
   let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && (", toolcmd, ") && echo GATE_OK"], "")
   match proc.run("bash", ["-c", script]) {

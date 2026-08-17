@@ -240,21 +240,35 @@ fn py_work_dir(sprint_id :: Str) -> Str {
   str.join(["/tmp/loom-py-work-", sanitize_sprint_id(sprint_id)], "")
 }
 
-# Which work dir a build kind writes to (build → Lex, py_build → Python).
+# Keep in sync with lex_skill.ts_work_dir() (#92 golden paths).
+fn ts_work_dir(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-ts-work-", sanitize_sprint_id(sprint_id)], "")
+}
+
+# Which work dir a build kind writes to (build → Lex, py_build → Python,
+# ts_build → Node/TS).
 fn work_dir_for(kind :: Str, sprint_id :: Str) -> Str {
   if kind == "py_build" {
     py_work_dir(sprint_id)
   } else {
-    build_work_dir(sprint_id)
+    if kind == "ts_build" {
+      ts_work_dir(sprint_id)
+    } else {
+      build_work_dir(sprint_id)
+    }
   }
 }
 
-# True for any code-producing build node (Lex or Python).
+# True for any code-producing build node (Lex, Python, or Node/TS).
 fn is_build_kind(kind :: Str) -> Bool {
   if kind == "build" {
     true
   } else {
-    kind == "py_build"
+    if kind == "py_build" {
+      true
+    } else {
+      kind == "ts_build"
+    }
   }
 }
 
@@ -388,14 +402,27 @@ fn verify_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
     let check := if kind == "py_build" {
       "python3 -m py_compile"
     } else {
-      "${LEX:-lex} check"
+      if kind == "ts_build" {
+        "loom_ts_check"
+      } else {
+        "${LEX:-lex} check"
+      }
     }
     let ext := if kind == "py_build" {
       "py"
     } else {
-      "lex"
+      if kind == "ts_build" {
+        "ts"
+      } else {
+        "lex"
+      }
     }
-    let script := str.join(["cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; echo OK"], "")
+    let prelude := if kind == "ts_build" {
+      "loom_ts_check() { node --no-warnings --experimental-vm-modules -e 'const{stripTypeScriptTypes}=require(\"node:module\");const{SourceTextModule}=require(\"node:vm\");const fs=require(\"node:fs\");try{new SourceTextModule(stripTypeScriptTypes(fs.readFileSync(process.argv[1],\"utf8\")));process.exit(0)}catch(e){console.error(String(e&&e.message?e.message:e));process.exit(1)}' \"$1\"; }; "
+    } else {
+      ""
+    }
+    let script := str.join([prelude, "cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; echo OK"], "")
     match proc.run("bash", ["-c", script]) {
       Err(msg) => Err(str.concat("compile check could not run: ", msg)),
       Ok(r) => {

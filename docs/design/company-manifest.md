@@ -72,10 +72,12 @@ to boot and pass their skeleton test:
 |---|---|
 | **`python-flask`** | a genuinely minimal server — no request/response validation needed. This was picked for `linksnap` (3 thin JSON endpoints), matching `py_build`'s own existing convention: *"flask for simple servers, fastapi for REST APIs with validation."* |
 | **`python-fastapi`** | anything with real input validation (Pydantic models catch bad input before your handler runs), or that benefits from free OpenAPI/Swagger docs at `/docs` — the common case for a documented public API a developer integrates against, e.g. a paid micro-API. |
+| **`node-ts-api`** | a TypeScript API on Node built-ins alone (`node:http`, `node:test`) — no npm install, no build step; files run directly via `node --experimental-strip-types`, so the whole stack is one pinned `node:22-slim` layer plus the source. Pick it when the team/mission is JS-native or when a Node deployment target is a requirement; same launch story (boot + curl on `PORT`, default 8082) and gate rules (`ts_build` → `spec compiles`, `ts_qa` → `spec json-verdict-pass`) as the Python paths. |
 | **`lex-x402-api`** | a metered API that charges per call via the x402 protocol — the only real, tested payment-*receiving* rail loom has (`lex-x402`/`lex-guard` are Lex-only packages, so the priced endpoint has to be a Lex server, not Python, to call the real protocol code rather than reimplement it). Ships a pre-written `payments.lex` gate (build agents call it, never hand-roll the handshake) — proven end-to-end in a real Docker build: `/health` returns 200, an unpaid call to the priced route returns a real 402 with a valid base64 `PAYMENT-REQUIRED` challenge header. |
 
-Adding a path for another stack (TS-API, Next-PWA, RN-web) + its specialist
-agents is the remaining part of #92.
+The Node/TS path landed with #92's first slice (`ts_build`/`ts_qa`
+specialist agents, grounded syntax gate, skeleton, cost profile). Adding
+the remaining paths (Next-PWA, RN-Expo-web) is the rest of #92.
 
 A real `deploy` role/node now exists for Hetzner (#101): `devops` still
 produces config for both Google Cloud Run and Hetzner, but `deploy` actually

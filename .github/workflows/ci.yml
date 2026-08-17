@@ -84,3 +84,5 @@ jobs:
         run: bash demo/real-cost-roundtrip.sh
       - name: "Demo: pilot independent verification (#68)"
         run: bash demo/pilot-verify-roundtrip.sh
+      - name: "Demo: hosted verifier (#68)"
+        run: bash demo/hosted-verify-roundtrip.sh

@@ -86,13 +86,40 @@ the same verifiable record the demo verifies —
 `DB_PATH=$LOOM_WORKSPACE/<id>/company.db SPRINT_ID=<id>/iter-1` plugs
 straight into the verification command above.
 
+## The hosted verifier (POST a record, get verdicts)
+
+`src/server/verify_api.lex` is the same verifier behind an HTTP surface —
+one verifier, two transports (the service relays to the very
+`verify_record_cmd` you'd run locally, so the two can never drift):
+
+```sh
+# host it (token-gated; LEX_STORE_ROOT MUST be an empty, dedicated dir
+# so uploads are judged self-contained — it refuses to start without it):
+VERIFY_API_TOKEN=<secret> LEX_STORE_ROOT=$(mktemp -d) \
+lex run --max-steps 0 --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs \
+  src/server/verify_api.lex serve_verify_api
+
+# verify a record against it (body = raw base64 of the .db):
+base64 -w0 their.db | curl -s -X POST \
+  "http://host:9400/verify?sprint_id=<company>/iter-<n>" \
+  -H "Authorization: Bearer <secret>" --data-binary @-
+```
+
+The grounded layer is **skipped by default and reported as skipped**:
+re-running grounded gates executes build commands *from the upload* —
+remote code execution by design — so a host enables
+`VERIFY_RERUN_GROUNDED=1` only inside a sandbox it trusts (lex-os).
+Integrity, authority, and operations always run; they only read the
+record. `bash demo/hosted-verify-roundtrip.sh` proves the whole flow
+offline, tampered-record refusal included.
+
 ## Honest limits (what this pilot is not yet)
 
-- **The verifier runs locally from the pinned toolchain.** The roadmap's
-  hosted verifier (#68) — a service a pilot can POST a record to — is
-  still open; today the pilot runs the same binary the operator does.
-  The trust anchor is that verdicts are *recomputed from the record*,
-  not asserted by it, and the verifier is open source.
+- **The hosted verifier is self-hosted, not operated for you.** Anyone
+  can run `verify_api.lex`; the project does not (yet) run a public
+  instance. The trust anchor is unchanged either way: verdicts are
+  *recomputed from the record*, not asserted by it, and the verifier is
+  open source.
 - **LLM outputs themselves are not re-derived.** Verification proves the
   recorded artifacts are intact, grounded gates still pass, and no agent
   exceeded its authority — it does not re-run model inference.

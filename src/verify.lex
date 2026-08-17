@@ -457,3 +457,36 @@ fn opreport_json(r :: OpReport) -> Str {
   }, "\"}"], "")
 }
 
+# ── Combined verdicts (#68, hosted verifier) ──────────────────────────────────
+# One JSON object over the four layers, every verdict recomputed here and
+# now. Grounded re-runs execute the record's own build commands (`spec
+# sh` / `spec compiles`), so a host that did not opt in gets the layer
+# reported as SKIPPED — visibly, never silently counted as passed, and
+# never failing the overall verdict either: the caller sees exactly which
+# layers were recomputed.
+fn verdicts_json(db :: conn.ConnDb, sprint_id :: Str, rerun_grounded :: Bool) -> [vcs, fs_read, fs_write, sql, crypto, io, proc] Str {
+  let r := verify_sprint(db, sprint_id)
+  let ar := verify_authority(db, sprint_id)
+  let op := verify_operations(db, sprint_id)
+  let grounded_json := if rerun_grounded {
+    rereport_json(reverify_sprint(db, sprint_id))
+  } else {
+    "{\"skipped\":true,\"reason\":\"grounded re-runs execute build commands from the record; enable VERIFY_RERUN_GROUNDED=1 only inside a sandbox\"}"
+  }
+  let grounded_ok := if rerun_grounded {
+    reverify_sprint(db, sprint_id).verified
+  } else {
+    true
+  }
+  let all := if r.verified and ar.verified and op.verified {
+    grounded_ok
+  } else {
+    false
+  }
+  str.join(["{\"sprint_id\":\"", sprint_id, "\",\"verified\":", if all {
+    "true"
+  } else {
+    "false"
+  }, ",\"integrity\":", report_json(r), ",\"grounded\":", grounded_json, ",\"authority\":", authreport_json(ar), ",\"operations\":", opreport_json(op), "}"], "")
+}
+

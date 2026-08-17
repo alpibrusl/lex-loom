@@ -450,6 +450,28 @@ fn attest_sprint(db :: conn.ConnDb, sprint_id :: Str, verdicts_json :: Str, all_
   ()
 }
 
+# ── verify_record_cmd (#68, hosted verifier) ──────────────────────────────────
+# Machine-readable sibling of verify_sprint_cmd: recompute the four-layer
+# verdicts over a record and print ONE line, "VERDICTS|<json>" — the
+# contract src/server/verify_api.lex's subprocess relay parses. Grounded
+# re-runs are OFF unless VERIFY_RERUN_GROUNDED=1 (they execute the
+# record's own build commands — sandbox only); the skipped layer is
+# reported as skipped, never silently passed. Unlike verify_sprint_cmd
+# this writes nothing back to the record: verifying a copy someone
+# handed you should not mutate it.
+#   DB_PATH=their.db SPRINT_ID=co/iter-1 lex run --max-steps 0 \
+#     --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs \
+#     src/main.lex verify_record_cmd
+fn verify_record_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, proc] Unit {
+  let db_path := get_env("DB_PATH", "loom.db")
+  let sprint_id := get_env("SPRINT_ID", "sprint-1")
+  let rerun_grounded := get_env("VERIFY_RERUN_GROUNDED", "") == "1"
+  match conn.open(db_path) {
+    Err(_) => io.print("VERDICTS|{\"error\":\"cannot open record\"}"),
+    Ok(db) => io.print(str.concat("VERDICTS|", verify.verdicts_json(db, sprint_id, rerun_grounded))),
+  }
+}
+
 # ── reputation_cmd ────────────────────────────────────────────────────────────
 # Print the did:lex reputation registry: reputation = count of VERIFIED
 # attestations per did (derived, never stored), sessions = all attestations.

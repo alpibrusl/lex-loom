@@ -82,3 +82,5 @@ jobs:
         run: LEX_SOFT_ROOT="$GITHUB_WORKSPACE/lex-soft-checkout" bash demo/sa2-mesh-roundtrip.sh
       - name: "Demo: real cost accounting (#94)"
         run: bash demo/real-cost-roundtrip.sh
+      - name: "Demo: pilot independent verification (#68)"
+        run: bash demo/pilot-verify-roundtrip.sh

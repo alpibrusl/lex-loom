@@ -189,6 +189,31 @@ done < <(find "$SKELETON" -type f \
   -not -path '*/.pytest_cache/*' -not -name '.DS_Store' \
   -not -path '*/node_modules/*' -print0)
 
+# ── Bootstrap-time install (#256): the ONE moment loom may run a package
+# install. A path skeleton that needs third-party dependencies (rn-expo-web:
+# npm ci) ships a `.loom-install` script; it runs here, once, in the
+# scaffolded workspace — human-triggered and network-trusted at exactly the
+# same level as the git init / gh repo create below. Sprint agents NEVER
+# install anything (that invariant is unchanged and enforced by their
+# tools); a `.loom-installed` marker makes re-bootstrapping a live company
+# a no-op instead of a silent re-install. Refuse, don't downgrade: a failed
+# install aborts the bootstrap loudly rather than leaving a half-usable
+# workspace.
+if [ -f "$DIR/.loom-install" ]; then
+  if [ -f "$DIR/.loom-installed" ]; then
+    echo "[bootstrap] .loom-installed marker present — skipping one-time install (delete the marker to force)"
+  else
+    echo "[bootstrap] running one-time bootstrap install (.loom-install)..."
+    if (cd "$DIR" && bash .loom-install); then
+      date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DIR/.loom-installed"
+      echo "[bootstrap] one-time install complete — .loom-installed marker written"
+    else
+      echo "[bootstrap] FATAL: .loom-install failed — refusing to continue with a half-installed workspace" >&2
+      exit 2
+    fi
+  fi
+fi
+
 # The company keeps its own copy of the manifest + a generated README.
 cp "$MANIFEST" "$DIR/company.toml"
 if [ ! -e "$DIR/README.md" ]; then

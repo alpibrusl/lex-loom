@@ -90,3 +90,13 @@ jobs:
         run: bash demo/pilot-verify-roundtrip.sh
       - name: "Demo: hosted verifier (#68)"
         run: bash demo/hosted-verify-roundtrip.sh
+
+  # The bootstrap-install path (#256) is the ONE place loom touches a package
+  # registry, so its roundtrip cannot live in demo-smoke (offline by
+  # contract). Separate job: needs the npm registry, nothing else.
+  demo-bootstrap-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Demo: BI1 rn-expo-web bootstrap-install roundtrip (#256)"
+        run: bash demo/bi1-rn-expo-web-roundtrip.sh

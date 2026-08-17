@@ -396,7 +396,41 @@ fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, pro
   }
 }
 
+# Company id prefix of a sprint id ("acme/iter-2" → "acme"); "" for a
+# standalone sprint with no company (and therefore no workspace to bridge to).
+# Derived from the sprint id, NOT from a COMPANY_ID env var, because the
+# scheduler daemon runs many companies in one process — the environment can
+# never be per-company there, but the sprint id always is.
+fn company_of_sprint(sprint_id :: Str) -> Str {
+  if str.contains(sprint_id, "/") {
+    match list.head(str.split(sprint_id, "/")) {
+      Some(c) => c,
+      None => "",
+    }
+  } else {
+    ""
+  }
+}
+
 fn verify_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
+  verify_compiles_at("", kind, sprint_id)
+}
+
+# The sprint-workdir ↔ workspace bridge (#256): for a ts_build node whose
+# company workspace was bootstrap-installed (a `.loom-installed` marker —
+# the rn-expo-web path today), the compile gate ALSO runs the workspace's
+# real `npm run build` (expo export for rn-expo-web) with the node's files
+# overlaid onto a scratch copy of the app: workspace minus node_modules/
+# dist/.git/.expo, node_modules symlinked in (verified live: Metro resolves
+# through the symlink), sprint work dir copied on top. This is the ONLY
+# check that sees `.tsx`/`.jsx` — ts_check stores them without a syntax
+# check (no node-builtin JSX parser), so the bundler output surfacing here
+# is where their errors reach the agent's repair loop. Refuse, don't
+# downgrade: a marker with no node_modules/ is a hard gate failure, never a
+# silent skip. `ws_root` "" resolves $LOOM_WORKSPACE at gate time via bash
+# (the sync_project_dir trick, keeping this [proc]-pure); tests pass an
+# explicit root.
+fn verify_compiles_at(ws_root :: Str, kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   {
     let dir := work_dir_for(kind, sprint_id)
     let check := if kind == "py_build" {
@@ -422,21 +456,45 @@ fn verify_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
     } else {
       ""
     }
-    let script := str.join([prelude, "cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; echo OK"], "")
+    let ws_expr := if str.is_empty(ws_root) {
+      "${LOOM_WORKSPACE:-$HOME/loom-companies}"
+    } else {
+      ws_root
+    }
+    let company := company_of_sprint(sprint_id)
+    let count_tsx := if kind == "ts_build" {
+      "for f in *.tsx *.jsx; do [ -f \"$f\" ] && n=$((n+1)); done; "
+    } else {
+      ""
+    }
+    let bridge := if kind == "ts_build" {
+      if str.is_empty(company) {
+        ""
+      } else {
+        str.join(["WSDIR=\"", ws_expr, "/", company, "\"; if [ -f \"$WSDIR/.loom-installed\" ]; then if [ ! -d \"$WSDIR/node_modules\" ]; then echo BRIDGE_FAIL; echo \"workspace $WSDIR has a .loom-installed marker but no node_modules/ -- the bootstrap install is gone; re-run bin/bootstrap-company.sh (delete the marker to force the install)\"; exit 1; fi; BR=$(mktemp -d \"${TMPDIR:-/tmp}/loom-bridge-XXXXXX\"); (cd \"$WSDIR\" && find . -maxdepth 1 -mindepth 1 ! -name node_modules ! -name dist ! -name .git ! -name .expo -exec cp -a {} \"$BR/\" \\;); ln -s \"$WSDIR/node_modules\" \"$BR/node_modules\"; cp -a ./. \"$BR/\"; out=$(cd \"$BR\" && npm run build 2>&1); rc=$?; rm -rf \"$BR\"; if [ $rc -ne 0 ]; then echo BRIDGE_FAIL; echo \"$out\" | tail -40; exit 1; fi; fi; "], "")
+      }
+    } else {
+      ""
+    }
+    let script := str.join([prelude, "cd ", dir, " 2>/dev/null || { echo 'NO_WORKDIR'; exit 3; }; n=0; for f in *.", ext, "; do [ -f \"$f\" ] || continue; n=$((n+1)); out=$(", check, " \"$f\" 2>&1); if [ $? -ne 0 ]; then echo \"COMPILE_FAIL $f\"; echo \"$out\"; exit 1; fi; done; ", count_tsx, "if [ $n -eq 0 ]; then echo 'NO_SOURCE_FILES'; exit 2; fi; ", bridge, "echo '##COMPILES_OK##'"], "")
     match proc.run("bash", ["-c", script]) {
       Err(msg) => Err(str.concat("compile check could not run: ", msg)),
       Ok(r) => {
         let combined := str.concat(r.stdout, r.stderr)
-        if str.contains(combined, "OK") {
-          Ok(())
+        if str.contains(combined, "BRIDGE_FAIL") {
+          Err(str.concat("the workspace app build (npm run build) failed against this node's files:\n", str.slice(combined, 0, 1600)))
         } else {
-          if str.contains(combined, "NO_SOURCE_FILES") {
-            Err(str.concat("build produced no ", str.concat(ext, " source files — output was prose, not code")))
+          if str.contains(combined, "##COMPILES_OK##") {
+            Ok(())
           } else {
-            if str.contains(combined, "NO_WORKDIR") {
-              Err("build produced no files (work dir missing)")
+            if str.contains(combined, "NO_SOURCE_FILES") {
+              Err(str.concat("build produced no ", str.concat(ext, " source files — output was prose, not code")))
             } else {
-              Err(str.concat("a source file failed to compile:\n", combined))
+              if str.contains(combined, "NO_WORKDIR") {
+                Err("build produced no files (work dir missing)")
+              } else {
+                Err(str.concat("a source file failed to compile:\n", combined))
+              }
             }
           }
         }

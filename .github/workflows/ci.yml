@@ -98,5 +98,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: "Demo: BI1 rn-expo-web bootstrap-install roundtrip (#256)"
+      # The demo's bridge section (#256 BI2) invokes the real ts_build gate
+      # (runner.verify_compiles_at) via `lex run`, so it needs the toolchain
+      # and the repo's Lex dependencies, same as the main ci job.
+      - name: Install Lex
+        run: |
+          set -euo pipefail
+          V=0.10.11; T=x86_64-unknown-linux-gnu
+          curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
+          tar -xzf /tmp/lex.tgz -C /tmp
+          echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
+      - name: Install Lex dependencies
+        run: lex pkg install
+      - name: "Demo: BI1+BI2 rn-expo-web bootstrap-install + bridge roundtrip (#256)"
         run: bash demo/bi1-rn-expo-web-roundtrip.sh

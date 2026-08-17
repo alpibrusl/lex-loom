@@ -170,8 +170,80 @@ fn test_ts_check_refuses_dotdot_filename() -> [env, io, net, proc] Result[Unit, 
   }
 }
 
+# ── The sprint-workdir ↔ workspace bridge (#256) ─────────────────────────────
+# For a company sprint ("<company>/iter-N") whose workspace carries the
+# bootstrap-install marker, the ts_build compile gate must run the
+# workspace's real `npm run build` with the sprint's files overlaid — and
+# must refuse (not skip) when the marker is present but the install is
+# gone. The fake workspace's build script proves the overlay is real: it
+# fails unless App.tsx contains the SPRINT's edit, so a gate that built
+# the pristine workspace copy would fail the pass-case below.
+fn seed_bridge_ws(ws_root :: Str, company :: Str) -> [io, proc] Unit {
+  let dir := str.join([ws_root, "/", company], "")
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", ws_root, "; mkdir -p ", dir, "/node_modules"], "")])
+  let __m := io.write(str.join([dir, "/.loom-installed"], ""), "test\n")
+  let __p := io.write(str.join([dir, "/package.json"], ""), "{\"scripts\": {\"build\": \"node build-check.js\"}}\n")
+  let __c := io.write(str.join([dir, "/build-check.js"], ""), "const fs = require('node:fs');\nconst s = fs.readFileSync('App.tsx', 'utf8');\nif (!s.includes('SPRINT_EDIT')) { console.error('overlay missing: built the workspace copy, not the sprint files'); process.exit(1); }\nif (s.includes('BROKEN')) { console.error('metro-sim: JSX parse error in App.tsx'); process.exit(1); }\nprocess.exit(0);\n")
+  let __a := io.write(str.join([dir, "/App.tsx"], ""), "// workspace baseline\n")
+  ()
+}
+
+fn test_bridge_gate_passes_and_overlays_sprint_files() -> [io, proc] Result[Unit, Str] {
+  let ws := "/tmp/loom-bi2-bridge-ws"
+  let sprint := "bi2co/iter-1"
+  let __ws := seed_bridge_ws(ws, "bi2co")
+  let __s := seed(sprint, "App.tsx", "// SPRINT_EDIT\nexport default function App() { return null; }\n")
+  match runner.verify_compiles_at(ws, "ts_build", sprint) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("expected the bridged gate to pass on a good sprint .tsx (and .tsx alone to count as source), got: ", e)),
+  }
+}
+
+fn test_bridge_gate_fails_on_broken_app_build() -> [io, proc] Result[Unit, Str] {
+  let ws := "/tmp/loom-bi2-bridge-ws"
+  let sprint := "bi2co/iter-2"
+  let __ws := seed_bridge_ws(ws, "bi2co")
+  let __s := seed(sprint, "App.tsx", "// SPRINT_EDIT BROKEN\n")
+  match runner.verify_compiles_at(ws, "ts_build", sprint) {
+    Ok(_) => Err("expected the workspace build failure to fail the gate"),
+    Err(e) => if str.contains(e, "metro-sim") {
+      Ok(())
+    } else {
+      Err(str.concat("failed, but without the build script's output: ", e))
+    },
+  }
+}
+
+fn test_bridge_refuses_marker_without_install() -> [io, proc] Result[Unit, Str] {
+  let ws := "/tmp/loom-bi2-bridge-ws"
+  let sprint := "bi2co/iter-3"
+  let __ws := seed_bridge_ws(ws, "bi2co")
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf ", ws, "/bi2co/node_modules"], "")])
+  let __s := seed(sprint, "App.tsx", "// SPRINT_EDIT\n")
+  match runner.verify_compiles_at(ws, "ts_build", sprint) {
+    Ok(_) => Err("expected a marker with no node_modules to REFUSE, not silently skip"),
+    Err(e) => if str.contains(e, "no node_modules") {
+      Ok(())
+    } else {
+      Err(str.concat("refused, but with the wrong message: ", e))
+    },
+  }
+}
+
+fn test_bridge_skipped_without_marker() -> [io, proc] Result[Unit, Str] {
+  let ws := "/tmp/loom-bi2-bridge-ws"
+  let sprint := "bi2co/iter-4"
+  let __ws := seed_bridge_ws(ws, "bi2co")
+  let __rm := proc.run("bash", ["-c", str.join(["rm -f ", ws, "/bi2co/.loom-installed"], "")])
+  let __s := seed(sprint, "app.ts", "const x: number = 1;\nconsole.log(x);\n")
+  match runner.verify_compiles_at(ws, "ts_build", sprint) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("no marker means no bridge — syntax-only gate should pass: ", e)),
+  }
+}
+
 fn run_all() -> [env, io, net, proc] Int {
-  let results := [("ts compiles gate passes on real ts", test_ts_compiles_gate_passes_on_real_ts()), ("ts compiles gate fails on syntax error", test_ts_compiles_gate_fails_on_syntax_error()), ("ts compiles gate fails on empty work dir", test_ts_compiles_gate_fails_on_empty_work_dir()), ("ts roster rows agree", test_ts_roster_rows_agree()), ("ts_check stores static assets", test_ts_check_stores_static_assets()), ("ts_check parse-checks manifest", test_ts_check_parse_checks_manifest()), ("ts_check still refuses bad ts", test_ts_check_still_refuses_bad_ts()), ("ts_check refuses dotdot filename", test_ts_check_refuses_dotdot_filename())]
+  let results := [("ts compiles gate passes on real ts", test_ts_compiles_gate_passes_on_real_ts()), ("ts compiles gate fails on syntax error", test_ts_compiles_gate_fails_on_syntax_error()), ("ts compiles gate fails on empty work dir", test_ts_compiles_gate_fails_on_empty_work_dir()), ("ts roster rows agree", test_ts_roster_rows_agree()), ("ts_check stores static assets", test_ts_check_stores_static_assets()), ("ts_check parse-checks manifest", test_ts_check_parse_checks_manifest()), ("ts_check still refuses bad ts", test_ts_check_still_refuses_bad_ts()), ("ts_check refuses dotdot filename", test_ts_check_refuses_dotdot_filename()), ("bridge gate passes and overlays sprint files", test_bridge_gate_passes_and_overlays_sprint_files()), ("bridge gate fails on broken app build", test_bridge_gate_fails_on_broken_app_build()), ("bridge refuses marker without install", test_bridge_refuses_marker_without_install()), ("bridge skipped without marker", test_bridge_skipped_without_marker())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

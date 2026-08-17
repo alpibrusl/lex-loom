@@ -523,6 +523,11 @@ The spec is in the substrate. The model did not get smarter. The constraint got 
 
 ## Offline demo (no LLM)
 
+For an external pilot, start with **[docs/PILOT.md](docs/PILOT.md)** — the
+packaged onboarding path (#68): run a real sprint offline, then verify it
+*as a third party* from the DB alone, tamper-detection included
+(`bash demo/pilot-verify-roundtrip.sh`).
+
 Exercises graph validation, metaspec rules, phase state machine, and semantic diff — no API key required:
 
 ```bash

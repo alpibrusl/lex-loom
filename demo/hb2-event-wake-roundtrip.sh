@@ -81,6 +81,11 @@ ELAPSED=$((WOKE_AT - NOTE_AT))
 grep -q "EVENT WAKE" "$SCHED_LOG" && ok "event poll cut the 60s tick sleep short" || bad "no early wake in the log"
 grep -q "RUN wakeco (event_wake)" "$SCHED_LOG" && ok "wakeco woken by the board-note event (reason: event_wake)" || bad "wakeco not woken"
 [ "$ELAPSED" -le 20 ] && ok "wake happened ${ELAPSED}s after the note — seconds, not the 60s tick" || bad "wake took ${ELAPSED}s"
+# The consumption line is printed once the woken run absorbs its events —
+# moments AFTER the "RUN wakeco" line the loop above waited for. Poll for
+# it (found flaky on CI runners); section 4 independently proves the
+# consumption in the DB and on the trail.
+for i in $(seq 1 60); do grep -q "event(s) consumed by this run" "$SCHED_LOG" 2>/dev/null && break; sleep 0.5; done
 grep -q "event(s) consumed by this run" "$SCHED_LOG" && ok "the run consumed the pending event(s)" || bad "no consumption logged"
 for i in $(seq 1 120); do grep -q "MAX_TICKS reached" "$SCHED_LOG" 2>/dev/null && break; sleep 0.5; done
 
@@ -89,7 +94,8 @@ mkdir -p "$WS/product/loom"
 printf '{"items":[{"id":"t-101","text":"my export is broken","status":"open"}]}' > "$WS/product/loom/support"
 ( cd "$WS/product" && exec python3 -m http.server "$SUPPORT_PORT" >/dev/null 2>&1 ) &
 PIDS+=("$!")
-( CX_API_TOKEN="$CX_TOKEN" PORT="$CX_PORT" LOOM_EVENTS_DB="$WS/cxin/company.db" LOOM_EVENTS_COMPANY=cxin \
+( CX_API_TOKEN="$CX_TOKEN" PORT="$CX_PORT" CX_ALLOWED_URL="http://localhost:$SUPPORT_PORT" \
+    LOOM_EVENTS_DB="$WS/cxin/company.db" LOOM_EVENTS_COMPANY=cxin \
     exec lex run --max-steps 0 --allow-effects "$EFFECTS" \
     src/server/cx_a2a.lex serve_cx_a2a >/dev/null 2>&1 ) &
 PIDS+=("$!")

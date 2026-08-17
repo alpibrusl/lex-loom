@@ -29,6 +29,8 @@ import "std.fs" as fs
 
 import "lex-orm/src/query" as ormq
 
+import "lex-ctl/src/contract" as kct
+
 import "lex-trail/src/log" as tlog
 
 import "../src/migrate" as migrate
@@ -74,7 +76,7 @@ fn seed_materialised(db :: conn.ConnDb, cid :: Str, class_key :: Str, n :: Int, 
       Err(e) => Err(e),
       Ok(inc) => match ledger.record_action(db, inc, cid, class_key, cid, "{}", "auto", at) {
         Err(e) => Err(e),
-        Ok(act_id) => match ledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+        Ok(act_id) => match ledger.record_effect(db, kct.make(act_id, class_key, cid, { signal: "liveness", cmp: Below, threshold_milli: 1000 }, base_idx + 1, 90, Rollback), inc, at, at) {
           Err(e) => Err(e),
           Ok(eff_id) => match ledger.set_effect_window(db, eff_id, base_idx, base_idx + 1) {
             Err(e) => Err(e),
@@ -100,7 +102,7 @@ fn seed_falsified(db :: conn.ConnDb, cid :: Str, class_key :: Str, n :: Int, bas
       Err(e) => Err(e),
       Ok(inc) => match ledger.record_action(db, inc, cid, class_key, cid, "{}", "auto", at) {
         Err(e) => Err(e),
-        Ok(act_id) => match ledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+        Ok(act_id) => match ledger.record_effect(db, kct.make(act_id, class_key, cid, { signal: "liveness", cmp: Below, threshold_milli: 1000 }, base_idx + 1, 90, Rollback), inc, at, at) {
           Err(e) => Err(e),
           Ok(eff_id) => match ledger.set_effect_window(db, eff_id, base_idx, base_idx + 1) {
             Err(e) => Err(e),

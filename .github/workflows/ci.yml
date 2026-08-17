@@ -10,7 +10,7 @@ jobs:
       - name: Install Lex
         run: |
           set -euo pipefail
-          V=0.10.10; T=x86_64-unknown-linux-gnu
+          V=0.10.11; T=x86_64-unknown-linux-gnu
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
@@ -32,18 +32,10 @@ jobs:
           [ "$fail" -eq 0 ]
       - name: Format check
         run: lex fmt --check src tests examples demo
-      # AGENTS.md is by convention a verbatim copy of `lex agent-guidelines`
-      # (lex-lang's authoritative agent contract). Nothing enforced that until
-      # now (#246): a toolchain bump that changes the guidelines must refresh
-      # the copy in the same PR, and this gate is what makes that happen.
-      - name: AGENTS.md drift gate
-        run: |
-          set -euo pipefail
-          lex agent-guidelines > /tmp/agent-guidelines.txt
-          if ! diff -u AGENTS.md /tmp/agent-guidelines.txt; then
-            echo "::error file=AGENTS.md::AGENTS.md has drifted from the pinned toolchain's guidelines. Fix: lex agent-guidelines > AGENTS.md"
-            exit 1
-          fi
+      # Generated docs current (#246, now via the shared lex doc-sync
+      # mechanism from lex-lang#747 — docsync.toml declares the targets).
+      - name: Generated docs current (doc-sync --check)
+        run: lex doc-sync --check
       - name: Test
         run: |
           lex test --allow-effects \
@@ -70,7 +62,7 @@ jobs:
       - name: Install Lex
         run: |
           set -euo pipefail
-          V=0.10.10; T=x86_64-unknown-linux-gnu
+          V=0.10.11; T=x86_64-unknown-linux-gnu
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
@@ -90,3 +82,7 @@ jobs:
         run: LEX_SOFT_ROOT="$GITHUB_WORKSPACE/lex-soft-checkout" bash demo/sa2-mesh-roundtrip.sh
       - name: "Demo: real cost accounting (#94)"
         run: bash demo/real-cost-roundtrip.sh
+      - name: "Demo: pilot independent verification (#68)"
+        run: bash demo/pilot-verify-roundtrip.sh
+      - name: "Demo: hosted verifier (#68)"
+        run: bash demo/hosted-verify-roundtrip.sh

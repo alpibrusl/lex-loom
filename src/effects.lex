@@ -184,7 +184,7 @@ fn propose_contract(db :: conn.ConnDb, log :: Option[tlog.Log], incident :: Str,
         None => Err(str.concat("no action spec for cause: ", d.diagnosed_cause)),
         Some(spec) => match ledger.record_action(db, incident, d.company_id, spec.class_key, d.company_id, "{}", "propose", at) {
           Err(e) => Err(e),
-          Ok(action_id) => match ledger.record_effect(db, action_id, incident, spec.signal_kind, kct.cmp_str(spec.cmp), spec.threshold_milli, at, at, d.diagnosed_p_pct, kct.on_falsify_str(spec.on_falsify)) {
+          Ok(action_id) => match ledger.record_effect(db, kct.make(action_id, spec.class_key, d.company_id, { signal: spec.signal_kind, cmp: spec.cmp, threshold_milli: spec.threshold_milli }, now_idx + spec.deadline_delta_idx, d.diagnosed_p_pct, spec.on_falsify), incident, at, at) {
             Err(e) => Err(e),
             Ok(effect_id) => match ledger.set_effect_window(db, effect_id, now_idx, now_idx + spec.deadline_delta_idx) {
               Err(e) => Err(e),

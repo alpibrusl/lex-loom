@@ -40,6 +40,8 @@ import "./lex_skill" as lexskill
 
 import "./role_tools" as rt
 
+import "./deploy_scaffold" as scaffold
+
 # ── run_code tool (inline — avoids cross-file lex-llm import resolution) ──────
 #
 # Gives QA the ability to *execute* the implementation it received.
@@ -113,8 +115,16 @@ fn make_run_server_tool() -> t.Tool {
 # server -- never a string check, never a claim the agent invents. Kept
 # deliberately simple for v1 (#101): rsync the work dir over, build+run the
 # container directly on the box (restart policy so it survives a reboot),
-# then curl the real public host:port for /health. No Caddy/TLS/domain yet --
-# that's a natural next step once this loop is proven, not a blocker for it.
+# then curl the real public host:port for /health.
+#
+# #188: when DEPLOY_DOMAIN is set, the deploy upgrades to the deterministic
+# TLS path — deploy_scaffold.lex generates docker-compose.yml + a Caddyfile
+# (automatic Let's Encrypt) into the work dir before rsync, the remote
+# command becomes `docker compose up -d --build`, and the health check hits
+# https://<domain><endpoint>, which proves the certificate actually
+# provisioned. Unset, the v1 raw-docker path runs unchanged. The generated
+# files are pure-function output, never model output — infra is
+# deterministic code (see deploy_scaffold.lex).
 #
 # Reads server details from the environment (never hardcoded, never invented
 # by the model):
@@ -123,6 +133,8 @@ fn make_run_server_tool() -> t.Tool {
 #   HETZNER_SSH_KEY     -- path to the private key (default ~/.ssh/id_rsa)
 #   HETZNER_REMOTE_DIR  -- where the project lands on the server
 #                          (default /opt/loom-deploys/<service_name>)
+#   DEPLOY_DOMAIN       -- DNS name pointing at the server; setting it
+#                          enables the compose+Caddy TLS path (optional)
 # Server config is read HERE, at tool-construction time -- not inside the
 # execute closure, whose effect row is fixed by the Tool record type to
 # exactly [net, io, proc] (no [env]). Reading once and closing over the
@@ -145,8 +157,12 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
     Some(v) => v,
     None => "",
   }
+  let deploy_domain := match env.get("DEPLOY_DOMAIN") {
+    Some(v) => v,
+    None => "",
+  }
   let params := { title: "DeployHetzner", description: "rsync + build + run the project on a real Hetzner server, then health-check it", fields: [s.required_str("work_dir", []), s.required_str("service_name", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
-  t.define("deploy_hetzner", "Deploy `work_dir` (an already-built project directory with a Dockerfile) to the Hetzner server named by HETZNER_HOST. Builds and runs the container for real, waits for it to respond, then fetches `endpoint`. Returns {ok, url, response, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  t.define("deploy_hetzner", "Deploy `work_dir` (an already-built project directory with a Dockerfile) to the Hetzner server named by HETZNER_HOST. Builds and runs the container for real, waits for it to respond, then fetches `endpoint`. When DEPLOY_DOMAIN is set the deploy runs docker compose behind Caddy with automatic HTTPS and the health check hits https://<domain><endpoint>. Returns {ok, url, response, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let work_dir := match jv.get_field(args, "work_dir") {
       Some(JStr(v)) => v,
       _ => "",
@@ -179,9 +195,19 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
           remote_dir_override
         }
         let port_str := int.to_str(port)
-        let url := str.join(["http://", host, ":", port_str, endpoint], "")
+        let url := scaffold.health_url(deploy_domain, host, port, endpoint)
         let ssh_opts := str.join(["-i ", ssh_key, " -o StrictHostKeyChecking=accept-new"], "")
-        let script := str.join(["set -e\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " 'mkdir -p ", remote_dir, "'\n", "rsync -az --delete -e \"ssh ", ssh_opts, "\" '", work_dir, "/' '", ssh_user, "@", host, ":", remote_dir, "/'\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " '", "cd ", remote_dir, " && ", "docker build -t ", service_name, " . && ", "docker rm -f ", service_name, " >/dev/null 2>&1 || true; ", "docker run -d --name ", service_name, " --restart unless-stopped -p ", port_str, ":", port_str, " ", service_name, "'\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "exit 1"], "")
+        let scaffold_prelude := if str.is_empty(deploy_domain) {
+          ""
+        } else {
+          str.concat(scaffold.write_file_cmd(str.join([work_dir, "/docker-compose.yml"], ""), scaffold.compose_yaml(service_name, port)), scaffold.write_file_cmd(str.join([work_dir, "/Caddyfile"], ""), scaffold.caddyfile(deploy_domain, port)))
+        }
+        let run_cmd := if str.is_empty(deploy_domain) {
+          str.join(["cd ", remote_dir, " && ", "docker build -t ", service_name, " . && ", "docker rm -f ", service_name, " >/dev/null 2>&1 || true; ", "docker run -d --name ", service_name, " --restart unless-stopped -p ", port_str, ":", port_str, " ", service_name], "")
+        } else {
+          scaffold.remote_up_command(remote_dir)
+        }
+        let script := str.join(["set -e\n", scaffold_prelude, "ssh ", ssh_opts, " ", ssh_user, "@", host, " 'mkdir -p ", remote_dir, "'\n", "rsync -az --delete -e \"ssh ", ssh_opts, "\" '", work_dir, "/' '", ssh_user, "@", host, ":", remote_dir, "/'\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " '", run_cmd, "'\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 5 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "exit 1"], "")
         match proc.run("bash", ["-c", script]) {
           Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("deploy failed to run: ", msg))), ("url", JStr(url)), ("response", JStr(""))])),
           Ok(r) => {

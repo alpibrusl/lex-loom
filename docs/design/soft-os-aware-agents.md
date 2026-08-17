@@ -199,15 +199,21 @@ before this work makes the collision load-bearing.
   `demo/sa2-mesh-roundtrip.sh`/`demo/sa4-research-roundtrip.sh` both gained
   a real negative test (no-token `tasks/send` → `401`) alongside the
   existing authorized happy path.
-  Deliberately **not** fixed here: `cx_a2a.lex`'s caller-supplied `url` is
-  still unscoped once a caller does hold a valid token — tracked
-  separately as `lex-loom#194`, since the obvious fix (block
-  loopback/private-network targets) would break the legitimate case this
-  project's own demos rely on (a company's `cx` role fetching from its own
-  `Launch`/`Deploy` node's `http://localhost:<port>` URL); a real fix
-  needs a way to scope a token to the one URL its own company is allowed
-  to target, which is a bigger design question than this issue's auth
-  parity fix.
+- **`lex-loom#194` — URL scoping for `cx_a2a`. Done.** Once a caller held
+  a valid token, `cx_a2a.lex` still forwarded a fully caller-supplied
+  `url` to a server-side `curl` — any host, any port. Not fixed with a
+  loopback/private-network blocklist (that would break the legitimate
+  case this project's own demos rely on: a company's `cx` role fetching
+  from its own `Launch`/`Deploy` node's `http://localhost:<port>` URL);
+  fixed with an allowlist of ONE (`src/support_scope.lex`): the operator-
+  pinned `CX_ALLOWED_URL`, or the company's own registered Launch/Deploy
+  URL derived from the company DB — the same `liveness_target` derivation
+  the operate loop's liveness checks already trust, so one source of
+  truth gets two enforcement points. `url` is now optional (omitted means
+  the registered URL); a mismatch is refused without echoing the allowed
+  URL; a server with no scope source configured refuses to start, exactly
+  like a missing `CX_API_TOKEN`. `demo/sa2-mesh-roundtrip.sh`'s second
+  authorized call now demonstrates the out-of-scope refusal.
   *Promotion criterion:* `cx`/`research` are reachable over A2A only with
   a valid bearer token, the same as `content_creator`. **Met.**
 

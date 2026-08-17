@@ -62,7 +62,7 @@ fn roles_sprint(company_id :: Str) -> Str {
 # "core" is always staffed. Together the packs cover every builtin role —
 # tests/test_role_registry.lex asserts the partition matches role_kinds.
 fn pack_registry() -> List[(Str, List[Str])] {
-  [("core", ["pm", "architect", "build", "py_build", "qa", "py_qa", "devops", "docs", "demo", "scribe", "launch", "deploy"]), ("web", ["fe_build", "ux_designer"]), ("content", ["brand_designer", "content_designer", "brand_strategist", "copywriter", "content_creator", "seo_specialist"]), ("finance", ["finance", "monetization_handoff"]), ("governance", ["legal", "cx"]), ("research", ["research"]), ("security", ["security"])]
+  [("core", ["pm", "architect", "build", "py_build", "ts_build", "qa", "py_qa", "ts_qa", "devops", "docs", "demo", "scribe", "launch", "deploy"]), ("web", ["fe_build", "ux_designer"]), ("content", ["brand_designer", "content_designer", "brand_strategist", "copywriter", "content_creator", "seo_specialist"]), ("finance", ["finance", "monetization_handoff"]), ("governance", ["legal", "cx"]), ("research", ["research"]), ("security", ["security"])]
 }
 
 fn pack_names() -> List[Str] {

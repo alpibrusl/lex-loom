@@ -1,0 +1,10 @@
+{
+  "name": "node-ts-api",
+  "private": true,
+  "type": "module",
+  "description": "lex-loom golden-path skeleton: Node/TypeScript API on node:* builtins only \u2014 no dependencies, no build step.",
+  "scripts": {
+    "start": "node --experimental-strip-types app.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  }
+}

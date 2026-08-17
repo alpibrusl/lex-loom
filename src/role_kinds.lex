@@ -8,6 +8,6 @@
 # data-driven.
 
 fn known_kinds() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "qa", "py_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "fe_build", "launch", "deploy", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "cx", "research", "monetization_handoff", "scribe"]
+  ["pm", "architect", "build", "py_build", "ts_build", "qa", "py_qa", "ts_qa", "devops", "docs", "security", "ux_designer", "brand_designer", "content_designer", "fe_build", "launch", "deploy", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "cx", "research", "monetization_handoff", "scribe"]
 }
 

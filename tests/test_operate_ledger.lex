@@ -25,6 +25,8 @@ import "std.fs" as fs
 
 import "lex-orm/src/query" as ormq
 
+import "lex-ctl/src/contract" as kct
+
 import "lex-trail/src/log" as tlog
 
 import "../src/migrate" as migrate
@@ -164,7 +166,7 @@ fn test_replay_orders_full_chain() -> [sql, fs_write, concurrent, crypto, fs_rea
               Err(e) => Err(str.concat("evidence: ", e)),
               Ok(_) => match ledger.record_action(db, inc, cid, "restart", "server", "{}", "auto", "2026-01-01T00:00:03") {
                 Err(e) => Err(e),
-                Ok(act) => match ledger.record_effect(db, act, inc, "liveness_latency_ms", "below", 5000000, "2026-01-01T00:00:03", "2026-01-01T00:00:07", 80, "escalate") {
+                Ok(act) => match ledger.record_effect(db, kct.make(act, "restart", "server", { signal: "liveness_latency_ms", cmp: Below, threshold_milli: 5000000 }, 7, 80, Handoff), inc, "2026-01-01T00:00:03", "2026-01-01T00:00:07") {
                   Err(e) => Err(e),
                   Ok(eff) => match ledger.record_disposition(db, eff, "materialised", "2026-01-01T00:00:08") {
                     Err(e) => Err(e),
@@ -230,7 +232,7 @@ fn test_disposition_vocabulary_is_closed() -> [sql, fs_write, concurrent, crypto
         Err(e) => Err(e),
         Ok(inc) => match ledger.record_action(db, inc, cid, class_key, "server", "{}", "auto", "2026-01-01T00:00:02") {
           Err(e) => Err(e),
-          Ok(act) => match ledger.record_effect(db, act, inc, "liveness_latency_ms", "below", 5000000, "2026-01-01T00:00:02", "2026-01-01T00:00:05", 80, "escalate") {
+          Ok(act) => match ledger.record_effect(db, kct.make(act, class_key, "server", { signal: "liveness_latency_ms", cmp: Below, threshold_milli: 5000000 }, 5, 80, Handoff), inc, "2026-01-01T00:00:02", "2026-01-01T00:00:05") {
             Err(e) => Err(e),
             Ok(eff) => match ledger.record_disposition(db, eff, "looks-fine", "2026-01-01T00:00:06") {
               Err(_) => match ledger.record_disposition(db, eff, "ambiguous", "2026-01-01T00:00:06") {
@@ -250,14 +252,39 @@ fn test_disposition_vocabulary_is_closed() -> [sql, fs_write, concurrent, crypto
   }
 }
 
-fn test_effect_id_matches_content() -> Result[Unit, Str] {
-  let a := ledger.effect_id("a1", "p99_ms", "below", 400000, "2026-01-01T00:04:00", 80, "rollback")
-  let b := ledger.effect_id("a1", "p99_ms", "below", 400000, "2026-01-01T00:04:00", 80, "rollback")
-  let c := ledger.effect_id("a1", "p99_ms", "below", 500000, "2026-01-01T00:04:00", 80, "rollback")
-  if a == b and a != c {
-    Ok(())
-  } else {
-    Err("effect id is not content-addressed")
+# #126 cutover: the ledger no longer mints its own effect ids — the id a
+# row is stored under must be EXACTLY the lex-ctl contract's content
+# address, and re-deriving it via the kernel must find the same row.
+fn test_effect_id_is_kernel_content_address() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let cid := fresh_company("kaddr")
+      match ledger.open_incident(db, cid, "liveness", "2026-01-01T00:00:01", "[\"liveness\"]", 0) {
+        Err(e) => Err(e),
+        Ok(inc) => match ledger.record_action(db, inc, cid, "restart", "server", "{}", "auto", "2026-01-01T00:00:02") {
+          Err(e) => Err(e),
+          Ok(act) => {
+            let c := kct.make(act, "restart", "server", { signal: "p99_ms", cmp: Below, threshold_milli: 400000 }, 4, 80, Rollback)
+            match ledger.record_effect(db, c, inc, "2026-01-01T00:00:02", "2026-01-01T00:00:04") {
+              Err(e) => Err(e),
+              Ok(stored_id) => if stored_id != c.id or stored_id != kct.compute_id(act, "restart", "server", { signal: "p99_ms", cmp: Below, threshold_milli: 400000 }, 4, 80, Rollback) {
+                Err("stored id is not the kernel's content address")
+              } else {
+                match ledger.effect_full(db, stored_id) {
+                  None => Err("kernel-derived id does not find the stored row"),
+                  Some(r) => if r.signal == "p99_ms" and r.threshold_milli == 400000 {
+                    Ok(())
+                  } else {
+                    Err("row content does not match the contract")
+                  },
+                }
+              },
+            }
+          },
+        },
+      }
+    },
   }
 }
 
@@ -269,7 +296,7 @@ fn seed_closed_incident(db :: conn.ConnDb, cid :: Str, tag :: Str, status :: Str
       Err(e) => Err(e),
       Ok(_) => match ledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
         Err(e) => Err(e),
-        Ok(act_id) => match ledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+        Ok(act_id) => match ledger.record_effect(db, kct.make(act_id, "restart", cid, { signal: "liveness", cmp: Below, threshold_milli: 1000 }, 0, 90, Rollback), inc, at, at) {
           Err(e) => Err(e),
           Ok(eff_id) => match ledger.record_disposition(db, eff_id, disposition, at) {
             Err(e) => Err(e),
@@ -358,7 +385,7 @@ fn seed_disposition_at(db :: conn.ConnDb, cid :: Str, disposition :: Str, at :: 
     Err(e) => Err(e),
     Ok(inc) => match ledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
       Err(e) => Err(e),
-      Ok(act) => match ledger.record_effect(db, act, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+      Ok(act) => match ledger.record_effect(db, kct.make(act, "restart", cid, { signal: "liveness", cmp: Below, threshold_milli: 1000 }, 0, 90, Rollback), inc, at, at) {
         Err(e) => Err(e),
         Ok(eff) => ledger.record_disposition(db, eff, disposition, at),
       },
@@ -440,7 +467,7 @@ fn test_tier_state_roundtrips() -> [sql, fs_write, concurrent, crypto, fs_read, 
 }
 
 fn run_all() -> [sql, fs_write, concurrent, crypto, fs_read, io, net, random, time] Unit {
-  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_backfill_merges_concurrent_open_incidents(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_matches_content(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company(), test_company_hit_rate_trend_reflects_actual_windowing(), test_tier_state_roundtrips()]
+  let results := [test_backfill_groups_episode(), test_backfill_idempotent(), test_backfill_merges_concurrent_open_incidents(), test_replay_orders_full_chain(), test_budget_refuses_overrun(), test_disposition_vocabulary_is_closed(), test_effect_id_is_kernel_content_address(), test_operate_metrics_aggregates_incidents_and_effects(), test_operate_metrics_empty_for_untouched_company(), test_company_hit_rate_trend_reflects_actual_windowing(), test_tier_state_roundtrips()]
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {
       Ok(_) => (),

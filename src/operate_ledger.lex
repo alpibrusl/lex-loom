@@ -37,6 +37,8 @@ import "lex-orm/src/connection" as conn
 
 import "lex-orm/src/query" as ormq
 
+import "lex-ctl/src/contract" as kct
+
 import "lex-trail/src/log" as tlog
 
 # ── Content-addressed ids ─────────────────────────────────────────────────────
@@ -56,16 +58,13 @@ fn action_id(incident :: Str, class_key :: Str, executed_at :: Str) -> Str
   crypto.sha256_str(str.join(["operate.action", incident, class_key, executed_at], "|"))
 }
 
-# Mirrors lex-ctl contract.compute_id's field coverage: the same logical
-# prediction hashes to the same id in the kernel and in this ledger.
-fn effect_id(action :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, deadline_at :: Str, confidence_pct :: Int, on_falsify :: Str) -> Str
-  examples {
-    effect_id("a1", "p99_ms", "below", 400000, "2026-01-01T00:04:00", 80, "rollback") => effect_id("a1", "p99_ms", "below", 400000, "2026-01-01T00:04:00", 80, "rollback")
-  }
-{
-  crypto.sha256_str(str.join(["operate.effect", action, signal, cmp, int.to_str(threshold_milli), deadline_at, int.to_str(confidence_pct), on_falsify], "|"))
-}
-
+# Effect ids are NOT minted here (#126): the id of an effect row IS the
+# lex-ctl contract's content address — `record_effect` below takes a
+# `kct.EffectContract` (built by `contract.make`, which computes the id
+# over action/class/subsystem/predicate/deadline/confidence/on_falsify)
+# and persists it verbatim. The ledger used to keep a parallel hash that
+# merely *mirrored* the kernel's field coverage; a silent divergence
+# between the two was exactly the drift this cutover eliminates.
 fn evidence_id(incident :: Str, query_text :: Str, observed_at :: Str) -> Str
   examples {
     evidence_id("i1", "docker logs", "2026-01-01T00:00:03") => evidence_id("i1", "docker logs", "2026-01-01T00:00:03")
@@ -122,12 +121,16 @@ fn record_action(db :: conn.ConnDb, incident :: Str, company_id :: Str, class_ke
   }
 }
 
-fn record_effect(db :: conn.ConnDb, action :: Str, incident :: Str, signal :: Str, cmp :: Str, threshold_milli :: Int, contracted_at :: Str, deadline_at :: Str, confidence_pct :: Int, on_falsify :: Str) -> [sql] Result[Str, Str] {
-  let id := effect_id(action, signal, cmp, threshold_milli, deadline_at, confidence_pct, on_falsify)
-  let q := ormq.for_dialect({ sql: "INSERT INTO operate_effects (id, action_id, incident_id, signal, cmp, threshold_milli, contracted_at, deadline_at, confidence_pct, on_falsify, disposition, disposed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '') ON CONFLICT(id) DO NOTHING", params: [PStr(id), PStr(action), PStr(incident), PStr(signal), PStr(cmp), PInt(threshold_milli), PStr(contracted_at), PStr(deadline_at), PInt(confidence_pct), PStr(on_falsify)] }, db.dialect)
+# The row's id, action linkage, predicate, confidence and on-falsify
+# route all come from the kernel contract; only the incident linkage and
+# the host's ISO timestamps are loom-side. `c.deadline_ms` carries the
+# iteration-index deadline (see `set_effect_window`'s note), so the
+# content address covers the REAL verification window.
+fn record_effect(db :: conn.ConnDb, c :: kct.EffectContract, incident :: Str, contracted_at :: Str, deadline_at :: Str) -> [sql] Result[Str, Str] {
+  let q := ormq.for_dialect({ sql: "INSERT INTO operate_effects (id, action_id, incident_id, signal, cmp, threshold_milli, contracted_at, deadline_at, confidence_pct, on_falsify, disposition, disposed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '') ON CONFLICT(id) DO NOTHING", params: [PStr(c.id), PStr(c.action_id), PStr(incident), PStr(c.predicate.signal), PStr(kct.cmp_str(c.predicate.cmp)), PInt(c.predicate.threshold_milli), PStr(contracted_at), PStr(deadline_at), PInt(c.confidence_pct), PStr(kct.on_falsify_str(c.on_falsify))] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
-    Ok(_) => Ok(id),
+    Ok(_) => Ok(c.id),
   }
 }
 

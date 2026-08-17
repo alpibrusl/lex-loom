@@ -359,7 +359,14 @@ observation → hypothesis(+posterior) → authority invoked → action(+params)
 ```
 
 Schema (CTL2, shipped — DDL in `src/migrate.lex`, recording/backfill/replay
-in `src/operate_ledger.lex`; row ids are SHA-256 over canonical fields):
+in `src/operate_ledger.lex`; row ids are SHA-256 over canonical fields).
+Effect rows are the exception that proves the kernel/host split (#126):
+their id is not minted by the ledger at all — `record_effect` takes a
+`lex-ctl/contract.EffectContract` (built by `contract.make`, whose
+`compute_id` covers action/class/subsystem/predicate/deadline/confidence/
+on-falsify) and persists the kernel's content address verbatim, so loom's
+ledger and the kernel can never silently disagree about a contract's
+identity:
 
 | Table | Row | Notes |
 |---|---|---|

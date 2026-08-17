@@ -26,6 +26,8 @@ import "../src/company" as company
 
 import "../src/company_runner" as company_runner
 
+import "lex-ctl/src/contract" as kct
+
 import "../src/operate_ledger" as oledger
 
 import "../src/effects" as eff
@@ -2250,7 +2252,7 @@ fn seed_metrics_incident(db :: conn.ConnDb, cid :: Str, tag :: Str, status :: St
       Err(e) => Err(e),
       Ok(_) => match oledger.record_action(db, inc, cid, "restart", cid, "{}", "auto", at) {
         Err(e) => Err(e),
-        Ok(act_id) => match oledger.record_effect(db, act_id, inc, "liveness", "below", 1000, at, at, 90, "rollback") {
+        Ok(act_id) => match oledger.record_effect(db, kct.make(act_id, "restart", cid, { signal: "liveness", cmp: Below, threshold_milli: 1000 }, 0, 90, Rollback), inc, at, at) {
           Err(e) => Err(e),
           Ok(eff_id) => match oledger.record_disposition(db, eff_id, disposition, at) {
             Err(e) => Err(e),

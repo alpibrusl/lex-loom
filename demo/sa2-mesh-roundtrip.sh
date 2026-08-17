@@ -18,8 +18,8 @@
 #   5. Confirms discovery via the federation node's own `GET /peers`.
 #   6. Sends a real `tasks/send` JSON-RPC request straight to the
 #      registered inbox_url and prints the real reply — both the happy
-#      path (product server reachable) and the clean-error path
-#      (product server unreachable).
+#      path (the in-scope product server) and the refusal path (an
+#      out-of-scope url, lex-loom#194).
 #
 # Assumes a sibling `../lex-soft` checkout with this branch's
 # src/federation_node.lex. Needs the `lex` CLI on PATH.
@@ -69,8 +69,8 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
 PY
 PIDS+=("$!")
 
-echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated)"
-( cd "$REPO_ROOT" && PORT="$CX_PORT" CX_API_TOKEN="$CX_TOKEN" \
+echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated, URL-scoped to the product server — lex-loom#194)"
+( cd "$REPO_ROOT" && PORT="$CX_PORT" CX_API_TOKEN="$CX_TOKEN" CX_ALLOWED_URL="http://127.0.0.1:$SUPPORT_PORT" \
     lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
     src/server/cx_a2a.lex serve_cx_a2a ) &
 PIDS+=("$!")
@@ -111,7 +111,7 @@ cat /tmp/sa2-happy.json
 echo
 
 echo
-echo "+ real tasks/send against the registered inbox_url, authorized (unreachable-product error path)"
+echo "+ real tasks/send against the registered inbox_url, authorized, but asking for an OUT-OF-SCOPE url — must be refused (lex-loom#194)"
 curl -s -X POST "http://localhost:$CX_PORT/" -H "Content-Type: application/json" -H "Authorization: Bearer $CX_TOKEN" -d '{"jsonrpc":"2.0","id":"task_2","method":"tasks/send","params":{"id":"task_2","contextId":"ctx_2","message":{"kind":"message","messageId":"m2","role":"user","parts":[{"type":"text","text":"{\"url\":\"http://127.0.0.1:1\"}"}]}}}'
 echo
 

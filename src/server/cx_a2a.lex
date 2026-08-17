@@ -17,11 +17,17 @@
 # CX_API_TOKEN gates every POST / the same way content_a2a.lex's
 # CONTENT_PUBLISH_TOKEN already gates publish_content (#187). CX_API_TOKEN
 # unset means this agent refuses to serve at all — never fail-open into an
-# effectively-unauthenticated endpoint. (fetch_support_items also takes a
-# fully caller-supplied `url` with no scoping to the calling company's own
-# product — tracked separately as lex-loom#194, since a naive
-# host/IP restriction would break the legitimate localhost/private-network
-# deployment case this project's demos rely on.)
+# effectively-unauthenticated endpoint.
+#
+# URL scoping (#194): the skill no longer trusts a caller-supplied `url`.
+# Every fetch is bound to the ONE base URL this deployment is scoped to —
+# either the operator-pinned CX_ALLOWED_URL, or the company's own
+# registered Launch/Deploy URL derived from the company DB (the same
+# derivation the operate loop's liveness checks trust). A caller may omit
+# `url` entirely (the registered URL is used) or pass exactly that URL;
+# anything else is refused. Deliberately NOT a private-IP/loopback
+# blocklist — the legitimate use is exactly http://127.0.0.1:<port> in
+# this project's single-host deployment model. See src/support_scope.lex.
 #
 # Mount with lex-agent/src/mount.lex onto a lex-web router (see serve_cx_a2a
 # below for the runnable entry point). Single-process mode: call
@@ -69,6 +75,8 @@ import "../roles" as roles
 
 import "../events" as events
 
+import "../support_scope" as scope
+
 # ── HB2 (#214): inbound support items are wake events ─────────────────────────
 # When this server is configured with a company event ledger (LOOM_EVENTS_DB +
 # LOOM_EVENTS_COMPANY), every open support item a fetch observes is projected
@@ -102,24 +110,31 @@ fn record_support_events(ev_db :: Str, ev_cid :: Str, result :: jv.Json) -> [io,
 }
 
 # ── Skill: fetch_support_items ────────────────────────────────────────────────
-fn skill_fetch_support_items(ev_db :: Str, ev_cid :: Str) -> srv.Skill {
-  let params := { title: "FetchSupportItems", description: "Read items needing a human response from a company's live /loom/support endpoint", fields: [s.required_str("url", [])] }
-  { capability: cap.inbound("support.fetch_items", "GET `url` + \"/loom/support\" and return {items:[{id,text,status}]} or {error}. Read-only. Requires Authorization: Bearer <CX_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
-    let url := str_field(msg_to_json(m), "url")
-    if str.is_empty(url) {
-      error_outcome("url is required")
-    } else {
-      let result := roles.fetch_support_items(url)
-      let __ev := record_support_events(ev_db, ev_cid, result)
-      ok_outcome(jv.stringify(result))
+# `url` is now optional and scope-checked (#194): omitted means "the
+# company's own registered URL"; present, it must equal that URL. The
+# refusal message never echoes the allowed URL back to the caller — an
+# out-of-scope probe learns only that it was out of scope.
+fn skill_fetch_support_items(ev_db :: Str, ev_cid :: Str, allowed_override :: Str) -> srv.Skill {
+  let params := { title: "FetchSupportItems", description: "Read items needing a human response from this company's own live /loom/support endpoint. `url` may be omitted (the company's registered URL is used); if present it must match that URL.", fields: [s.optional(s.required_str("url", []))] }
+  { capability: cap.inbound("support.fetch_items", "GET the company's own registered base URL + \"/loom/support\" and return {items:[{id,text,status}]} or {error}. Read-only, scoped to this company's registered Launch/Deploy URL (#194). Requires Authorization: Bearer <CX_API_TOKEN>.", params), handle: fn (m :: msg.Message) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] srv.HandlerOutcome {
+    let requested := str_field(msg_to_json(m), "url")
+    match scope.resolve_allowed(allowed_override, ev_db, ev_cid) {
+      Err(reason) => error_outcome(reason),
+      Ok(allowed) => if scope.url_in_scope(requested, allowed) {
+        let result := roles.fetch_support_items(allowed)
+        let __ev := record_support_events(ev_db, ev_cid, result)
+        ok_outcome(jv.stringify(result))
+      } else {
+        error_outcome("url is out of scope: this agent only fetches from the calling company's own registered product URL")
+      },
     }
   } }
 }
 
 # ── AgentDef factory ──────────────────────────────────────────────────────────
-fn make_cx_agent(base_url :: Str, ev_db :: Str, ev_cid :: Str) -> srv.AgentDef {
-  let sk := skill_fetch_support_items(ev_db, ev_cid)
-  let agent_card := card.make("loom-cx", "Token-gated, read-only customer-support triage: fetches open support items for a company's own /loom/support endpoint. See CX_API_TOKEN.", "0.1.0", base_url, [sk.capability])
+fn make_cx_agent(base_url :: Str, ev_db :: Str, ev_cid :: Str, allowed_override :: Str) -> srv.AgentDef {
+  let sk := skill_fetch_support_items(ev_db, ev_cid, allowed_override)
+  let agent_card := card.make("loom-cx", "Token-gated, read-only customer-support triage: fetches open support items from a company's own registered /loom/support endpoint (URL-scoped, #194). See CX_API_TOKEN.", "0.1.0", base_url, [sk.capability])
   srv.make_agent_def(agent_card, [sk])
 }
 
@@ -217,30 +232,42 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 #   BASE_URL      this agent's own public base URL  (default: http://localhost:<PORT>)
 #   CX_API_TOKEN  required — no default, no fallback. Unset refuses to
 #                 start rather than silently serving unauthenticated.
-#   LOOM_EVENTS_DB        optional — path to a company DB whose append-only
-#                         `events` ledger records inbound support items (HB2).
-#   LOOM_EVENTS_COMPANY   the company id those events belong to. Both must be
-#                         set for event recording; unset means no ledger writes.
+#   CX_ALLOWED_URL        optional — operator-pinned base URL the fetch is
+#                         scoped to (#194). When unset, the scope is derived
+#                         from the company DB below; when NEITHER is
+#                         configured the server refuses to start.
+#   LOOM_EVENTS_DB        path to a company DB. Two duties: the append-only
+#                         `events` ledger records inbound support items
+#                         (HB2), and the company's registered Launch/Deploy
+#                         URL defines the fetch scope (#194).
+#   LOOM_EVENTS_COMPANY   the company id for both of the above.
 fn serve_cx_a2a() -> [env, net, io, time, crypto, random, sql, fs_read, fs_write, concurrent, llm, proc, approval] Unit {
   let token := env_or("CX_API_TOKEN", "")
+  let allowed_override := env_or("CX_ALLOWED_URL", "")
+  let ev_db := env_or("LOOM_EVENTS_DB", "")
+  let ev_cid := env_or("LOOM_EVENTS_COMPANY", "")
   if str.is_empty(token) {
     io.print("[cx-a2a] FATAL: CX_API_TOKEN is required — refusing to serve an unauthenticated fetch_support_items endpoint")
   } else {
-    let port := match str.to_int(env_or("PORT", "9200")) {
-      Some(n) => n,
-      None => 9200,
+    if str.is_empty(allowed_override) and (str.is_empty(ev_db) or str.is_empty(ev_cid)) {
+      io.print("[cx-a2a] FATAL: no URL scope configured — set CX_ALLOWED_URL, or LOOM_EVENTS_DB + LOOM_EVENTS_COMPANY, so fetches are bound to the company's own product URL (#194); refusing to serve an unscoped fetch endpoint")
+    } else {
+      let port := match str.to_int(env_or("PORT", "9200")) {
+        Some(n) => n,
+        None => 9200,
+      }
+      let base_url := env_or("BASE_URL", str.concat("http://localhost:", int.to_str(port)))
+      let agent := make_cx_agent(base_url, ev_db, ev_cid, allowed_override)
+      let r := mount_gated(router.new(), agent, token)
+      let __p1 := io.print("=== lex-loom CX A2A server (token-gated) ===")
+      let __p2 := io.print(str.concat("  port: ", int.to_str(port)))
+      let __p3 := io.print(str.concat("  base: ", base_url))
+      net.serve_fn(port, fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] Response {
+        let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
+        let rsp := router.dispatch(r, raw)
+        { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
+      })
     }
-    let base_url := env_or("BASE_URL", str.concat("http://localhost:", int.to_str(port)))
-    let agent := make_cx_agent(base_url, env_or("LOOM_EVENTS_DB", ""), env_or("LOOM_EVENTS_COMPANY", ""))
-    let r := mount_gated(router.new(), agent, token)
-    let __p1 := io.print("=== lex-loom CX A2A server (token-gated) ===")
-    let __p2 := io.print(str.concat("  port: ", int.to_str(port)))
-    let __p3 := io.print(str.concat("  base: ", base_url))
-    net.serve_fn(port, fn (req :: Request) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] Response {
-      let raw := { body: req.body, method: req.method, path: req.path, query: req.query, headers: req.headers }
-      let rsp := router.dispatch(r, raw)
-      { status: rsp.status, body: BodyStr(rsp.body), headers: rsp.headers }
-    })
   }
 }
 

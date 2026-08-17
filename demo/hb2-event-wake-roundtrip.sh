@@ -89,7 +89,8 @@ mkdir -p "$WS/product/loom"
 printf '{"items":[{"id":"t-101","text":"my export is broken","status":"open"}]}' > "$WS/product/loom/support"
 ( cd "$WS/product" && exec python3 -m http.server "$SUPPORT_PORT" >/dev/null 2>&1 ) &
 PIDS+=("$!")
-( CX_API_TOKEN="$CX_TOKEN" PORT="$CX_PORT" LOOM_EVENTS_DB="$WS/cxin/company.db" LOOM_EVENTS_COMPANY=cxin \
+( CX_API_TOKEN="$CX_TOKEN" PORT="$CX_PORT" CX_ALLOWED_URL="http://localhost:$SUPPORT_PORT" \
+    LOOM_EVENTS_DB="$WS/cxin/company.db" LOOM_EVENTS_COMPANY=cxin \
     exec lex run --max-steps 0 --allow-effects "$EFFECTS" \
     src/server/cx_a2a.lex serve_cx_a2a >/dev/null 2>&1 ) &
 PIDS+=("$!")

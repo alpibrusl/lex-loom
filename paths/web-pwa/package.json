@@ -1,0 +1,10 @@
+{
+  "name": "web-pwa",
+  "private": true,
+  "type": "module",
+  "description": "lex-loom golden-path skeleton: installable PWA on node:* builtins only - no dependencies, no build step, no framework.",
+  "scripts": {
+    "start": "node --experimental-strip-types app.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  }
+}

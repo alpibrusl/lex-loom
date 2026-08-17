@@ -1,0 +1,17 @@
+{
+  "name": "web-pwa",
+  "short_name": "web-pwa",
+  "description": "lex-loom web-pwa golden-path shell — rename me to the product",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7fb",
+  "theme_color": "#1a1a2e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

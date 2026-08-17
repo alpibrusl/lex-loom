@@ -359,8 +359,8 @@ fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
 # SyntaxErrors.
 fn make_ts_check_tool(sprint_id :: Str) -> t.Tool {
   let dir := ts_work_dir(sprint_id)
-  let params := { title: "TsCheck", description: "Syntax-check a .ts file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
-  t.define("ts_check", "Write `code` to <filename> and syntax-check it with Node (type-strip + ES-module parse, no execution). Returns {ok:'true'|'false', output:<parser errors or 'ok'>}. ALWAYS call this after writing each .ts file and repair until ok='true' before finishing. Never claim code parses without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  let params := { title: "TsCheck", description: "Write a project file; syntax-check .ts/.js, parse-check .json, store the rest. Returns {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
+  t.define("ts_check", "Write `code` to <filename> and validate it by type: .ts/.mts/.js/.mjs are syntax-checked with Node (type-strip + ES-module parse, no execution), .json/.webmanifest are parse-checked with JSON.parse, and any other file (html/css/svg/txt) is stored as-is with output 'stored'. Returns {ok:'true'|'false', output:<errors, 'ok', or 'stored'>}. ALWAYS call this for every file you produce (static assets included) and repair until ok='true' before finishing. Never claim code parses without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "app.ts",
@@ -369,25 +369,67 @@ fn make_ts_check_tool(sprint_id :: Str) -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    let path := str.join([dir, "/", filename], "")
-    match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
-      Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-      Ok(_) => {
-        let __w := io.write(path, code)
-        let cmd := str.join(["node --no-warnings --experimental-vm-modules -e 'const{stripTypeScriptTypes}=require(\"node:module\");const{SourceTextModule}=require(\"node:vm\");const fs=require(\"node:fs\");try{new SourceTextModule(stripTypeScriptTypes(fs.readFileSync(process.argv[1],\"utf8\")));process.exit(0)}catch(e){console.error(String(e&&e.message?e.message:e));process.exit(1)}' \"", path, "\" 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-        match proc.run("bash", ["-c", cmd]) {
-          Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-          Ok(r) => {
-            let combined := str.concat(r.stdout, r.stderr)
-            let ok := str.contains(combined, "##EXIT:0")
-            Ok(JObj([("ok", JStr(if ok {
-              "true"
-            } else {
-              "false"
-            })), ("output", JStr(combined))]))
-          },
+    if str.contains(filename, "..") {
+      Ok(JObj([("ok", JStr("false")), ("output", JStr("filename must be a plain relative path (no '..')"))]))
+    } else {
+      let path := str.join([dir, "/", filename], "")
+      let is_code := if str.ends_with(filename, ".ts") {
+        true
+      } else {
+        if str.ends_with(filename, ".mts") {
+          true
+        } else {
+          if str.ends_with(filename, ".js") {
+            true
+          } else {
+            str.ends_with(filename, ".mjs")
+          }
         }
-      },
+      }
+      let is_json := if str.ends_with(filename, ".json") {
+        true
+      } else {
+        str.ends_with(filename, ".webmanifest")
+      }
+      match proc.run("bash", ["-c", str.join(["mkdir -p \"$(dirname \"", path, "\")\""], "")]) {
+        Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+        Ok(_) => {
+          let __w := io.write(path, code)
+          if is_code {
+            let cmd := str.join(["node --no-warnings --experimental-vm-modules -e 'const{stripTypeScriptTypes}=require(\"node:module\");const{SourceTextModule}=require(\"node:vm\");const fs=require(\"node:fs\");try{new SourceTextModule(stripTypeScriptTypes(fs.readFileSync(process.argv[1],\"utf8\")));process.exit(0)}catch(e){console.error(String(e&&e.message?e.message:e));process.exit(1)}' \"", path, "\" 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+            match proc.run("bash", ["-c", cmd]) {
+              Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+              Ok(r) => {
+                let combined := str.concat(r.stdout, r.stderr)
+                let ok := str.contains(combined, "##EXIT:0")
+                Ok(JObj([("ok", JStr(if ok {
+                  "true"
+                } else {
+                  "false"
+                })), ("output", JStr(combined))]))
+              },
+            }
+          } else {
+            if is_json {
+              let cmd := str.join(["node -e 'JSON.parse(require(\"node:fs\").readFileSync(process.argv[1],\"utf8\"))' \"", path, "\" 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+              match proc.run("bash", ["-c", cmd]) {
+                Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+                Ok(r) => {
+                  let combined := str.concat(r.stdout, r.stderr)
+                  let ok := str.contains(combined, "##EXIT:0")
+                  Ok(JObj([("ok", JStr(if ok {
+                    "true"
+                  } else {
+                    "false"
+                  })), ("output", JStr(combined))]))
+                },
+              }
+            } else {
+              Ok(JObj([("ok", JStr("true")), ("output", JStr("stored"))]))
+            }
+          }
+        },
+      }
     }
   })
 }

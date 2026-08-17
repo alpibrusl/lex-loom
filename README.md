@@ -483,6 +483,15 @@ if __name__ == "__main__":
 
 Sprint IDs are auto-generated (`sprint-<hex8>`) if not supplied in the request body.
 
+### Fronting the web API with lex-gateway
+
+For production, put [lex-gateway](https://github.com/alpibrusl/lex-gateway) in
+front instead of exposing the raw port: its `loom` tenant module proxies this
+whole surface under `/loom/*` (mapping `/loom/<x>` → `/api/<x>`), gates it on a
+tenant JWT carrying the `loom` module grant, and injects `LOOM_API_TOKEN`
+upstream via its `LOOM_KEY` setting — so tenants authenticate to the gateway
+and never hold the loom token.
+
 ---
 
 ## Environment variables
@@ -496,6 +505,7 @@ Sprint IDs are auto-generated (`sprint-<hex8>`) if not supplied in the request b
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `DB_PATH` | `/data/loom.db` | SQLite database path |
 | `PORT` | `8880` | HTTP server port |
+| `LOOM_API_TOKEN` | — | Bearer token required on every `/api/*` route; `serve_loom` refuses to start without it |
 
 **Provider selection priority:** Vertex AI (if `VERTEX_ACCESS_TOKEN` + `VERTEX_PROJECT` set) → Anthropic (if `ANTHROPIC_API_KEY` set) → Ollama.
 

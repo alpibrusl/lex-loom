@@ -22,6 +22,8 @@ import "../src/role_kinds" as role_kinds
 
 import "../src/lex_skill" as lexskill
 
+import "lex-schema/json_value" as jv
+
 fn seed(sprint :: Str, filename :: Str, code :: Str) -> [io, proc] Unit {
   let dir := lexskill.ts_work_dir(sprint)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, "; mkdir -p ", dir], "")])
@@ -90,8 +92,86 @@ fn test_ts_roster_rows_agree() -> Result[Unit, Str] {
   }
 }
 
-fn run_all() -> [io, proc] Int {
-  let results := [("ts compiles gate passes on real ts", test_ts_compiles_gate_passes_on_real_ts()), ("ts compiles gate fails on syntax error", test_ts_compiles_gate_fails_on_syntax_error()), ("ts compiles gate fails on empty work dir", test_ts_compiles_gate_fails_on_empty_work_dir()), ("ts roster rows agree", test_ts_roster_rows_agree())]
+# ── ts_check file-type dispatch (#92 web-pwa) ────────────────────────────────
+# The one build tool writes the whole project: code is syntax-checked, JSON
+# manifests are parse-checked, static assets are stored — and a bad file of
+# any checkable type is refused, never silently accepted.
+fn tool_result_field(r :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(r, key) {
+    Some(JStr(v)) => v,
+    _ => "",
+  }
+}
+
+fn check_tool(filename :: Str, code :: Str) -> [env, io, net, proc] Result[(Str, Str), Str] {
+  let tool := lexskill.make_ts_check_tool("t-tspath-dispatch")
+  match tool.execute(JObj([("filename", JStr(filename)), ("code", JStr(code))])) {
+    Err(_) => Err("ts_check errored"),
+    Ok(r) => Ok((tool_result_field(r, "ok"), tool_result_field(r, "output"))),
+  }
+}
+
+fn test_ts_check_stores_static_assets() -> [env, io, net, proc] Result[Unit, Str] {
+  match check_tool("public/styles.css", "body { margin: 0; }") {
+    Err(e) => Err(e),
+    Ok((ok, output)) => if ok == "true" {
+      if output == "stored" {
+        Ok(())
+      } else {
+        Err(str.concat("expected output 'stored' for css, got: ", output))
+      }
+    } else {
+      Err("css asset should be accepted as stored")
+    },
+  }
+}
+
+fn test_ts_check_parse_checks_manifest() -> [env, io, net, proc] Result[Unit, Str] {
+  match check_tool("public/manifest.webmanifest", "{\"name\": \"x\", }") {
+    Err(e) => Err(e),
+    Ok((ok, _)) => if ok == "false" {
+      match check_tool("public/manifest.webmanifest", "{\"name\": \"x\"}") {
+        Err(e) => Err(e),
+        Ok((ok2, _)) => if ok2 == "true" {
+          Ok(())
+        } else {
+          Err("valid manifest JSON should pass")
+        },
+      }
+    } else {
+      Err("trailing-comma manifest should fail JSON.parse")
+    },
+  }
+}
+
+fn test_ts_check_still_refuses_bad_ts() -> [env, io, net, proc] Result[Unit, Str] {
+  match check_tool("bad.ts", "const x: number = ;") {
+    Err(e) => Err(e),
+    Ok((ok, _)) => if ok == "false" {
+      Ok(())
+    } else {
+      Err("bad TS should still be refused")
+    },
+  }
+}
+
+fn test_ts_check_refuses_dotdot_filename() -> [env, io, net, proc] Result[Unit, Str] {
+  match check_tool("../escape.ts", "const x = 1;") {
+    Err(e) => Err(e),
+    Ok((ok, output)) => if ok == "false" {
+      if str.contains(output, "plain relative path") {
+        Ok(())
+      } else {
+        Err(str.concat("refused, but with the wrong message: ", output))
+      }
+    } else {
+      Err("a '..' filename must be refused")
+    },
+  }
+}
+
+fn run_all() -> [env, io, net, proc] Int {
+  let results := [("ts compiles gate passes on real ts", test_ts_compiles_gate_passes_on_real_ts()), ("ts compiles gate fails on syntax error", test_ts_compiles_gate_fails_on_syntax_error()), ("ts compiles gate fails on empty work dir", test_ts_compiles_gate_fails_on_empty_work_dir()), ("ts roster rows agree", test_ts_roster_rows_agree()), ("ts_check stores static assets", test_ts_check_stores_static_assets()), ("ts_check parse-checks manifest", test_ts_check_parse_checks_manifest()), ("ts_check still refuses bad ts", test_ts_check_still_refuses_bad_ts()), ("ts_check refuses dotdot filename", test_ts_check_refuses_dotdot_filename())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

@@ -74,7 +74,10 @@ check "npm run build produces the web export" "$rc"
 echo
 echo "-- 4. launch story: boot + curl shell, bundle, /loom surface"
 PORT=8186
-(cd "$DIR" && PORT=$PORT node --experimental-strip-types server.ts >"$WS/srv.log" 2>&1 & echo $! > "$WS/srv.pid")
+# exec so $! is node itself, not a wrapper subshell — the trap must kill the
+# real server or a leaked listener poisons the port for the next run.
+(cd "$DIR" && PORT=$PORT exec node --experimental-strip-types server.ts >"$WS/srv.log" 2>&1) &
+echo $! > "$WS/srv.pid"
 for i in $(seq 1 20); do
   curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
   sleep 0.25
@@ -88,6 +91,34 @@ code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/_expo/stat
 [ "$code" = "200" ] && check "RN JS bundle serves (200)" 0 || check "RN JS bundle serves (200)" 1
 publish=$(curl -sf -X POST "http://127.0.0.1:$PORT/loom/content" -H 'content-type: application/json' -d '{"title":"BI1","body":"Installed once, at bootstrap."}' || echo MISS)
 echo "$publish" | grep -q '"ok":true' && check "content publishes" 0 || check "content publishes" 1
+
+echo
+echo "-- 5. sprint bridge (#256 BI2): the ts_build gate runs the REAL expo export"
+# A company sprint's work dir, overlaid on the bootstrapped workspace by
+# verify_compiles_at (ws_root "" -> $LOOM_WORKSPACE, the production path).
+# Broken JSX must FAIL the gate with bundler output; a valid .tsx must PASS.
+EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs
+SPRINT="rnwebco/iter-1"
+TSWORK="/tmp/loom-ts-work-rnwebco_iter-1"
+rm -rf "$TSWORK" && mkdir -p "$TSWORK"
+cat > "$TSWORK/App.tsx" <<'TSX'
+export default function App() { return <View; }
+TSX
+OUT=$(LOOM_WORKSPACE="$WS" ${LEX:-lex} run --allow-effects "$EFFECTS" src/agent/runner.lex verify_compiles_at '""' '"ts_build"' "\"$SPRINT\"" 2>&1 || true)
+echo "$OUT" | grep -q '"\$variant":"Err"' && echo "$OUT" | grep -qi "workspace app build" && check "broken JSX fails the bridged gate with bundler output" 0 || { echo "$OUT" | tail -5 | sed 's/^/   | /'; check "broken JSX fails the bridged gate with bundler output" 1; }
+cat > "$TSWORK/App.tsx" <<'TSX'
+import { Text, View } from 'react-native';
+export default function App() {
+  return (
+    <View>
+      <Text>BI2: this sprint edit was gated by a real expo export.</Text>
+    </View>
+  );
+}
+TSX
+OUT=$(LOOM_WORKSPACE="$WS" ${LEX:-lex} run --allow-effects "$EFFECTS" src/agent/runner.lex verify_compiles_at '""' '"ts_build"' "\"$SPRINT\"" 2>&1 || true)
+echo "$OUT" | grep -q '"\$variant":"Ok"' && check "valid sprint .tsx passes the bridged gate" 0 || { echo "$OUT" | tail -5 | sed 's/^/   | /'; check "valid sprint .tsx passes the bridged gate" 1; }
+rm -rf "$TSWORK"
 
 echo
 echo "== BI1 roundtrip: $pass passed, $fail failed =="

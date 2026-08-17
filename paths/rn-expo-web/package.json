@@ -1,0 +1,25 @@
+{
+  "name": "rn-expo-web",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "expo": "~57.0.14",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-dom": "19.2.3",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types server.ts",
+    "build": "expo export --platform web",
+    "dev": "expo start --web",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "private": true,
+  "description": "lex-loom bootstrap-install golden path: React Native (Expo web target). Dependencies install ONCE at company bootstrap (.loom-install) - never during sprints."
+}

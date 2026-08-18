@@ -66,13 +66,20 @@ Budgets: `wall_clock_secs`, `max_commands`, `max_money_cents`, `max_api_calls`.
   `lex_os_exec_args` (pure, unit-tested in
   `tests/test_lex_os_exec_args.lex`) only adds `--simulated` when
   `LEX_OS_SIMULATED=1` is set; unset defers entirely to lex-os's own
-  selection. **Not done: validation on real hardware.** This session's
-  environment has no `/dev/kvm` and no `vmx`/`svm` CPU flags — it cannot
-  run a real Firecracker microVM at all, so the actual promotion criterion
-  (the QA-deny/Build-allow proof reproduced against real Firecracker,
-  not `--simulated`) is **unvalidated**. That still needs a KVM CI
-  runner, which loom doesn't have — tracked as the remaining half of
-  `lex-loom#184`, left open.
+  selection. **Validated on real Firecracker in CI (2026-08-18,
+  closing #184).** GitHub-hosted ubuntu runners expose `/dev/kvm`, so
+  the promotion criterion needed no self-hosted hardware after all: the
+  `isolation-kvm` workflow builds lex-os from source, generates the
+  manifests THIS repo ships via `src/manifests.lex` + the released lex
+  binary, and runs `lex-os exec` jailed on a real microVM — the
+  Implementation grant (exec: Sandboxed) is allowed with the in-VM
+  stdout captured (`decision: allowed`, `perimeter: firecracker`,
+  `security_boundary: true`), the Demo grant (exec: None — the same
+  manifest a `qa:Demo` [policy.isolation] override yields) is denied
+  before spawn, and the audit log records both. First green run:
+  lex-loom actions run 32138496929. Getting there surfaced a real
+  lex-os fix (deterministic jailer cgroup creation, lex-os#64). Still
+  unmediated: the A2A executor.
   Docker for per-agent isolation goes away entirely; the loom service itself
   just needs `lex run src/main.lex`.
 

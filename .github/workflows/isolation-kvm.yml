@@ -17,13 +17,16 @@ name: isolation-kvm
 #      override yields) is denied before anything spawns.
 #   3. The audit log records both outcomes.
 #
-# Trigger: validation phase — push to the working branch. Finalized to
-# workflow_dispatch + weekly cron + main once green (heavy job: a Rust
-# build of lex-os plus ~330MB of microVM assets; not per-PR material).
+# Heavy job (a Rust build of lex-os plus ~330MB of microVM assets), so
+# not per-PR: main pushes, manual dispatch, and a weekly cron that
+# catches drift between loom's manifests and lex-os's mediation.
+# Validated green during authoring: run 32138496929 (2026-08-18).
 on:
   workflow_dispatch:
   push:
-    branches: [claude/soft-loom-lex-os-integration-a2502u]
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 1"
 
 jobs:
   real-firecracker-exec:
@@ -44,9 +47,7 @@ jobs:
           sudo modprobe vhost_vsock
           ls -la /dev/vhost-vsock
       - name: Clone lex-os
-        # Temporarily pinned to the branch carrying the deterministic-cgroup
-        # jailer fix; back to main once lex-os merges it.
-        run: git clone --depth 1 -b claude/soft-loom-lex-os-integration-a2502u https://github.com/alpibrusl/lex-os /tmp/lex-os
+run: git clone --depth 1 https://github.com/alpibrusl/lex-os /tmp/lex-os
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl

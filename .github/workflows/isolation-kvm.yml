@@ -1,0 +1,123 @@
+name: isolation-kvm
+
+# The real-perimeter validation lex-loom#184 was blocked on: reproduce the
+# deny/allow proof against REAL Firecracker, not --simulated, using the
+# manifests loom actually generates. GitHub-hosted ubuntu runners expose
+# /dev/kvm (probed 2026-08-18, lex-os run 32135964381), so this needs no
+# self-hosted hardware.
+#
+# What it proves, end to end:
+#   1. loom's own src/manifests.lex generates the manifest JSON (via the
+#      released lex binary — the same code path runner.lex resolves through).
+#   2. lex-os (built from source, firecracker default feature) mediates
+#      `exec` against that manifest and runs the command INSIDE a real,
+#      jailed microVM: the Implementation grant (exec: Sandboxed) is
+#      allowed and the in-VM stdout comes back; the Demo grant (exec:
+#      None — the same manifest a company's `qa:Demo` [policy.isolation]
+#      override yields) is denied before anything spawns.
+#   3. The audit log records both outcomes.
+#
+# Heavy job (a Rust build of lex-os plus ~330MB of microVM assets), so
+# not per-PR: main pushes, manual dispatch, and a weekly cron that
+# catches drift between loom's manifests and lex-os's mediation.
+# Validated green during authoring: run 32138496929 (2026-08-18).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 1"
+
+jobs:
+  real-firecracker-exec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lex
+        run: |
+          set -euo pipefail
+          V=0.10.11; T=x86_64-unknown-linux-gnu
+          curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
+          tar -xzf /tmp/lex.tgz -C /tmp
+          echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
+      - name: KVM prerequisites
+        run: |
+          ls -la /dev/kvm
+          getent group kvm
+          sudo modprobe vhost_vsock
+          ls -la /dev/vhost-vsock
+      - name: Clone lex-os
+run: git clone --depth 1 https://github.com/alpibrusl/lex-os /tmp/lex-os
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: /tmp/lex-os
+      - name: Build lex-os + the in-VM guest (firecracker is the default feature)
+        run: |
+          cd /tmp/lex-os
+          cargo build -p lex-os
+          cargo build --release --target x86_64-unknown-linux-musl -p lex-os-guest --features vsock
+      - name: Fetch microVM assets + inject the guest (kernel, rootfs, firecracker, jailer)
+        run: |
+          cd /tmp/lex-os
+          bash demo/setup-assets.sh
+          sudo bash demo/setup-assets.sh
+      - name: Generate the manifests loom actually ships (src/manifests.lex, via lex)
+        run: |
+          set -euo pipefail
+          unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
+          lex run src/manifests.lex manifest_json_for_kind '"build"' '"kvmci/iter-1"' | unquote > /tmp/impl-manifest.json
+          lex run src/manifests.lex manifest_json_for_kind '"demo"'  '"kvmci/iter-1"' | unquote > /tmp/deny-manifest.json
+          echo "== Implementation (build) manifest:"; cat /tmp/impl-manifest.json
+          echo "== Demo (exec: None) manifest:"; cat /tmp/deny-manifest.json
+      - name: "ALLOW: Implementation grant runs the command inside a real jailed microVM"
+        run: |
+          set -euo pipefail
+          cd /tmp/lex-os
+          KVM_GID=$(getent group kvm | cut -d: -f3)
+          sudo timeout 240 ./target/debug/lex-os --output json exec \
+            --manifest /tmp/impl-manifest.json \
+            --jail-uid "$(id -u)" --jail-gid "$KVM_GID" \
+            --audit-out /tmp/allow-audit.json \
+            -- echo "hello from a real microVM" | tee /tmp/allow.json
+          python3 - <<'PY'
+          import json
+          # The microVM's serial console shares stdout with the acli
+          # envelope, so extract the envelope rather than parsing the
+          # whole stream.
+          raw = open('/tmp/allow.json').read()
+          env = json.loads(raw[raw.rindex('{\n  "ok"'):])
+          assert env.get("ok") is True, env
+          data = env["data"]
+          assert data.get("exit_code") == 0, env
+          assert "hello from a real microVM" in data.get("stdout", ""), env
+          print("ALLOW: proven inside a real microVM")
+          PY
+      - name: "DENY: Demo grant (exec: None — the qa:Demo override shape) is refused before spawn"
+        run: |
+          set -euo pipefail
+          cd /tmp/lex-os
+          KVM_GID=$(getent group kvm | cut -d: -f3)
+          sudo timeout 240 ./target/debug/lex-os --output json exec \
+            --manifest /tmp/deny-manifest.json \
+            --jail-uid "$(id -u)" --jail-gid "$KVM_GID" \
+            --audit-out /tmp/deny-audit.json \
+            -- echo "must never run" | tee /tmp/deny.json || true
+          python3 - <<'PY'
+          import json
+          raw = open('/tmp/deny.json').read()
+          env = json.loads(raw[raw.rindex('{\n  "ok"'):])
+          assert env.get("ok") is False, env
+          msg = json.dumps(env.get("error", {}))
+          assert "must never run" not in json.dumps(env.get("data", {})), env
+          print("DENY: refused as required:", msg[:200])
+          PY
+      - name: Audit evidence recorded for both outcomes
+        run: |
+          set -euo pipefail
+          for f in /tmp/allow-audit.json /tmp/deny-audit.json; do
+            test -s "$f" || { echo "missing audit log $f"; exit 1; }
+            echo "== $f (tail)"; tail -c 800 "$f"; echo
+          done

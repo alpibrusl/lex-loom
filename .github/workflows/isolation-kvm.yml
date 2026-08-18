@@ -44,7 +44,9 @@ jobs:
           sudo modprobe vhost_vsock
           ls -la /dev/vhost-vsock
       - name: Clone lex-os
-        run: git clone --depth 1 https://github.com/alpibrusl/lex-os /tmp/lex-os
+        # Temporarily pinned to the branch carrying the deterministic-cgroup
+        # jailer fix; back to main once lex-os merges it.
+        run: git clone --depth 1 -b claude/soft-loom-lex-os-integration-a2502u https://github.com/alpibrusl/lex-os /tmp/lex-os
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl

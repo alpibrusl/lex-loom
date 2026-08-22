@@ -1152,7 +1152,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
   let __reg := tenant.register(cfg.db, cfg.id, cfg.request, "")
   let __ti := tr.trail(cfg.db, cfg.id, "sprint_started", str.join(["{\"request\":", jv.stringify(JStr(cfg.request)), ",\"request_len\":", int.to_str(str.len(cfg.request)), "}"], ""))
   let __tm := tr.trail(cfg.db, cfg.id, "sprint_manifest", manifests.sprint_manifest_json(cfg.id))
-  let llog_opt := match ltrail.open(str.concat(cfg.id, "-trail.db")) {
+  let llog_opt := match ltrail.open(ltrail.trail_db_path(cfg.id)) {
     Err(_) => None,
     Ok(llog) => {
       let __lt := ltrail.sprint_started(llog, cfg.id, cfg.request, None)
@@ -1264,6 +1264,7 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         None => (),
         Some(log) => {
           let __e := ltrail.sprint_complete(log, cfg.id, overall_ok, fully_sealed, demo_ref, ltrail.latest_id(log))
+          let __x := ltrail.export_jsonl(log, ltrail.trail_export_path(cfg.id))
           ()
         },
       }

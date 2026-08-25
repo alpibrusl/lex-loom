@@ -13,10 +13,17 @@
 #      guessed split — the fallback is the exact pre-#94 behavior, so an
 #      unpriced model degrades to the historical estimate rather than to
 #      silence or to invented precision.
-#   3. LOCAL MODELS ARE FREE. Ollama-served models (qwen3-coder, gemma4,
-#      devstral) cost no API dollars; pricing them at 0 keeps the ledger
-#      honest — electricity is not API spend, and pretending otherwise
+#   3. LOCAL MODELS ARE FREE. Ollama-served models (qwen3*, muse-glimmer,
+#      gemma4, devstral) cost no API dollars; pricing them at 0 keeps the
+#      ledger honest — electricity is not API spend, and pretending otherwise
 #      would let a budget envelope "exhaust" on money nobody spent.
+#
+#      This is the table's sharp edge: matching is by NAME, so a local model
+#      whose name is not listed silently takes the unknown-model fallback and
+#      bills 30¢/1k of spend that never happened — which, with GOV2 enforcing
+#      envelopes at dispatch, refuses nodes and stops companies on imaginary
+#      money. `qwen3-coder` was widened to `qwen3` for exactly that reason
+#      when qwen3.8 arrived. Adding a local model means adding it here.
 #
 # Rates drift. This table is the one place to update them; entries match by
 # model-name prefix, first match wins.
@@ -37,7 +44,7 @@ import "lex-orm/src/query" as ormq
 type Rate = { prefix :: Str, in_mc_per_1k :: Int, out_mc_per_1k :: Int }
 
 fn rate_table() -> List[Rate] {
-  [{ prefix: "claude-haiku", in_mc_per_1k: 100, out_mc_per_1k: 500 }, { prefix: "claude-sonnet", in_mc_per_1k: 300, out_mc_per_1k: 1500 }, { prefix: "claude-opus", in_mc_per_1k: 1500, out_mc_per_1k: 7500 }, { prefix: "qwen3-coder", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "gemma4", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "devstral", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "proc:", in_mc_per_1k: 0, out_mc_per_1k: 0 }]
+  [{ prefix: "claude-haiku", in_mc_per_1k: 100, out_mc_per_1k: 500 }, { prefix: "claude-sonnet", in_mc_per_1k: 300, out_mc_per_1k: 1500 }, { prefix: "claude-opus", in_mc_per_1k: 1500, out_mc_per_1k: 7500 }, { prefix: "qwen3", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "muse-glimmer", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "gemma4", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "devstral", in_mc_per_1k: 0, out_mc_per_1k: 0 }, { prefix: "proc:", in_mc_per_1k: 0, out_mc_per_1k: 0 }]
 }
 
 # The pre-#94 blended guess, kept as the unknown-model fallback: 30¢ per 1k
@@ -68,6 +75,8 @@ fn price_cents(model :: Str, prompt_tokens :: Int, completion_tokens :: Int, tot
     price_cents("claude-haiku-4-5-20251001", 10000, 2000, 12000) => 2,
     price_cents("claude-sonnet-5", 10000, 2000, 12000) => 6,
     price_cents("qwen3-coder:30b", 100000, 20000, 120000) => 0,
+    price_cents("qwen3.8:27b-mlx", 100000, 20000, 120000) => 0,
+    price_cents("muse-glimmer:30b-mlx", 100000, 20000, 120000) => 0,
     price_cents("mystery-model", 0, 0, 10000) => 300,
     price_cents("", 0, 0, 1000) => 30
   }

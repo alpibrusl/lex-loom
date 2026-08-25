@@ -10,7 +10,7 @@ implementation quality, QA pass rates, and token usage.
 ```bash
 cd agents/lex-loom
 
-# With local Ollama (qwen3-coder:30b via LiteLLM proxy):
+# With local Ollama (qwen3.8:27b-mlx via LiteLLM proxy):
 cd litellm && docker compose up -d && cd ..
 docker compose up -d --build
 
@@ -40,13 +40,13 @@ export LOOM_SERVER=https://loom.lexlang.org
 ### 4. Run sprint 1 (portfolio static site)
 
 ```bash
-MODEL=qwen3-coder:30b ./tests/run-tasks.sh tests/tasks/portfolio-sprint-1.json
+MODEL=qwen3.8:27b-mlx ./tests/run-tasks.sh tests/tasks/portfolio-sprint-1.json
 ```
 
 ### 5. Run all sprints
 
 ```bash
-MODEL=qwen3-coder:30b ./tests/run-tasks.sh tests/tasks/portfolio-sprint-*.json
+MODEL=qwen3.8:27b-mlx ./tests/run-tasks.sh tests/tasks/portfolio-sprint-*.json
 ```
 
 ## What each sprint builds
@@ -92,5 +92,5 @@ LOOM_RUNNER_TOKEN=<token> bin/loom-publish agents/portfolio.yaml
 | `LOOM_URL` | `http://localhost:8880` | Local loom server |
 | `LOOM_SERVER` | `https://loom.lexlang.org` | loom-cloud URL |
 | `LOOM_RUNNER_TOKEN` | (unset) | Runner token; enables cloud upload + agent publish |
-| `MODEL` | `qwen3-coder:30b` | Model passed in sprint request |
+| `MODEL` | `qwen3.8:27b-mlx` | Model passed in sprint request |
 | `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy for local models |

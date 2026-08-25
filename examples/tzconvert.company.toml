@@ -11,7 +11,7 @@ mission = "Build tzconvert: a paid, hosted micro-API for developers who need to 
 
 [stack]
 path  = "python-fastapi"      # [enforced] → skeleton + (later) tech-specialist agents; MUST be a vetted path under paths/
-model = "qwen3-coder:30b"     # [enforced] → MODEL (OpenCode quota exhausted ~48h; using local Ollama)
+model = "qwen3.8:27b-mlx"     # [enforced] → MODEL (OpenCode quota exhausted ~48h; using local Ollama)
 storage = "none"              # [declared-intent] informs skeleton — no persistent store needed, pure conversion
 
 [infra]

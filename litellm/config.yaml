@@ -34,9 +34,9 @@ model_list:
   # From Docker: api_base uses host.docker.internal (add extra_hosts in compose).
   # From host: set OLLAMA_HOST=http://localhost:11434 or leave default.
   #
-  # Recommended for code tasks: qwen3-coder:30b
-  #   ollama pull qwen3-coder:30b
-  #   LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b lex run src/main.lex
+  # Default local model: qwen3.8:27b-mlx
+  #   ollama pull qwen3.8:27b-mlx
+  #   LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3.8:27b-mlx lex run src/main.lex
   #
   # NOTE on thinking models (gemma4:26b, deepseek-r1):
   #   These models spend 500-700 tokens on chain-of-thought BEFORE producing output.
@@ -54,11 +54,6 @@ model_list:
     litellm_params:
       model: ollama/muse-glimmer:30b-mlx
       api_base: os.environ/OLLAMA_BASE_URL
-
-  - model_name: qwen3-coder:30b
-    litellm_params:
-      model: ollama/qwen3-coder:30b
-      api_base: http://host.docker.internal:11434
 
   - model_name: devstral-small-2:latest
     litellm_params:

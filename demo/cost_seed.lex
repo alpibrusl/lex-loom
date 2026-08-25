@@ -134,7 +134,7 @@ fn usage_cmd() -> [env, io, sql, fs_read, fs_write, time] Unit {
     Ok(db) => {
       let __u1 := seed_usage(db, str.concat(sid, "#pm"), "claude-haiku-4-5-20251001", 10000, 2000, 12000)
       let __u2 := seed_usage(db, str.concat(sid, "#build"), "claude-sonnet-5", 10000, 2000, 12000)
-      let __u3 := seed_usage(db, str.concat(sid, "#qa"), "qwen3-coder:30b", 50000, 5000, 55000)
+      let __u3 := seed_usage(db, str.concat(sid, "#qa"), "qwen3.8:27b-mlx", 50000, 5000, 55000)
       io.print(str.join(["[cost-seed] ", sid, ": 3 real usage readings recorded (haiku 2c + sonnet 6c + local 0c)"], ""))
     },
   }

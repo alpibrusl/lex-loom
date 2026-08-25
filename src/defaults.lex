@@ -10,9 +10,9 @@
 # The default only matters for bare invocations — every bootstrapped company
 # carries its model in company.toml, every enqueued node-job carries the
 # sprint's model in its payload, and the MODEL / OLLAMA_MODEL environment
-# variables always override. The value follows the README's recommendation
-# for local runs (best tool-calling reliability under loom's 10+-tool
-# schemas; see "With Ollama via LiteLLM").
+# variables always override. The value is the current local recommendation
+# (see the README's model table) — it must name a model that actually exists,
+# since a bare invocation has nothing else to fall back to.
 
 import "std.env" as env
 
@@ -31,10 +31,10 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
 
 fn model() -> Str
   examples {
-    model() => "qwen3-coder:30b"
+    model() => "qwen3.8:27b-mlx"
   }
 {
-  "qwen3-coder:30b"
+  "qwen3.8:27b-mlx"
 }
 
 # The ONE resolution chain for a bare invocation's model: MODEL, then the

@@ -11,7 +11,7 @@
 #
 # Run:
 #   DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs examples/demo_expand.lex demo_depth_cap
-#   MODEL=qwen3-coder:30b DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs examples/demo_expand.lex demo_live_child
+#   MODEL=qwen3.8:27b-mlx DB_PATH=/tmp/demo-expand.db lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs examples/demo_expand.lex demo_live_child
 
 import "std.env" as env
 
@@ -94,7 +94,7 @@ fn demo_live_child() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     Err(e) => io.print(str.concat("FATAL: ", e)),
     Ok(db) => {
       let __seed := pool_seed.seed(db)
-      let cfg := { id: "demo-live", request: "Build a tiny math utility", model: get_env("MODEL", "qwen3-coder:30b"), db: db, api_calls_max: 60, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
+      let cfg := { id: "demo-live", request: "Build a tiny math utility", model: get_env("MODEL", "qwen3.8:27b-mlx"), db: db, api_calls_max: 60, roster: cast.empty_roster(), trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
       let node := { id: "math_feature", role: "build", gate: "spec json", expand: Some("Write a pure Lex function add(a :: Int, b :: Int) -> Int that returns a + b, with an examples block."), activate_when: "" }
       let __i := io.print("Invoking an expand node at depth 0. Expect a full child sprint to run and attest.")
       let outcome := orch.invoke_node(node, "", cfg, None)

@@ -50,7 +50,7 @@ if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; t
 fi
 
 : "${COMPANY_ID:=acme}"
-: "${MODEL:=qwen3-coder:30b}"  # keep in sync with src/defaults.lex (the one place the fallback model lives)
+: "${MODEL:=qwen3.8:27b-mlx}"  # keep in sync with src/defaults.lex (the one place the fallback model lives)
 : "${MAX_ITERATIONS:=3}"
 : "${STOP_WHEN:=}"
 : "${MAX_API_CALLS:=200}"

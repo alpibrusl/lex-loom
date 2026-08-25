@@ -102,9 +102,9 @@ LiteLLM gives cleaner OpenAI-compatible tool calling over Ollama than the native
 
 ```bash
 # 1. Pull the recommended local model
-ollama pull qwen3-coder:30b
+ollama pull qwen3.8:27b-mlx
 
-# 2. Start the LiteLLM proxy (includes qwen3-coder:30b and others)
+# 2. Start the LiteLLM proxy (includes qwen3.8:27b-mlx and others)
 cd litellm && docker compose up -d && cd ..
 
 # 3. Build and run lex-loom
@@ -112,7 +112,7 @@ touch .env
 GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
 
 # 4. Run with a local model via the proxy
-LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b \
+LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3.8:27b-mlx \
   docker compose up -d
 ```
 
@@ -120,12 +120,26 @@ The LiteLLM proxy config (`litellm/config.yaml`) includes:
 
 | Model | VRAM | Best for |
 |-------|------|----------|
-| `qwen3-coder:30b` | 45 GB | Code tasks (recommended) |
+| `qwen3.8:27b-mlx` | 18 GB | Default; drives the pipeline, but see the note below |
+| `muse-glimmer:30b-mlx` | 21 GB | General tasks (thinking model) |
 | `devstral-small-2:latest` | ~14 GB | Code tasks, lighter |
 | `gemma4:26b` | 19 GB | General tasks (thinking model — see note below) |
 | `gemma4:latest` | 10 GB | General tasks, lightest local option |
 
-> **Thinking models (gemma4:26b):** These models generate 500–700 chain-of-thought tokens before producing any visible output. They also tend to emit tool calls as plain JSON text rather than using the `tool_calls` wire format, which degrades reliability under the large (10+ tool) schemas used by lex-loom agents. Use `qwen3-coder:30b` or `devstral-small-2` for Lex code generation tasks.
+> **Thinking models and the build agent.** Models that emit chain-of-thought
+> before answering degrade under loom's large (10+ tool) schemas — historically by
+> emitting tool calls as plain JSON text instead of the `tool_calls` wire format.
+>
+> Measured on `bin/smoke-health-sprint.sh` (2026-08-26, one attempt each, via the
+> LiteLLM proxy): **both** `qwen3.8:27b-mlx` and `muse-glimmer:30b-mlx` produce
+> correct `tool_calls`, and both drive PM and Architect cleanly — then **fail at the
+> build node**. qwen3.8 emitted 6970 characters that did not compile and then
+> returned empty output on all three retries; muse-glimmer returned empty output on
+> every attempt including the first, and the sprint ended `[loom] FAILED`.
+>
+> So the local models are fine for the planning roles and are currently **not
+> sufficient for code generation**. Use a cloud model for the build agent until a
+> local one gets through this smoke test.
 
 #### Running without Docker (host-direct)
 
@@ -134,7 +148,7 @@ The LiteLLM proxy config (`litellm/config.yaml`) includes:
 litellm --config litellm/config.yaml --port 4000 &
 
 # Run lex-loom against it
-LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3-coder:30b \
+LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3.8:27b-mlx \
   lex run --max-steps 200000000 \
   --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs \
   src/web/server.lex serve_loom
@@ -147,7 +161,7 @@ The native Ollama adapter is used automatically when no cloud keys or `LITELLM_B
 ```bash
 touch .env
 GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
-OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3-coder:30b \
+OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3.8:27b-mlx \
   docker compose up -d
 ```
 

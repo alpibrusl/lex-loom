@@ -31,7 +31,18 @@ fi
 
 # ── Parse the manifest deterministically (python tomllib → shell assignments).
 # shlex.quote makes every value safe to eval; the manifest is operator-authored.
-eval "$(python3 - "$MANIFEST" <<'PY'
+#
+# The heredoc is written to a temp file rather than piped straight into a
+# `eval "$(python3 - <<'PY' ...)"`. bash 3.2 -- which macOS still ships as
+# /bin/bash -- parses quotes INSIDE a heredoc body when that heredoc sits in a
+# command substitution, so an apostrophe in a Python comment ("company's")
+# desynchronises its quote tracking and the whole script dies with a syntax
+# error ~80 lines later. bash 4+ and CI's Linux bash skip the body correctly,
+# which is why this never showed up in CI. Keeping the heredoc out of $( )
+# sidesteps the bug entirely instead of banning apostrophes below.
+_pytmp="$(mktemp "${TMPDIR:-/tmp}/loom-bootstrap.XXXXXX")"
+trap 'rm -f "$_pytmp"' EXIT
+cat > "$_pytmp" <<'PY'
 import sys, tomllib, shlex
 with open(sys.argv[1], "rb") as f:
     m = tomllib.load(f)
@@ -114,7 +125,7 @@ out = {
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
 PY
-)"
+eval "$(python3 "$_pytmp" "$MANIFEST")"
 
 # ── Warn if the mission names a Python package py_build can't actually use.
 # Found live (pdfx company run, #107): a manifest's mission named

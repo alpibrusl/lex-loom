@@ -50,6 +50,17 @@ model_list:
       model: ollama/qwen3.8:27b-mlx
       api_base: os.environ/OLLAMA_BASE_URL
 
+  # ── OpenCode Zen "Go" subscription (cloud) ────────────────────────────────
+  # OpenAI-compatible: https://opencode.ai/zen/go/v1 (see lex-llm providers.lex).
+  # Flat-rate subscription, so there is no per-token marginal cost to bill.
+  # Needs OPENCODE_API_KEY (~/.credentials/opencode/key) in the proxy's env.
+  - model_name: qwen3.8-max
+    litellm_params:
+      model: openai/qwen3.8-max
+      api_base: https://opencode.ai/zen/go/v1
+      api_key: os.environ/OPENCODE_API_KEY
+      max_tokens: 8000
+
   - model_name: muse-glimmer:30b-mlx
     litellm_params:
       model: ollama/muse-glimmer:30b-mlx

@@ -20,7 +20,7 @@ hosting = "hetzner-cx22"      # [declared-intent] until deploy path exists
 domain  = "tzconvert.dev"     # [declared-intent]
 
 [roles]
-packs = ["engineering", "finance", "legal", "distribution"]   # [declared-intent] NOT yet read by bootstrap-company.sh — recorded here as intent; whether the Architect actually adds finance/legal/distribution nodes depends on the mission text above naming them explicitly (it does)
+packs = ["core", "finance", "governance", "content"]   # [enforced] ORG5 → ROLE_PACKS; run_company_cmd validates against the closed pack registry (core, web, content, finance, governance, research, security) and REFUSES to start on an unknown name. "core" is always staffed; the rest map this company's intent onto real role sets — finance = pricing tiers (finance, monetization_handoff), governance = the ToS/privacy draft (legal, cx), content = distribution (copywriter, seo_specialist, content_creator). No "web" pack: that is fe_build/ux_designer, and this ships a JSON API with no frontend.
 
 [monitoring]
 checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent]

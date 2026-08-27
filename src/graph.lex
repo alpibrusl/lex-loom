@@ -233,6 +233,75 @@ fn validate(g :: SprintGraph) -> Result[Unit, Str]
 }
 
 # ── JSON serialisation ────────────────────────────────────────────────────────
+# Which roles judge work rather than produce it. The Architect writes one
+# graph with a single phase, so without this every QA node runs inside
+# Implementation and its failure simply sinks the sprint -- the QA<->
+# Implementation bounce never gets a chance to send the work back. Note
+# py_qa/ts_qa: matching only the bare "qa" missed the Python and TypeScript
+# judges entirely.
+fn is_qa_role(role :: Str) -> Bool {
+  if role == "qa" {
+    true
+  } else {
+    if role == "py_qa" {
+      true
+    } else {
+      role == "ts_qa"
+    }
+  }
+}
+
+# demo rides with QA: metaspec's qa-dominates-demo rule requires a demo node to
+# have a qa ancestor, so separating them would leave demo unreachable.
+fn belongs_to_qa_phase(role :: Str) -> Bool {
+  if is_qa_role(role) {
+    true
+  } else {
+    role == "demo"
+  }
+}
+
+fn has_qa_node(g :: SprintGraph) -> Bool {
+  list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      is_qa_role(n.role)
+    }
+  })
+}
+
+# Keep only the nodes the predicate selects, plus every edge whose BOTH ends
+# survived -- an edge to a dropped node would fail validate_edge_refs.
+fn subgraph(g :: SprintGraph, keep_qa_half :: Bool, p :: Phase, suffix :: Str) -> SprintGraph {
+  let nodes := list.filter(g.nodes, fn (n :: Node) -> Bool {
+    if keep_qa_half {
+      belongs_to_qa_phase(n.role)
+    } else {
+      not belongs_to_qa_phase(n.role)
+    }
+  })
+  let ids := list.map(nodes, fn (n :: Node) -> Str {
+    n.id
+  })
+  let edges := list.filter(g.edges, fn (e :: Edge) -> Bool {
+    if str_contains(ids, e.from) {
+      str_contains(ids, e.to)
+    } else {
+      false
+    }
+  })
+  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: edges }
+}
+
+fn qa_subgraph(g :: SprintGraph) -> SprintGraph {
+  subgraph(g, true, QA, "-qa")
+}
+
+fn impl_subgraph(g :: SprintGraph) -> SprintGraph {
+  subgraph(g, false, Implementation, "-impl")
+}
+
 fn phase_to_str(p :: Phase) -> Str {
   match p {
     Intake => "Intake",

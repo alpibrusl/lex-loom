@@ -70,7 +70,7 @@ fn test_rates() -> Result[Unit, Str] {
     Err(e) => Err(e),
     Ok(_) => match check("sonnet costs more per token", pricing.price_cents("claude-sonnet-5", 10000, 2000, 12000) == 6) {
       Err(e) => Err(e),
-      Ok(_) => match check("local model is free", pricing.price_cents("qwen3-coder:30b", 100000, 20000, 120000) == 0) {
+      Ok(_) => match check("local model is free", pricing.price_cents("qwen3.8:27b-mlx", 100000, 20000, 120000) == 0) {
         Err(e) => Err(e),
         Ok(_) => match check("unknown model falls back to the flat blended rate", pricing.price_cents("mystery-model", 0, 0, 10000) == 300) {
           Err(e) => Err(e),
@@ -89,7 +89,7 @@ fn test_usage_cost() -> [io, sql, fs_read, fs_write, time, random, crypto] Resul
       let owner := str.concat("acme/iter-1-", crypto.random_str_hex(6))
       let __u1 := seed_usage(db, owner, "claude-haiku-4-5", 10000, 2000, 12000)
       let __u2 := seed_usage(db, str.concat(owner, "#build"), "claude-sonnet-5", 10000, 2000, 12000)
-      let __u3 := seed_usage(db, str.concat(owner, "#qa"), "qwen3-coder:30b", 50000, 5000, 55000)
+      let __u3 := seed_usage(db, str.concat(owner, "#qa"), "qwen3.8:27b-mlx", 50000, 5000, 55000)
       match pricing.usage_cost_cents(db, owner, true) {
         (cents, n) => match check("children included: 3 events priced per model (2+6+0)", cents == 8 and n == 3) {
           Err(e) => Err(e),
@@ -130,7 +130,7 @@ fn test_ledger_includes_children_and_respects_free() -> [io, sql, fs_read, fs_wr
         Err(e) => Err(e),
         Ok(_) => {
           let free_sprint := str.concat("acme/free-", crypto.random_str_hex(6))
-          let __u3 := seed_usage(db, str.concat(free_sprint, "#build"), "qwen3-coder:30b", 90000, 9000, 99000)
+          let __u3 := seed_usage(db, str.concat(free_sprint, "#build"), "qwen3.8:27b-mlx", 90000, 9000, 99000)
           check("a reported-but-free iteration costs 0, not the estimate", company.estimate_iteration_cost_cents(db, free_sprint) == 0)
         },
       }

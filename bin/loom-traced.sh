@@ -3,7 +3,7 @@
 # then link sprint_id → run_id so the run is inspectable/replayable later.
 #
 # Usage:
-#   SPRINT_ID=my-sprint REQUEST='...' MODEL=qwen3-coder:30b bin/loom-traced.sh
+#   SPRINT_ID=my-sprint REQUEST='...' MODEL=qwen3.8:27b-mlx bin/loom-traced.sh
 #
 # Env (same as main.lex run_sprint_cmd): DB_PATH, MODEL, REQUEST, SPRINT_ID,
 #   MAX_API_CALLS, plus any feature flags (e.g. DYNAMIC_DAG=1).

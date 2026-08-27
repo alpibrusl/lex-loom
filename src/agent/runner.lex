@@ -283,11 +283,24 @@ fn is_build_kind(kind :: Str) -> Bool {
 # node fails its `spec json` gate anyway. A tight budget makes that failure
 # CHEAP and FAST, and the node-level retry (max_node_retries) still gives a
 # looping launch fresh attempts. Keep the default for every other role.
+# Build kinds get 40, not 20. A build agent's step budget is consumed by its
+# own repair loop -- write a file, lex_check, read errors, repair -- and a
+# model meeting Lex for the first time also spends steps probing the language
+# (a real run left probe.lex ... probe6.lex in the work dir alongside its
+# actual files). At 20 the node hit the cap on every attempt and returned
+# "[max_steps reached]" with the artifact only recoverable from the work dir,
+# so the sprint failed even though health.lex/health_test.lex/main.lex all
+# compiled. Unlike `launch`, spending steps here is the node doing its job,
+# not a model stuck in a loop.
 fn max_steps_for(kind :: Str) -> Int {
   if kind == "launch" {
     4
   } else {
-    20
+    if is_build_kind(kind) {
+      40
+    } else {
+      20
+    }
   }
 }
 
@@ -355,6 +368,45 @@ fn verify_shell(cmd :: Str, kind :: Str, sprint_id :: Str) -> [proc] Result[Unit
         }
       }
     },
+  }
+}
+
+# A QA node's own work dir is not where the code lives -- work_dir_for maps
+# every non-build kind to the Lex dir, so py_qa would look in the wrong place
+# entirely. Map a QA role back to the build kind whose files it is judging.
+fn suite_kind_for_qa(role :: Str) -> Str {
+  if role == "py_qa" {
+    "py_build"
+  } else {
+    if role == "ts_qa" {
+      "ts_build"
+    } else {
+      "build"
+    }
+  }
+}
+
+# Run the REAL test suite a QA node claims to have passed.
+#
+# `run_code`/`lex_run` evidence only proves that some snippet the agent wrote
+# itself exited 0 -- it says nothing about the project's own tests. Observed
+# live (tzlocal iter-2): evidence read {"ran":true,"passed":true} and the
+# verdict claimed "All 9 tests pass", while pytest on that very work dir
+# reported 1 failed, 8 passed. The iteration sealed anyway. Grounding a PASS
+# now means running what the build actually produced.
+#
+# No test file is not a failure -- there is simply nothing to prove here, and
+# the other gates still cover compilation.
+fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
+  let kind := suite_kind_for_qa(role)
+  if kind == "py_build" {
+    verify_shell("if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else true; fi", kind, sprint_id)
+  } else {
+    if kind == "build" {
+      verify_shell("rc=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; exit $rc", kind, sprint_id)
+    } else {
+      Ok(())
+    }
   }
 }
 

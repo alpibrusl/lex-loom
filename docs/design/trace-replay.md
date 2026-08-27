@@ -16,7 +16,7 @@ Use the wrapper — it runs the sprint under `lex run --trace` and links the
 sprint to the native `run_id`:
 
 ```sh
-SPRINT_ID=my-sprint REQUEST='Build …' MODEL=qwen3-coder:30b bin/loom-traced.sh
+SPRINT_ID=my-sprint REQUEST='Build …' MODEL=qwen3.8:27b-mlx bin/loom-traced.sh
 ```
 
 Under the hood:

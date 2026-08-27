@@ -296,6 +296,10 @@ fn spec_len_gt(n :: Int) -> sp.Spec {
 # TODO(v0.9.13): lex-schema #19 makes jv.parse O(n) (via str.char_at, lex
 # v0.9.13). Once loom's toolchain is on v0.9.13 + that lex-schema, this and the
 # orchestrator's delimiter bounce envelope can revert to plain jv.parse.
+# The verdict is compared case-insensitively. A model that answers "pass"
+# instead of "PASS" is agreeing, not failing, and denying it forever over
+# casing wastes a whole iteration -- observed live (tzlocal2 iter-2), where
+# "verdict is 'pass', expected 'PASS'" sank an otherwise fine node.
 fn extract_verdict(output :: Str) -> Option[Str] {
   let after_key := str.split(output, "\"verdict\"")
   match list.head(list.tail(after_key)) {
@@ -304,6 +308,49 @@ fn extract_verdict(output :: Str) -> Option[Str] {
       let segs := str.split(after, "\"")
       list.head(list.tail(segs))
     },
+  }
+}
+
+# Models routinely wrap a correct JSON answer in prose or a ```json fence,
+# and the raw-output parse then denies a node whose payload was fine. Found
+# live: a launch node denied 4 attempts running with "trailing characters
+# after JSON value" while emitting exactly the object its gate asked for.
+# This narrows the output to its JSON body before parsing -- first a fenced
+# block, else the span from the first '{' to the last '}'. It does not weaken
+# any gate: whatever is recovered must still parse and still carry the
+# required fields.
+fn json_payload(output :: Str) -> Str {
+  let fenced := str.split(output, "```")
+  let candidate := if list.len(fenced) > 2 {
+    match list.head(list.tail(fenced)) {
+      None => output,
+      Some(block) => {
+        let nl := str.split(block, "\n")
+        match list.head(nl) {
+          None => block,
+          Some(first) => if str.contains(first, "{") {
+            block
+          } else {
+            str.join(list.tail(nl), "\n")
+          },
+        }
+      },
+    }
+  } else {
+    output
+  }
+  let opened := str.split(candidate, "{")
+  if list.len(opened) < 2 {
+    str.trim(candidate)
+  } else {
+    let body := str.join(list.tail(opened), "{")
+    let closed := str.split(body, "}")
+    if list.len(closed) < 2 {
+      str.trim(candidate)
+    } else {
+      let inner := str.join(list.reverse(list.tail(list.reverse(closed))), "}")
+      str.join(["{", inner, "}"], "")
+    }
   }
 }
 
@@ -341,13 +388,13 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
             }
           } else {
             if trimmed == "spec json" {
-              match jv.parse(output) {
+              match jv.parse(json_payload(output)) {
                 Ok(_) => GateAllow,
                 Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
               }
             } else {
               if trimmed == "spec json-ok-true" {
-                match jv.parse(output) {
+                match jv.parse(json_payload(output)) {
                   Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
                   Ok(j) => match jv.get_field(j, "ok") {
                     None => GateDeny("JSON output missing field 'ok'"),
@@ -359,7 +406,7 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
               } else {
                 if str.starts_with(trimmed, "spec json-field ") {
                   let field := str.trim(str.slice(trimmed, 16, str.len(trimmed)))
-                  match jv.parse(output) {
+                  match jv.parse(json_payload(output)) {
                     Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
                     Ok(j) => match jv.get_field(j, field) {
                       None => GateDeny(str.join(["JSON output missing field '", field, "'"], "")),
@@ -385,7 +432,7 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                     if trimmed == "spec json-verdict-pass" {
                       match extract_verdict(output) {
                         None => GateDeny("output missing 'verdict' field"),
-                        Some(v) => if v == "PASS" {
+                        Some(v) => if str.to_upper(str.trim(v)) == "PASS" {
                           if str.contains(output, "[MISSING_DEPENDENCY]") {
                             GateDeny("verdict is 'PASS' but the output admits [MISSING_DEPENDENCY] — a run that never exercised the real dependency cannot ground a pass")
                           } else {

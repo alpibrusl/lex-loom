@@ -565,13 +565,19 @@ fn pad2(n :: Int) -> Str {
 }
 
 # Build the condition context from a finished iteration.
+# bounced_count counts "phase_bounced", the event run_qa_with_bounce actually
+# emits. It used to count "node_bounced", which NOTHING in the codebase has
+# ever emitted -- so the number printed in every iteration summary was a
+# structural zero rather than a measurement, and `STOP_WHEN "bounced ge N"`
+# could never fire. Found while verifying the QA bounce: the trail recorded
+# phase_bounced while the summary still said bounced=0.
 fn derive_ctx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, idx :: Int, success :: Bool) -> [sql] IterCtx {
   let verdict := if success {
     "passed"
   } else {
     "failed"
   }
-  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "node_bounced"), spend_cents: get_company_cost_cents(db, company_id) }
+  { idx: idx, last_verdict: verdict, digest_summary: digest_summary(db, sprint_id), accepted_count: count_events(db, sprint_id, "node_accepted"), bounced_count: count_events(db, sprint_id, "phase_bounced"), spend_cents: get_company_cost_cents(db, company_id) }
 }
 
 # ── C5: cross-sprint agent memory ─────────────────────────────────────────────

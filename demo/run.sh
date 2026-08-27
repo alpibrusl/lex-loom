@@ -34,9 +34,9 @@ LOOM_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEMO_DIR="$LOOM_ROOT/demo"
 DB="${DEMO_DB:-$DEMO_DIR/demo.db}"
 LEX="${LEX_BIN:-lex}"
-# Local-first: defaults to Ollama (qwen3-coder:30b). The Build + Scribe agents
+# Local-first: defaults to Ollama (qwen3.8:27b-mlx). The Build + Scribe agents
 # are deterministic proc: scripts, so only PM/Architect/QA/Demo use the model.
-MODEL="${MODEL:-qwen3-coder:30b}"
+MODEL="${MODEL:-qwen3.8:27b-mlx}"
 LAUNCH_PORT="${LAUNCH_PORT:-8090}"
 EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval"
 # JSON parsing in lex-schema is O(n^2); large QA/trail payloads blow the default

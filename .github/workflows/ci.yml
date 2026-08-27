@@ -22,6 +22,12 @@ jobs:
       # scaffolding must stay compilable and canonically formatted.
       - name: Install deps
         run: lex pkg install
+      # Every dependency here is an unpinned git dep, and `lex pkg`'s flat
+      # layout makes pinning one a hard error unless the whole closure pins the
+      # same rev. This makes a move visible instead: upstream commits used to
+      # arrive silently and surface later as unrelated red builds elsewhere.
+      - name: Dependency drift
+        run: bin/check-dep-drift.sh
       - name: Check (strict)
         run: |
           set -euo pipefail

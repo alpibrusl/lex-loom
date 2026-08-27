@@ -296,6 +296,10 @@ fn spec_len_gt(n :: Int) -> sp.Spec {
 # TODO(v0.9.13): lex-schema #19 makes jv.parse O(n) (via str.char_at, lex
 # v0.9.13). Once loom's toolchain is on v0.9.13 + that lex-schema, this and the
 # orchestrator's delimiter bounce envelope can revert to plain jv.parse.
+# The verdict is compared case-insensitively. A model that answers "pass"
+# instead of "PASS" is agreeing, not failing, and denying it forever over
+# casing wastes a whole iteration -- observed live (tzlocal2 iter-2), where
+# "verdict is 'pass', expected 'PASS'" sank an otherwise fine node.
 fn extract_verdict(output :: Str) -> Option[Str] {
   let after_key := str.split(output, "\"verdict\"")
   match list.head(list.tail(after_key)) {
@@ -428,7 +432,7 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
                     if trimmed == "spec json-verdict-pass" {
                       match extract_verdict(output) {
                         None => GateDeny("output missing 'verdict' field"),
-                        Some(v) => if v == "PASS" {
+                        Some(v) => if str.to_upper(str.trim(v)) == "PASS" {
                           if str.contains(output, "[MISSING_DEPENDENCY]") {
                             GateDeny("verdict is 'PASS' but the output admits [MISSING_DEPENDENCY] — a run that never exercised the real dependency cannot ground a pass")
                           } else {

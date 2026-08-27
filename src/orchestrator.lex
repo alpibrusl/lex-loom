@@ -456,11 +456,15 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                 GateDeny(reason) => {
                   let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
                   let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
-                  if attempt > max_node_retries() {
+                  if verdict_fail_is_final(n.gate, output) {
                     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
                   } else {
-                    let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                    invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
+                    if attempt > max_node_retries() {
+                      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
+                    } else {
+                      let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                      invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
+                    }
                   }
                 },
                 GateAllow => match evaluate_gate(n.gate, output) {
@@ -484,7 +488,14 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                           Some(v) => v == "PASS",
                           None => false,
                         }
-                        runner.verify_json_verdict_evidence(evidence_path, claimed_pass)
+                        match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
+                          Err(e) => Err(e),
+                          Ok(_) => if claimed_pass {
+                            runner.verify_verdict_suite(n.role, cfg.id)
+                          } else {
+                            Ok(())
+                          },
+                        }
                       } else {
                         runner.verify_build_compiles(n.role, cfg.id)
                       }
@@ -559,6 +570,36 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
 # ── Transition review (intake) ────────────────────────────────────────────────
 # Opt-in (cfg.review_transitions). Before a node works, its agent assesses
 # whether the handed-in input is sufficient; if not, the inadequate handoff is
+# True when a verdict gate was denied because the judge really said FAIL, as
+# opposed to returning something unparseable.
+#
+# Callers must NOT retry the node in the first case. Retrying re-asks the same
+# judge about an artifact that did not change, and the feedback it receives is
+# the denial reason itself -- "verdict is 'FAIL', expected 'PASS'" -- which
+# names the answer the gate is looking for. Observed live (tzlocal iter-2):
+# attempt 1 correctly identified a hardcoded expected value that was wrong,
+# was denied for saying so, and attempt 2 returned PASS on the very same code.
+# The iteration sealed with a suite that really failed 1 of 9. Failing the node
+# instead hands it to run_qa_with_bounce, which sends the work back to
+# Implementation -- the only actor that can actually make the tests pass.
+#
+# The second case is different: the artifact may be fine and only the reply
+# shape was wrong, so that is still worth another attempt from the same node.
+#
+# Only an explicit FAIL is final. Any other unexpected verdict value is treated
+# as a formatting slip and stays retryable -- being final is a judgement about
+# the ARTIFACT, and only the word FAIL actually asserts anything about it.
+fn verdict_fail_is_final(gate :: Str, output :: Str) -> Bool {
+  if gates.is_json_verdict_pass(gate) {
+    match gates.extract_verdict(output) {
+      Some(v) => str.to_upper(str.trim(v)) == "FAIL",
+      None => false,
+    }
+  } else {
+    false
+  }
+}
+
 # bounced back to the node that PRODUCED it, which revises, and the receiving
 # node re-assesses the revised input. Bounded by max_transition_rounds.
 fn max_transition_rounds() -> Int {

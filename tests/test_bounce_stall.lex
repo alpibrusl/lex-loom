@@ -54,8 +54,69 @@ fn test_unchanged_artifact_is_stalled_even_with_different_wording() -> Result[Un
   }
 }
 
+# Found live (tzlocal iter-2): a py-qa node returned a correct FAIL naming a
+# real bug, was denied by its own gate ("verdict is 'FAIL', expected 'PASS'"),
+# and was RETRIED against the identical artifact. The second attempt returned
+# PASS and the iteration sealed with a suite that genuinely failed 1 of 9.
+# Retrying a judge that already gave a well-formed FAIL can only succeed if the
+# model recants, so the node must fail and let the QA<->Implementation bounce
+# send the work back to whoever can actually fix the code.
+fn test_well_formed_fail_is_final() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"FAIL\",\"reason\":\"one test really fails\"}") {
+    Ok(())
+  } else {
+    Err("a well-formed FAIL must be final, not retried against the same artifact")
+  }
+}
+
+# A malformed verdict is a different failure: the artifact may be fine and only
+# the reply shape was wrong, so the same node should get another attempt.
+fn test_malformed_verdict_is_retryable() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "I could not produce JSON this time.") {
+    Err("an unparseable verdict is a formatting failure and should still be retryable")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_pass_verdict_is_not_final_failure() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"PASS\"}") {
+    Err("a PASS verdict is not a final failure")
+  } else {
+    Ok(())
+  }
+}
+
+# Non-verdict gates keep their existing retry behaviour untouched.
+fn test_other_gates_are_unaffected() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec compiles", "{\"verdict\":\"FAIL\"}") {
+    Err("only json-verdict-pass gates should take the final-failure path")
+  } else {
+    Ok(())
+  }
+}
+
+# A verdict value that is neither PASS nor FAIL asserts nothing about the
+# artifact, so it is a formatting slip and must stay retryable. Being final is
+# a claim about the CODE, and only the word FAIL makes that claim.
+fn test_unexpected_verdict_value_is_retryable() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"inconclusive\"}") {
+    Err("only an explicit FAIL should be final; an odd verdict value is a formatting slip")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_lowercase_fail_is_still_final() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"fail\"}") {
+    Ok(())
+  } else {
+    Err("casing must not let a real FAIL slip through as retryable")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final()]
 }
 
 fn run_all() -> Unit {

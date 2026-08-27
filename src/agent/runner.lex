@@ -371,6 +371,45 @@ fn verify_shell(cmd :: Str, kind :: Str, sprint_id :: Str) -> [proc] Result[Unit
   }
 }
 
+# A QA node's own work dir is not where the code lives -- work_dir_for maps
+# every non-build kind to the Lex dir, so py_qa would look in the wrong place
+# entirely. Map a QA role back to the build kind whose files it is judging.
+fn suite_kind_for_qa(role :: Str) -> Str {
+  if role == "py_qa" {
+    "py_build"
+  } else {
+    if role == "ts_qa" {
+      "ts_build"
+    } else {
+      "build"
+    }
+  }
+}
+
+# Run the REAL test suite a QA node claims to have passed.
+#
+# `run_code`/`lex_run` evidence only proves that some snippet the agent wrote
+# itself exited 0 -- it says nothing about the project's own tests. Observed
+# live (tzlocal iter-2): evidence read {"ran":true,"passed":true} and the
+# verdict claimed "All 9 tests pass", while pytest on that very work dir
+# reported 1 failed, 8 passed. The iteration sealed anyway. Grounding a PASS
+# now means running what the build actually produced.
+#
+# No test file is not a failure -- there is simply nothing to prove here, and
+# the other gates still cover compilation.
+fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
+  let kind := suite_kind_for_qa(role)
+  if kind == "py_build" {
+    verify_shell("if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else true; fi", kind, sprint_id)
+  } else {
+    if kind == "build" {
+      verify_shell("rc=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; exit $rc", kind, sprint_id)
+    } else {
+      Ok(())
+    }
+  }
+}
+
 # `spec sh` for a NON-build role (devops, security, docs, finance, legal, ...).
 # verify_shell above only makes sense for build/py_build: those roles' tools
 # (lex_check/py_check) actually persist files to work_dir_for(kind) across the

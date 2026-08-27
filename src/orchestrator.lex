@@ -1011,6 +1011,14 @@ fn bounce_stalled(qa_denial :: Str, prior_denial :: Str, new_impl_ref :: Str, pr
   }
 }
 
+# The Architect emits ONE graph carrying a single phase, so its QA nodes used
+# to execute inside Implementation and this bounce was reachable only when the
+# Architect FORGOT to include QA at all (the synthetic fallback). When it did
+# include one -- the common case -- the old code took `{ qa: impl_result, impl:
+# impl_result }` and never bounced: a QA failure just sank the sprint, with the
+# builder never told. Observed live (tzlocal2): every iteration ended
+# bounced=0. The graph is now split into an Implementation half and a QA half
+# so a real QA failure sends the work back to whoever can fix it.
 fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
   run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_ref, task_input, cfg, bounce, "", impl_ref)
 }
@@ -1228,20 +1236,20 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       }
       let __tph2 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Design\",\"to\":\"Implementation\"}")
       let __tpm2 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"Implementation\",\"grant\":\"", manifests.grant_summary_for_phase("Implementation"), "\"}"], ""))
-      let impl_result0 := run_phase(sprint_graph, graph.Implementation, design_ref, [], cfg)
+      let impl_graph := graph.impl_subgraph(sprint_graph)
+      let impl_result0 := run_phase(impl_graph, graph.Implementation, design_ref, [], cfg)
       let impl_ref0 := first_accepted_artifact(impl_result0.outcomes)
-      let ext := run_extensions(sprint_graph, impl_result0, impl_ref0, cfg, 1)
+      let ext := run_extensions(impl_graph, impl_result0, impl_ref0, cfg, 1)
       let sprint_graph := ext.graph
       let impl_result := ext.impl_result
       let impl_ref := ext.ref
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
       let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
-      let qa_demo_nodes := qa_demo_role_nodes(sprint_graph)
-      let qa_impl_result := if list.is_empty(qa_demo_nodes) {
-        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
-        run_qa_with_bounce(synthetic_graph, sprint_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
+      let qa_impl_result := if graph.has_qa_node(sprint_graph) {
+        run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       } else {
-        { qa: impl_result, impl: impl_result }
+        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        run_qa_with_bounce(synthetic_graph, impl_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       }
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl

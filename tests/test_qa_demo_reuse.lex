@@ -9,10 +9,17 @@
 # doubled its build+qa+launch+demo+scribe cost, with no denial or bounce
 # ever recorded to explain it.
 #
-# qa_demo_role_nodes(g) is the pure detection orchestrator.run_sprint now
-# checks BEFORE deciding whether to reuse impl_result directly (no re-run)
-# or fall back to the synthetic qa+demo pair (only when the graph truly has
-# no embedded gate to reuse).
+# That was fixed by reusing impl_result instead of re-running -- but reuse
+# meant the QA<->Implementation bounce became unreachable for exactly those
+# graphs, so a QA failure sank the sprint without the builder ever being told
+# (observed live in tzlocal2: every iteration ended bounced=0).
+#
+# run_sprint now SPLITS the Architect's graph instead: graph.impl_subgraph
+# runs in Implementation, graph.qa_subgraph runs in QA with the bounce
+# available. Each node still executes exactly once per round -- the split is
+# a partition, which is what keeps the original double-execution bug fixed --
+# and the tests below pin that partition. qa_demo_role_nodes is retained as
+# the pure detector this file already covers.
 
 import "std.list" as list
 
@@ -71,8 +78,69 @@ fn test_bare_build_graph_has_none() -> Result[Unit, Str] {
   }
 }
 
+# The partition is what keeps the original double-execution bug dead: every
+# node must land in exactly ONE half, so no node can run twice per round.
+fn test_split_is_a_partition() -> Result[Unit, Str] {
+  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let impl_n := list.len(graph.impl_subgraph(g).nodes)
+  let qa_n := list.len(graph.qa_subgraph(g).nodes)
+  if impl_n + qa_n == list.len(g.nodes) {
+    if impl_n == 1 {
+      Ok(())
+    } else {
+      Err("the build node alone belongs to the Implementation half")
+    }
+  } else {
+    Err("split must be a partition -- a node in both halves would run twice, which is the bug this file exists for")
+  }
+}
+
+# An edge whose other end was filtered out must be dropped, or the subgraph
+# fails validate_edge_refs and the phase cannot run at all.
+fn test_split_drops_edges_that_cross_the_halves() -> Result[Unit, Str] {
+  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
+  if list.is_empty(graph.qa_subgraph(g).edges) {
+    if list.is_empty(graph.impl_subgraph(g).edges) {
+      Ok(())
+    } else {
+      Err("the b->q edge crosses the halves and must not survive in the impl half")
+    }
+  } else {
+    Err("the b->q edge crosses the halves and must not survive in the qa half")
+  }
+}
+
+# py_qa and ts_qa are QA. Matching only the bare "qa" is what let a Python
+# sprint's judge run inside Implementation.
+fn test_language_specific_qa_roles_are_qa() -> Result[Unit, Str] {
+  if graph.is_qa_role("py_qa") {
+    if graph.is_qa_role("ts_qa") {
+      if graph.is_qa_role("py_build") {
+        Err("a build role must not be treated as QA")
+      } else {
+        Ok(())
+      }
+    } else {
+      Err("ts_qa is a QA role")
+    }
+  } else {
+    Err("py_qa is a QA role -- missing this ran the Python judge inside Implementation")
+  }
+}
+
+# A graph with a demo node but no judge must still take the synthetic path:
+# demo alone is not a gate, and treating it as one is what disabled bouncing.
+fn test_demo_alone_is_not_a_qa_node() -> Result[Unit, Str] {
+  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }
+  if graph.has_qa_node(g) {
+    Err("a demo node is not a judge -- counting it as one is what left real QA failures unbounced")
+  } else {
+    Ok(())
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none()]
+  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none(), test_split_is_a_partition(), test_split_drops_edges_that_cross_the_halves(), test_language_specific_qa_roles_are_qa(), test_demo_alone_is_not_a_qa_node()]
 }
 
 fn run_all() -> Unit {

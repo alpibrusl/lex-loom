@@ -180,6 +180,101 @@ fn role_is_known(role :: Str) -> Bool {
   })
 }
 
+# ── Rule 13: a QA node must speak the same language as the build it judges ───
+#
+# Found live (tzconvert reliability baseline): the Architect built a graph
+# pairing `py_build-2` (role py_build, wrote Python via py_check) with a node
+# of role `qa` -- the LEX judge. It then ran `lex check` sixty times against
+# Python source, could never ground a verdict, and burned every attempt. The
+# Architect's own prompt states the pattern (py_build -> py_qa, ts_build ->
+# ts_qa), and py_qa exists, is in the always-staffed core pack, and has its
+# own run_code tool -- nothing simply enforced the pairing, so a wrong pick
+# was invisible until QA had already spent the sprint.
+#
+# The rule is deliberately narrow: it fires only when a graph contains builds
+# of exactly one language and a QA node of a DIFFERENT one. A graph with no
+# build, or with builds in several languages (the documented DUAL LAUNCH
+# pattern), is left alone -- there the pairing is genuinely ambiguous and this
+# check has no business guessing.
+fn qa_kind_for_build(build_role :: Str) -> Str {
+  if build_role == "py_build" {
+    "py_qa"
+  } else {
+    if build_role == "ts_build" {
+      "ts_qa"
+    } else {
+      "qa"
+    }
+  }
+}
+
+fn is_qa_role_kind(role :: Str) -> Bool {
+  if role == "qa" {
+    true
+  } else {
+    if role == "py_qa" {
+      true
+    } else {
+      role == "ts_qa"
+    }
+  }
+}
+
+fn build_roles_in(g :: graph.SprintGraph) -> List[Str] {
+  list.fold(g.nodes, [], fn (acc :: List[Str], n :: graph.Node) -> List[Str] {
+    if n.role == "build" {
+      if graph.str_contains(acc, n.role) {
+        acc
+      } else {
+        list.concat(acc, [n.role])
+      }
+    } else {
+      if n.role == "py_build" {
+        if graph.str_contains(acc, n.role) {
+          acc
+        } else {
+          list.concat(acc, [n.role])
+        }
+      } else {
+        if n.role == "ts_build" {
+          if graph.str_contains(acc, n.role) {
+            acc
+          } else {
+            list.concat(acc, [n.role])
+          }
+        } else {
+          acc
+        }
+      }
+    }
+  })
+}
+
+fn rule_qa_matches_build_language(g :: graph.SprintGraph) -> List[Violation] {
+  let builds := build_roles_in(g)
+  if list.len(builds) == 1 {
+    match list.head(builds) {
+      None => [],
+      Some(b) => {
+        let want := qa_kind_for_build(b)
+        list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+          if is_qa_role_kind(n.role) {
+            if n.role == want {
+              acc
+            } else {
+              list.concat(acc, [{ rule: "qa-matches-build-language", message: str.join(["node ", n.id, " has role '", n.role, "' but this graph builds with '", b, "' -- use '", want, "', whose tools can actually read that code"], "") }])
+            }
+          } else {
+            acc
+          }
+        })
+      },
+    }
+  } else {
+    []
+  }
+}
+
 fn rule_roles_resolve(g :: graph.SprintGraph) -> List[Violation] {
   list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
     if str.is_empty(n.role) {
@@ -344,7 +439,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

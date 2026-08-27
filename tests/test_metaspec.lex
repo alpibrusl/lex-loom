@@ -234,8 +234,43 @@ fn test_a_genuinely_unknown_role_is_still_rejected() -> Result[Unit, Str] {
   }
 }
 
+# Found live (tzconvert baseline): the Architect paired py_build with a plain
+# `qa` node -- the LEX judge -- which then ran lex_check sixty times against
+# Python source and could never ground a verdict. py_qa exists, is in the
+# always-staffed core pack, and has its own run_code tool; nothing enforced
+# the pairing, so the wrong pick was invisible until QA had spent the sprint.
+fn test_python_build_with_lex_qa_is_rejected() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Err("a Lex qa node judging a Python build must be rejected — lex_check cannot read Python"),
+    Invalid(_) => Ok(()),
+  }
+}
+
+fn test_python_build_with_py_qa_is_accepted() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("the correct pairing must stay valid, got: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.message
+    }), "; "))),
+  }
+}
+
+# A graph building in BOTH languages is the documented DUAL LAUNCH pattern.
+# The pairing is genuinely ambiguous there, so the rule must not guess.
+fn test_multi_language_graph_is_left_alone() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b1", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b2", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b1", to: "q", handoff: "schema {}" }, { from: "b2", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("a dual-language graph must not trip this rule, got: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.message
+    }), "; "))),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone()]
 }
 
 fn run_all() -> Unit {

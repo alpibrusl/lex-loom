@@ -401,6 +401,14 @@ fn annotate_missing_node_dependency(combined :: Str) -> Str {
 # applies; a bare .ts is parsed as CommonJS and every annotation is a bogus
 # SyntaxError) and runs it under a 30s alarm. Same evidence-file contract as
 # run_code, so verify_json_verdict_evidence grounds ts_qa verdicts unchanged.
+# The snippet runs in its OWN scratch directory, not the process's cwd.
+# The temp script was always written under /tmp, but it was EXECUTED from
+# wherever loom happened to be launched -- normally the lex-loom checkout -- so
+# any agent-authored code that writes a file (an ordinary thing for a QA
+# snippet to do) landed in the repository. Found live: app.py, server.py,
+# validators.py and test_convert.py from a tzconvert company run sitting
+# untracked in the lex-loom working tree. Giving each run a fresh directory
+# keeps that spill contained and disposable. (Node)
 fn make_run_node_code_tool(evidence_path :: Str) -> t.Tool {
   let params := { title: "RunNodeCode", description: "Execute TypeScript code and assertions with Node (type stripping), return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
   t.define("run_node_code", "Write `code` + `assertions` to a temp .mts file, run it with `node --experimental-strip-types`, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -413,12 +421,13 @@ fn make_run_node_code_tool(evidence_path :: Str) -> t.Tool {
       _ => "",
     }
     let full := str.join([code, "\n\n// --- QA assertions ---\n", assertions], "")
-    match proc.run("bash", ["-c", "mktemp -u /tmp/loom-tsqa.XXXXXXXX"]) {
+    match proc.run("bash", ["-c", "mktemp -d /tmp/loom-tsqa.XXXXXXXX"]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
       Ok(mk) => {
-        let path := str.concat(str.trim(mk.stdout), ".mts")
+        let dir := str.trim(mk.stdout)
+        let path := str.join([dir, "/qa_snippet.mts"], "")
         let __w := io.write(path, full)
-        let cmd := str.join(["perl -e 'alarm shift; exec @ARGV' 30 node --experimental-strip-types ", path, " 2>&1; echo '##EXIT:'$?"], "")
+        let cmd := str.join(["cd ", dir, " && perl -e 'alarm shift; exec @ARGV' 30 node --experimental-strip-types ", path, " 2>&1; echo '##EXIT:'$?"], "")
         match proc.run("bash", ["-c", cmd]) {
           Err(msg) => {
             let __ev := if str.is_empty(evidence_path) {
@@ -497,6 +506,14 @@ fn annotate_missing_dependency(combined :: Str) -> Str {
   }
 }
 
+# The snippet runs in its OWN scratch directory, not the process's cwd.
+# The temp script was always written under /tmp, but it was EXECUTED from
+# wherever loom happened to be launched -- normally the lex-loom checkout -- so
+# any agent-authored code that writes a file (an ordinary thing for a QA
+# snippet to do) landed in the repository. Found live: app.py, server.py,
+# validators.py and test_convert.py from a tzconvert company run sitting
+# untracked in the lex-loom working tree. Giving each run a fresh directory
+# keeps that spill contained and disposable. (Python)
 fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
   let params := { title: "RunCode", description: "Execute Python code and assertions, return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
   t.define("run_code", "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -509,12 +526,13 @@ fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
       _ => "",
     }
     let full := str.join([code, "\n\n# --- QA assertions ---\n", assertions], "")
-    match proc.run("bash", ["-c", "mktemp /tmp/loom-qa.XXXXXXXX"]) {
+    match proc.run("bash", ["-c", "mktemp -d /tmp/loom-qa.XXXXXXXX"]) {
       Err(msg) => Err(e.single("", "proc_error", str.concat("mktemp failed: ", msg))),
       Ok(mk) => {
-        let path := str.trim(mk.stdout)
+        let dir := str.trim(mk.stdout)
+        let path := str.join([dir, "/qa_snippet.py"], "")
         let __w := io.write(path, full)
-        let cmd := str.join(["perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
+        let cmd := str.join(["cd ", dir, " && perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
         match proc.run("bash", ["-c", cmd]) {
           Err(msg) => {
             let __ev := if str.is_empty(evidence_path) {

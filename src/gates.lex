@@ -307,6 +307,49 @@ fn extract_verdict(output :: Str) -> Option[Str] {
   }
 }
 
+# Models routinely wrap a correct JSON answer in prose or a ```json fence,
+# and the raw-output parse then denies a node whose payload was fine. Found
+# live: a launch node denied 4 attempts running with "trailing characters
+# after JSON value" while emitting exactly the object its gate asked for.
+# This narrows the output to its JSON body before parsing -- first a fenced
+# block, else the span from the first '{' to the last '}'. It does not weaken
+# any gate: whatever is recovered must still parse and still carry the
+# required fields.
+fn json_payload(output :: Str) -> Str {
+  let fenced := str.split(output, "```")
+  let candidate := if list.len(fenced) > 2 {
+    match list.head(list.tail(fenced)) {
+      None => output,
+      Some(block) => {
+        let nl := str.split(block, "\n")
+        match list.head(nl) {
+          None => block,
+          Some(first) => if str.contains(first, "{") {
+            block
+          } else {
+            str.join(list.tail(nl), "\n")
+          },
+        }
+      },
+    }
+  } else {
+    output
+  }
+  let opened := str.split(candidate, "{")
+  if list.len(opened) < 2 {
+    str.trim(candidate)
+  } else {
+    let body := str.join(list.tail(opened), "{")
+    let closed := str.split(body, "}")
+    if list.len(closed) < 2 {
+      str.trim(candidate)
+    } else {
+      let inner := str.join(list.reverse(list.tail(list.reverse(closed))), "}")
+      str.join(["{", inner, "}"], "")
+    }
+  }
+}
+
 # ── Gate DSL parser + evaluator ───────────────────────────────────────────────
 fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
   if str.is_empty(gate) {
@@ -341,13 +384,13 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
             }
           } else {
             if trimmed == "spec json" {
-              match jv.parse(output) {
+              match jv.parse(json_payload(output)) {
                 Ok(_) => GateAllow,
                 Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
               }
             } else {
               if trimmed == "spec json-ok-true" {
-                match jv.parse(output) {
+                match jv.parse(json_payload(output)) {
                   Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
                   Ok(j) => match jv.get_field(j, "ok") {
                     None => GateDeny("JSON output missing field 'ok'"),
@@ -359,7 +402,7 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
               } else {
                 if str.starts_with(trimmed, "spec json-field ") {
                   let field := str.trim(str.slice(trimmed, 16, str.len(trimmed)))
-                  match jv.parse(output) {
+                  match jv.parse(json_payload(output)) {
                     Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
                     Ok(j) => match jv.get_field(j, field) {
                       None => GateDeny(str.join(["JSON output missing field '", field, "'"], "")),

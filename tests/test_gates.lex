@@ -222,8 +222,42 @@ fn test_judge_and_sh_not_plain_grounded() -> Result[Unit, Str] {
   }
 }
 
+# Found live (local-model smoke sprint, 2026-08-27): a launch node was denied
+# on 4 consecutive attempts with "trailing characters after JSON value" while
+# emitting exactly the object its gate required -- wrapped in a ```json fence.
+# Gates now narrow the output to its JSON body before parsing.
+fn test_json_gate_accepts_fenced_payload() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "Here you go:\n```json\n{\"ok\": true}\n```\n") {
+    GateAllow => Ok(()),
+    GateDeny(r) => Err(str.concat("a fenced JSON payload should be accepted, got: ", r)),
+  }
+}
+
+fn test_json_gate_accepts_payload_with_trailing_prose() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "{\"ok\": true}\n\nLet me know if you need anything else.") {
+    GateAllow => Ok(()),
+    GateDeny(r) => Err(str.concat("prose after the object should not deny it, got: ", r)),
+  }
+}
+
+# The tolerance must not become a rubber stamp: a payload that really says
+# ok=false still has to be denied.
+fn test_json_gate_still_denies_false_inside_a_fence() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "```json\n{\"ok\": false}\n```") {
+    GateAllow => Err("ok=false must still be denied, fence or not"),
+    GateDeny(_) => Ok(()),
+  }
+}
+
+fn test_json_gate_still_denies_output_with_no_json_at_all() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "I could not complete the task.") {
+    GateAllow => Err("output containing no JSON at all must still be denied"),
+    GateDeny(_) => Ok(()),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded(), test_json_gate_accepts_fenced_payload(), test_json_gate_accepts_payload_with_trailing_prose(), test_json_gate_still_denies_false_inside_a_fence(), test_json_gate_still_denies_output_with_no_json_at_all()]
 }
 
 fn run_all() -> Unit {

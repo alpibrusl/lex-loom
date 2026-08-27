@@ -283,11 +283,24 @@ fn is_build_kind(kind :: Str) -> Bool {
 # node fails its `spec json` gate anyway. A tight budget makes that failure
 # CHEAP and FAST, and the node-level retry (max_node_retries) still gives a
 # looping launch fresh attempts. Keep the default for every other role.
+# Build kinds get 40, not 20. A build agent's step budget is consumed by its
+# own repair loop -- write a file, lex_check, read errors, repair -- and a
+# model meeting Lex for the first time also spends steps probing the language
+# (a real run left probe.lex ... probe6.lex in the work dir alongside its
+# actual files). At 20 the node hit the cap on every attempt and returned
+# "[max_steps reached]" with the artifact only recoverable from the work dir,
+# so the sprint failed even though health.lex/health_test.lex/main.lex all
+# compiled. Unlike `launch`, spending steps here is the node doing its job,
+# not a model stuck in a loop.
 fn max_steps_for(kind :: Str) -> Int {
   if kind == "launch" {
     4
   } else {
-    20
+    if is_build_kind(kind) {
+      40
+    } else {
+      20
+    }
   }
 }
 

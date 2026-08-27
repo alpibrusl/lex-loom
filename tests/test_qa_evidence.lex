@@ -184,8 +184,41 @@ fn test_gates_classifies_json_verdict_pass() -> Result[Unit, Str] {
   }
 }
 
+# Found live (local-model smoke sprint, 2026-08-27): every QA node was denied
+# with "verdict not grounded" while its own verdict JSON was well-formed and
+# lex_check/lex_run had both really run. The evidence file read
+# {"lex_check_ok":false,...,"passed":false} because check_ok was ANDed across
+# the node's whole history -- the first failing check pinned it false and no
+# amount of repair could clear it. The QA prompt tells the agent to "read the
+# JSON errors and repair the code until ok='true'", so the normal path through
+# that prompt guaranteed a denial.
+fn test_repaired_file_clears_its_earlier_failure() -> [io, proc] Result[Unit, Str] {
+  let path := "/tmp/loom-qa-evidence-test-repair.json"
+  let __c := runner.clear_qa_evidence(path)
+  let __bad := lexskill.record_lex_check_evidence(path, "a.lex", false)
+  let __fixed := lexskill.record_lex_check_evidence(path, "a.lex", true)
+  match runner.verify_json_verdict_evidence(path, true) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a file that failed then was repaired must not keep denying a PASS, got: ", e)),
+  }
+}
+
+# The other half of the same rule: clearing one file must NOT clear another
+# that is still broken, or the gate would stop catching real failures.
+fn test_other_file_still_failing_still_denies() -> [io, proc] Result[Unit, Str] {
+  let path := "/tmp/loom-qa-evidence-test-partial.json"
+  let __c := runner.clear_qa_evidence(path)
+  let __a := lexskill.record_lex_check_evidence(path, "a.lex", false)
+  let __b := lexskill.record_lex_check_evidence(path, "b.lex", false)
+  let __fix_a := lexskill.record_lex_check_evidence(path, "a.lex", true)
+  match runner.verify_json_verdict_evidence(path, true) {
+    Ok(_) => Err("b.lex is still failing its check -- a claimed PASS must stay denied"),
+    Err(_) => Ok(()),
+  }
+}
+
 fn suite() -> [env, net, io, proc] List[Result[Unit, Str]] {
-  [test_evidence_path_is_stable_per_sprint_node(), test_evidence_path_sanitizes_slashes(), test_no_evidence_file_denies(), test_evidence_agreeing_with_claim_allows(), test_evidence_contradicting_claim_denies(), test_gates_classifies_json_verdict_pass(), test_lex_check_records_passing_evidence(), test_lex_check_records_failing_evidence(), test_lex_check_then_failing_lex_run_merges_to_overall_fail(), test_for_role_qa_threads_evidence_path_to_its_tools()]
+  [test_evidence_path_is_stable_per_sprint_node(), test_evidence_path_sanitizes_slashes(), test_no_evidence_file_denies(), test_evidence_agreeing_with_claim_allows(), test_evidence_contradicting_claim_denies(), test_gates_classifies_json_verdict_pass(), test_lex_check_records_passing_evidence(), test_lex_check_records_failing_evidence(), test_lex_check_then_failing_lex_run_merges_to_overall_fail(), test_for_role_qa_threads_evidence_path_to_its_tools(), test_repaired_file_clears_its_earlier_failure(), test_other_file_still_failing_still_denies()]
 }
 
 fn run_all() -> [env, net, io, proc] Unit {

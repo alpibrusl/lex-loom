@@ -207,12 +207,24 @@ fn json_bool_field(j :: jv.Json, key :: Str) -> Bool {
   }
 }
 
-fn read_evidence_state(evidence_path :: Str) -> [io] { check_ok :: Bool, run_called :: Bool, run_ok :: Bool } {
+fn json_str_field(j :: jv.Json, key :: Str) -> Str {
+  match jv.get_field(j, key) {
+    Some(JStr(v)) => v,
+    _ => "",
+  }
+}
+
+# `failed` is the comma-joined set of files whose LAST lex_check failed.
+# It replaces the old sticky `check_ok` bool: that ANDed every check in the
+# node's history, so the first failing check pinned passed=false forever and
+# a repaired file could never clear it -- which denied every QA node that
+# followed its own documented "read the errors and repair until ok" loop.
+fn read_evidence_state(evidence_path :: Str) -> [io] { failed :: Str, run_called :: Bool, run_ok :: Bool } {
   match io.read(evidence_path) {
-    Err(_) => { check_ok: true, run_called: false, run_ok: true },
+    Err(_) => { failed: "", run_called: false, run_ok: true },
     Ok(raw) => match jv.parse(raw) {
-      Err(_) => { check_ok: true, run_called: false, run_ok: true },
-      Ok(j) => { check_ok: json_bool_field(j, "lex_check_ok"), run_called: json_bool_field(j, "lex_run_called"), run_ok: json_bool_field(j, "lex_run_ok") },
+      Err(_) => { failed: "", run_called: false, run_ok: true },
+      Ok(j) => { failed: json_str_field(j, "lex_check_failed"), run_called: json_bool_field(j, "lex_run_called"), run_ok: json_bool_field(j, "lex_run_ok") },
     },
   }
 }
@@ -225,7 +237,8 @@ fn bool_json_str(b :: Bool) -> Str {
   }
 }
 
-fn write_evidence_state(evidence_path :: Str, check_ok :: Bool, run_called :: Bool, run_ok :: Bool) -> [io] Unit {
+fn write_evidence_state(evidence_path :: Str, failed :: Str, run_called :: Bool, run_ok :: Bool) -> [io] Unit {
+  let check_ok := str.is_empty(failed)
   let passed := if check_ok {
     if run_called {
       run_ok
@@ -235,27 +248,35 @@ fn write_evidence_state(evidence_path :: Str, check_ok :: Bool, run_called :: Bo
   } else {
     false
   }
-  let json := str.join(["{\"ran\":true,\"lex_check_ok\":", bool_json_str(check_ok), ",\"lex_run_called\":", bool_json_str(run_called), ",\"lex_run_ok\":", bool_json_str(run_ok), ",\"passed\":", bool_json_str(passed), "}"], "")
+  let json := str.join(["{\"ran\":true,\"lex_check_ok\":", bool_json_str(check_ok), ",\"lex_check_failed\":\"", failed, "\",\"lex_run_called\":", bool_json_str(run_called), ",\"lex_run_ok\":", bool_json_str(run_ok), ",\"passed\":", bool_json_str(passed), "}"], "")
   let __w := io.write(evidence_path, json)
   ()
 }
 
 # Called after a real lex_check result: AND this call's ok into the running
 # "did every check so far pass" state, preserving any lex_run result already recorded.
-fn record_lex_check_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
+fn record_lex_check_evidence(evidence_path :: Str, filename :: Str, this_ok :: Bool) -> [io] Unit {
   let s := read_evidence_state(evidence_path)
-  write_evidence_state(evidence_path, if s.check_ok {
-    this_ok
+  let others := list.filter(str.split(s.failed, ","), fn (f :: Str) -> Bool {
+    if str.is_empty(f) {
+      false
+    } else {
+      f != filename
+    }
+  })
+  let updated := if this_ok {
+    others
   } else {
-    false
-  }, s.run_called, s.run_ok)
+    list.concat(others, [filename])
+  }
+  write_evidence_state(evidence_path, str.join(updated, ","), s.run_called, s.run_ok)
 }
 
 # Called after a real lex_run result: records it, preserving the accumulated
 # lex_check state.
 fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
   let s := read_evidence_state(evidence_path)
-  write_evidence_state(evidence_path, s.check_ok, true, this_ok)
+  write_evidence_state(evidence_path, s.failed, true, this_ok)
 }
 
 # Writes `code` to work_dir/<filename> and type-checks it. Returns structured
@@ -291,7 +312,7 @@ fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
             let __ev := if str.is_empty(evidence_path) {
               ()
             } else {
-              record_lex_check_evidence(evidence_path, ok)
+              record_lex_check_evidence(evidence_path, filename, ok)
             }
             Ok(JObj([("ok", JStr(if ok {
               "true"

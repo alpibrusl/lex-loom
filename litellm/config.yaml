@@ -47,7 +47,7 @@ model_list:
 
   - model_name: qwen3.8:27b-mlx
     litellm_params:
-      model: ollama/qwen3.8:27b-mlx
+      model: ollama_chat/qwen3.8:27b-mlx
       api_base: os.environ/OLLAMA_BASE_URL
 
   # ── OpenCode Zen "Go" subscription (cloud) ────────────────────────────────
@@ -63,23 +63,23 @@ model_list:
 
   - model_name: muse-glimmer:30b-mlx
     litellm_params:
-      model: ollama/muse-glimmer:30b-mlx
+      model: ollama_chat/muse-glimmer:30b-mlx
       api_base: os.environ/OLLAMA_BASE_URL
 
   - model_name: devstral-small-2:latest
     litellm_params:
-      model: ollama/devstral-small-2:latest
+      model: ollama_chat/devstral-small-2:latest
       api_base: http://host.docker.internal:11434
 
   - model_name: gemma4:26b
     litellm_params:
-      model: ollama/gemma4:26b
+      model: ollama_chat/gemma4:26b
       api_base: http://host.docker.internal:11434
       merge_reasoning_content_in_choices: true
 
   - model_name: gemma4:latest
     litellm_params:
-      model: ollama/gemma4:latest
+      model: ollama_chat/gemma4:latest
       api_base: http://host.docker.internal:11434
       merge_reasoning_content_in_choices: true
 

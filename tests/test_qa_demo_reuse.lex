@@ -81,10 +81,10 @@ fn test_bare_build_graph_has_none() -> Result[Unit, Str] {
 # The partition is what keeps the original double-execution bug dead: every
 # node must land in exactly ONE half, so no node can run twice per round.
 fn test_split_is_a_partition() -> Result[Unit, Str] {
-  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
-  let impl_n := list.len(graph.impl_subgraph(g).nodes)
-  let qa_n := list.len(graph.qa_subgraph(g).nodes)
-  if impl_n + qa_n == list.len(g.nodes) {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let impl_n := list.len(graph.impl_subgraph(gph).nodes)
+  let qa_n := list.len(graph.qa_subgraph(gph).nodes)
+  if impl_n + qa_n == list.len(gph.nodes) {
     if impl_n == 1 {
       Ok(())
     } else {
@@ -98,9 +98,9 @@ fn test_split_is_a_partition() -> Result[Unit, Str] {
 # An edge whose other end was filtered out must be dropped, or the subgraph
 # fails validate_edge_refs and the phase cannot run at all.
 fn test_split_drops_edges_that_cross_the_halves() -> Result[Unit, Str] {
-  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
-  if list.is_empty(graph.qa_subgraph(g).edges) {
-    if list.is_empty(graph.impl_subgraph(g).edges) {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
+  if list.is_empty(graph.qa_subgraph(gph).edges) {
+    if list.is_empty(graph.impl_subgraph(gph).edges) {
       Ok(())
     } else {
       Err("the b->q edge crosses the halves and must not survive in the impl half")
@@ -131,8 +131,8 @@ fn test_language_specific_qa_roles_are_qa() -> Result[Unit, Str] {
 # A graph with a demo node but no judge must still take the synthetic path:
 # demo alone is not a gate, and treating it as one is what disabled bouncing.
 fn test_demo_alone_is_not_a_qa_node() -> Result[Unit, Str] {
-  let g := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }
-  if graph.has_qa_node(g) {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }
+  if graph.has_qa_node(gph) {
     Err("a demo node is not a judge -- counting it as one is what left real QA failures unbounced")
   } else {
     Ok(())

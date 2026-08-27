@@ -397,13 +397,20 @@ fn suite_kind_for_qa(role :: Str) -> Str {
 #
 # No test file is not a failure -- there is simply nothing to prove here, and
 # the other gates still cover compilation.
+# A gate command here must NEVER exit on its own. verify_shell appends
+# `; rc=$?; echo "##GATE_EXIT:$rc"` after whatever string it is given, so an
+# `exit` inside the command terminates the shell before that marker is printed,
+# and verify_shell can only read the absence of the marker as failure. Found
+# live on the first company-reliability run: the Lex branch ended with
+# `exit $rc`, so every Lex QA PASS was denied "verdict not grounded", the
+# sprint bounced its full 4 rounds, and a 10-minute company run took past 45.
 fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   let kind := suite_kind_for_qa(role)
   if kind == "py_build" {
     verify_shell("if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else true; fi", kind, sprint_id)
   } else {
     if kind == "build" {
-      verify_shell("rc=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; exit $rc", kind, sprint_id)
+      verify_shell("rc=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; [ \"$rc\" -eq 0 ]", kind, sprint_id)
     } else {
       Ok(())
     }

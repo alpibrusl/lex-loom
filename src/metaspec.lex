@@ -6,6 +6,8 @@ import "./graph" as graph
 
 import "./gates" as gates
 
+import "./role_kinds" as role_kinds
+
 # ── Types ────────────────────────────────────────────────────────────────────
 # A single rule violation. Collecting all violations (not short-circuiting)
 # lets the Architect fix everything in one round-trip.
@@ -156,8 +158,16 @@ fn str_role_is(role :: Str, keyword :: Str) -> Bool {
 # Hallucinated/typo'd roles (e.g. "builder", "implement") otherwise pass the
 # metaspec and only fail at runtime with "unknown role" — after the design round
 # is already spent. Catch them up front. Keep in sync with roles.for_role.
+# Every role the Architect may put in a graph, taken from role_kinds -- the
+# same list cast/roles resolve an agent from. This used to be a second,
+# hand-maintained copy and it drifted: `cx` and `research` had real agents,
+# were in the pack registry, and were advertised to the Architect in its own
+# system prompt, but were absent here. The Architect followed its instructions,
+# added a cx node, and metaspec rejected the entire graph -- three attempts,
+# iteration dead at Design, never reaching a build node. Deriving it removes
+# the class of bug rather than the instance.
 fn known_roles() -> List[Str] {
-  ["pm", "architect", "build", "py_build", "ts_build", "fe_build", "qa", "py_qa", "ts_qa", "devops", "deploy", "docs", "security", "ux_designer", "brand_designer", "content_designer", "launch", "demo", "brand_strategist", "copywriter", "content_creator", "seo_specialist", "finance", "legal", "monetization_handoff", "scribe"]
+  role_kinds.known_kinds()
 }
 
 fn role_is_known(role :: Str) -> Bool {

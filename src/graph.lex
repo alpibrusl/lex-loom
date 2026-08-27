@@ -294,10 +294,71 @@ fn subgraph(g :: SprintGraph, keep_qa_half :: Bool, p :: Phase, suffix :: Str) -
   { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: edges }
 }
 
+# Which QA role can actually read what this graph builds. The synthetic QA
+# fallback used to hardcode "qa" -- the Lex judge -- so a Python company whose
+# Architect omitted QA got a judge that ran lex_check against Python and could
+# never ground a verdict. Mixed-language graphs keep the generic judge: there
+# is no single right answer there, and guessing would be worse than the
+# Architect being explicit.
+fn qa_role_for_graph(g :: SprintGraph) -> Str {
+  let py := list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      n.role == "py_build"
+    }
+  })
+  let ts := list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      n.role == "ts_build"
+    }
+  })
+  let lex := list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      n.role == "build"
+    }
+  })
+  if py {
+    if ts {
+      "qa"
+    } else {
+      if lex {
+        "qa"
+      } else {
+        "py_qa"
+      }
+    }
+  } else {
+    if ts {
+      if lex {
+        "qa"
+      } else {
+        "ts_qa"
+      }
+    } else {
+      "qa"
+    }
+  }
+}
+
 fn qa_subgraph(g :: SprintGraph) -> SprintGraph {
   subgraph(g, true, QA, "-qa")
 }
 
+# The implementation half: what the Implementation phase RUNS.
+#
+# Callers must not let this replace the full graph. run_sprint once rebound
+# `sprint_graph` to the extension of THIS half, and since it contains no QA
+# node by construction, has_qa_node was then always false and every sprint fell
+# through to the synthetic QA fallback. Found live: a tzconvert graph that
+# correctly paired py_build-1..3 with py_qa-1..3 had all three py_qa nodes
+# silently discarded, and a Lex judge ran lex_check against Python. The split
+# narrows what Implementation runs; it must never narrow what QA is selected
+# from.
 fn impl_subgraph(g :: SprintGraph) -> SprintGraph {
   subgraph(g, false, Implementation, "-impl")
 }

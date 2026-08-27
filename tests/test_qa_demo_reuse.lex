@@ -139,8 +139,62 @@ fn test_demo_alone_is_not_a_qa_node() -> Result[Unit, Str] {
   }
 }
 
+# Found live (tzconvert baseline, third attempt): the Architect produced a
+# CORRECT graph -- py_build-1..3 each paired with py_qa-1..3 -- and all three
+# py_qa nodes were silently discarded. run_sprint rebound `sprint_graph` to the
+# extension of the implementation-only half, which by construction holds no QA
+# node, so has_qa_node was always false and every sprint fell through to the
+# synthetic fallback. A Lex judge then ran lex_check against Python.
+#
+# The split must narrow what Implementation RUNS without narrowing what QA is
+# SELECTED from. This pins the property directly: a graph whose QA nodes are
+# py_qa must still be detected as having QA.
+fn test_py_qa_nodes_are_detected_as_qa() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
+  if graph.has_qa_node(gph) {
+    if list.len(graph.qa_subgraph(gph).nodes) == 1 {
+      Ok(())
+    } else {
+      Err("the py_qa node must land in the QA half")
+    }
+  } else {
+    Err("a graph with py_qa nodes has QA — missing this discards the Architect's own judges")
+  }
+}
+
+# The implementation half must never be mistaken for the whole graph when
+# deciding whether QA exists: that is exactly the clobber that caused the bug.
+fn test_impl_half_alone_has_no_qa() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [] }
+  if graph.has_qa_node(graph.impl_subgraph(gph)) {
+    Err("the implementation half must not report QA — testing it instead of the full graph is what silently dropped py_qa")
+  } else {
+    Ok(())
+  }
+}
+
+# The synthetic fallback must pick a judge that can read the code.
+fn test_synthetic_qa_role_follows_the_build_language() -> Result[Unit, Str] {
+  let py := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  let lx := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  let mixed := { id: "g", phase: graph.Implementation, nodes: [{ id: "b1", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b2", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  if graph.qa_role_for_graph(py) == "py_qa" {
+    if graph.qa_role_for_graph(lx) == "qa" {
+      if graph.qa_role_for_graph(mixed) == "qa" {
+        Ok(())
+      } else {
+        Err("a mixed-language graph has no single right judge; it must keep the generic one rather than guess")
+      }
+    } else {
+      Err("a Lex build takes the Lex judge")
+    }
+  } else {
+    Err("a Python build must get py_qa — the Lex judge cannot read Python")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none(), test_split_is_a_partition(), test_split_drops_edges_that_cross_the_halves(), test_language_specific_qa_roles_are_qa(), test_demo_alone_is_not_a_qa_node()]
+  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none(), test_split_is_a_partition(), test_split_drops_edges_that_cross_the_halves(), test_language_specific_qa_roles_are_qa(), test_demo_alone_is_not_a_qa_node(), test_py_qa_nodes_are_detected_as_qa(), test_impl_half_alone_has_no_qa(), test_synthetic_qa_role_follows_the_build_language()]
 }
 
 fn run_all() -> Unit {

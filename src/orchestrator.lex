@@ -1240,16 +1240,16 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let impl_result0 := run_phase(impl_graph, graph.Implementation, design_ref, [], cfg)
       let impl_ref0 := first_accepted_artifact(impl_result0.outcomes)
       let ext := run_extensions(impl_graph, impl_result0, impl_ref0, cfg, 1)
-      let sprint_graph := ext.graph
+      let impl_graph_ext := ext.graph
       let impl_result := ext.impl_result
       let impl_ref := ext.ref
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
       let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
       let qa_impl_result := if graph.has_qa_node(sprint_graph) {
-        run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
+        run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph_ext, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       } else {
-        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
-        run_qa_with_bounce(synthetic_graph, impl_graph, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
+        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: graph.qa_role_for_graph(sprint_graph), gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+        run_qa_with_bounce(synthetic_graph, impl_graph_ext, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
       }
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl

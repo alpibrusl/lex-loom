@@ -8,6 +8,8 @@ import "../src/graph" as graph
 
 import "../src/metaspec" as meta
 
+import "../src/role_kinds" as role_kinds
+
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 fn node(id :: Str, role :: Str) -> graph.Node {
   let gate := if role == "build" {
@@ -195,8 +197,45 @@ fn test_expand_build_node_with_shell_gate_is_exempt() -> Result[Unit, Str] {
 }
 
 # ── Suite ─────────────────────────────────────────────────────────────────────
+# Found live (tzconvert reliability baseline): metaspec kept its OWN copy of
+# the role list, and it drifted. `cx` and `research` had real agents, were in
+# the pack registry, and were advertised to the Architect in its system prompt
+# -- but were missing from metaspec's copy. The Architect did as instructed,
+# added a cx node, and the whole graph was rejected: 3 attempts, the iteration
+# dead at Design, no build node ever reached. These pin the two lists together.
+fn test_every_registered_role_kind_is_accepted() -> Result[Unit, Str] {
+  let unknown := list.filter(role_kinds.known_kinds(), fn (k :: Str) -> Bool {
+    not meta.role_is_known(k)
+  })
+  if list.is_empty(unknown) {
+    Ok(())
+  } else {
+    Err(str.concat("metaspec rejects roles that have real agents: ", str.join(unknown, ", ")))
+  }
+}
+
+fn test_cx_and_research_specifically() -> Result[Unit, Str] {
+  if meta.role_is_known("cx") {
+    if meta.role_is_known("research") {
+      Ok(())
+    } else {
+      Err("research has an agent and is advertised to the Architect; rejecting it kills the graph")
+    }
+  } else {
+    Err("cx has an agent and is advertised to the Architect; rejecting it kills the graph")
+  }
+}
+
+fn test_a_genuinely_unknown_role_is_still_rejected() -> Result[Unit, Str] {
+  if meta.role_is_known("wizard") {
+    Err("deriving the list must not make metaspec accept anything")
+  } else {
+    Ok(())
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected()]
 }
 
 fn run_all() -> Unit {

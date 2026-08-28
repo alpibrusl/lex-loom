@@ -78,8 +78,36 @@ fn test_verdict_suite_denies_when_a_test_fails() -> [io, proc] Result[Unit, Str]
   }
 }
 
+# Found live (tzconvert, the first sprint it ever sealed): py_qa reported
+# "11/11 tests pass" while the work dir held exactly one file, main.py. It had
+# written tests inline into run_code, run them in a scratch buffer, and
+# reported them as the project's -- and the sprint sealed success=true with a
+# deliverable containing zero tests, against a mission that explicitly required
+# them. Source without a test file must not ground a claimed PASS.
+fn test_verdict_suite_denies_source_with_no_test_file() -> [io, proc] Result[Unit, Str] {
+  let sid := "verdict-suite-no-tests"
+  let dir := str.concat("/tmp/loom-lex-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir, " && printf 'fn main() -> Int {\\n  1\\n}\\n' > ", dir, "/main.lex"], "")])
+  match runner.verify_verdict_suite("qa", sid) {
+    Ok(_) => Err("a build that produced source but no test file must not ground a PASS — that is how a zero-test deliverable sealed"),
+    Err(_) => Ok(()),
+  }
+}
+
+# An EMPTY work dir is different: nothing was built, so there is genuinely
+# nothing to test, and other gates cover compilation.
+fn test_verdict_suite_allows_an_empty_work_dir() -> [io, proc] Result[Unit, Str] {
+  let sid := "verdict-suite-empty-dir"
+  let dir := str.concat("/tmp/loom-lex-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
+  match runner.verify_verdict_suite("qa", sid) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("an empty work dir has nothing to prove and must not deny, got: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir()]
 }
 
 fn run_all() -> [io, proc] Unit {

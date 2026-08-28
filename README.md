@@ -217,6 +217,32 @@ picture of what a company is beyond the build loop — Distribution, Monetizatio
 (deliberately human-gated), the Operate loop, Strategy, Org, Board, and
 Lifecycle.
 
+### Which model to reach for
+
+**Default to local.** A local model costs nothing, has no quota, and — measured
+here — runs the `/health` company end to end and writes a real FastAPI service
+with a real pytest suite for `tzconvert`. It is slow (a tzconvert run takes
+2–3 hours and ~2M tokens) but it always finishes.
+
+**Reach for a hosted model only where the local one demonstrably fails**, and
+expect the quota to be the binding constraint rather than the price. A single
+mixed batch of three tzconvert runs exhausted the OpenCode Go plan's 5-hour cap
+and then its **weekly** cap, and returned:
+
+```
+pass=0  fail=0  infra=3
+no run reached the model — nothing measured
+```
+
+Three runs, ~3.5 hours of wall clock, and no measurement — because the hosted
+half went away mid-flight. That is the failure this section exists to warn
+about: a hosted model does not degrade, it disappears.
+
+`litellm/config.yaml` now softens that: every hosted route falls back to the
+local model, so a quota-blocked node runs slowly instead of failing, and
+`num_retries` is 0 because retrying a usage-quota 429 spends the same quota it
+is waiting on (measured: 374 failures × 3 upstream calls each).
+
 ### Mixing models per role
 
 Roles differ enormously in how hard their work is, so one model for the whole

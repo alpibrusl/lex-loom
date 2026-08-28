@@ -217,6 +217,39 @@ picture of what a company is beyond the build loop — Distribution, Monetizatio
 (deliberately human-gated), the Operate loop, Strategy, Org, Board, and
 Lifecycle.
 
+### Mixing models per role
+
+Roles differ enormously in how hard their work is, so one model for the whole
+company is usually the wrong trade. Measured on this repo with a local 27B:
+the `/health` company passes 5/5, and on `tzconvert` the same model writes a
+real FastAPI service and a real pytest suite — then gets the timezone
+arithmetic wrong (4 failed, 14 passed) and cannot repair it across a bounce.
+Meanwhile `pm`, `architect`, `demo` and `scribe` — prose work — succeed on it
+consistently.
+
+Paying for a frontier model on every node to fix the build node is waste.
+`[models]` overrides `[stack].model` for named roles only:
+
+```toml
+[stack]
+model = "qwen3.8-chat"        # local via Ollama — the default for every role
+
+[models]
+py_build = "qwen3.8-max"      # hosted via OpenCode, where the hard work is
+py_qa    = "qwen3.8-max"
+```
+
+Equivalently, `MODEL_OVERRIDES="py_build:qwen3.8-max,py_qa:qwen3.8-max"`.
+
+No provider configuration is involved. Everything routes through LiteLLM, so
+a local Ollama model and a hosted OpenCode model differ only by **name** on the
+same base URL — `qwen3.8-chat` resolves to Ollama, `qwen3.8-max` to OpenCode.
+Add both to `litellm/config.yaml` and the mix becomes a routing-table choice
+rather than an architectural one.
+
+A role that is not named keeps the company model, so adding `[models]` never
+changes the behaviour of roles you did not mention.
+
 ### The heartbeat (scheduler daemon)
 
 Run one long-lived process per **workspace** (a directory of

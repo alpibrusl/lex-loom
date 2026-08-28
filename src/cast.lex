@@ -155,8 +155,51 @@ fn empty_roster() -> Roster {
 }
 
 # ── Cast a single node ────────────────────────────────────────────────────────
+# ── Per-role model overrides (MODEL_OVERRIDES) ───────────────────────────────
+#
+# "role:model,role:model" -- e.g. "build:qwen3.8-max,py_build:qwen3.8-max".
+# A role not named here keeps the company model, so the default is unchanged.
+#
+# This exists because the roles differ enormously in how hard their work is.
+# Measured on this repo: a local 27B model runs the /health company 5/5, and
+# on tzconvert it writes a real FastAPI service and a real pytest suite but
+# gets the timezone arithmetic wrong (4 failed, 14 passed) and cannot repair it
+# across a bounce. Meanwhile pm, architect, demo and scribe -- prose work --
+# succeed on it consistently. Paying for a frontier model on every node to fix
+# the build node is waste; paying for it on the build node alone is the whole
+# point.
+#
+# No provider plumbing is needed. Everything routes through LiteLLM, so a
+# local Ollama model and a hosted OpenCode model differ only by NAME on the
+# same base URL: "qwen3.8-chat" resolves to Ollama, "qwen3.8-max" to OpenCode.
+# Mixing is therefore a routing-table question, not an architectural one.
+fn model_for_role(overrides :: Str, role :: Str, default_model :: Str) -> Str {
+  list.fold(str.split(overrides, ","), default_model, fn (acc :: Str, pair :: Str) -> Str {
+    let kv := str.split(str.trim(pair), ":")
+    match list.head(kv) {
+      None => acc,
+      Some(k) => if str.trim(k) == role {
+        match list.head(list.tail(kv)) {
+          None => acc,
+          Some(v) => if str.is_empty(str.trim(v)) {
+            acc
+          } else {
+            str.trim(v)
+          },
+        }
+      } else {
+        acc
+      },
+    }
+  })
+}
+
 fn cast_node(db :: conn.ConnDb, n :: graph.Node, request :: Str, model :: Str, sprint_id :: Str) -> [env, sql, fs_read, fs_write, time, random, crypto] RosterEntry {
   let evidence_path := runner.qa_evidence_path(sprint_id, n.id)
+  let model := model_for_role(match env.get("MODEL_OVERRIDES") {
+    Some(v) => v,
+    None => "",
+  }, n.role, model)
   let candidates := load_pool_for_role(db, n.role)
   let company_id := match list.head(str.split(sprint_id, "/")) {
     Some(cid) => cid,

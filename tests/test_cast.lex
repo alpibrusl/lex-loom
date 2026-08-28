@@ -368,8 +368,52 @@ fn test_grant_report_text_lists_every_node() -> [env, sql, fs_read, fs_write, ti
   }
 }
 
+# Per-role model overrides (MODEL_OVERRIDES). Roles differ enormously in how
+# hard their work is: measured here, a local 27B runs the /health company 5/5
+# and writes a real FastAPI service plus a real pytest suite for tzconvert, but
+# gets the timezone arithmetic wrong and cannot repair it across a bounce --
+# while pm/architect/demo/scribe succeed on it consistently. Paying for a
+# frontier model on every node to fix one is waste.
+fn test_model_override_applies_to_the_named_role() -> Result[Unit, Str] {
+  if cast.model_for_role("build:qwen3.8-max,py_build:qwen3.8-max", "build", "local") == "qwen3.8-max" {
+    Ok(())
+  } else {
+    Err("a named role must take its override")
+  }
+}
+
+fn test_unnamed_role_keeps_the_company_model() -> Result[Unit, Str] {
+  if cast.model_for_role("build:qwen3.8-max", "pm", "local") == "local" {
+    Ok(())
+  } else {
+    Err("a role with no override must keep the company model — the default must not change")
+  }
+}
+
+fn test_empty_overrides_change_nothing() -> Result[Unit, Str] {
+  if cast.model_for_role("", "build", "local") == "local" {
+    Ok(())
+  } else {
+    Err("no overrides means no change")
+  }
+}
+
+# A malformed entry must not silently blank the model — that would send an
+# empty model name to the provider.
+fn test_malformed_entry_falls_back() -> Result[Unit, Str] {
+  if cast.model_for_role("build:", "build", "local") == "local" {
+    if cast.model_for_role("garbage", "build", "local") == "local" {
+      Ok(())
+    } else {
+      Err("an entry with no colon must be ignored")
+    }
+  } else {
+    Err("an empty model value must fall back, never blank the model")
+  }
+}
+
 fn suite() -> [env, random, sql, fs_read, fs_write, time, crypto] List[Result[Unit, Str]] {
-  [test_domain_bonus_matches_tag_in_request(), test_domain_bonus_no_match_is_zero(), test_score_agent_weights_reputation_above_attestation(), test_score_agent_domain_match_beats_generalist_reputation(), test_cast_node_falls_back_when_pool_empty(), test_cast_node_picks_seeded_pool_agent(), test_select_roster_covers_every_node(), test_increment_attestation_raises_count(), test_record_bounce_lowers_count_and_retires_after_three(), test_retired_agent_excluded_from_pool(), test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected(), test_roster_grant_report_uses_default_preset_without_override(), test_roster_grant_report_honors_policy_isolation_override(), test_roster_grant_report_defaults_unoverridden_role(), test_grant_report_text_empty_roster(), test_grant_report_text_lists_every_node()]
+  [test_domain_bonus_matches_tag_in_request(), test_domain_bonus_no_match_is_zero(), test_score_agent_weights_reputation_above_attestation(), test_score_agent_domain_match_beats_generalist_reputation(), test_cast_node_falls_back_when_pool_empty(), test_cast_node_picks_seeded_pool_agent(), test_select_roster_covers_every_node(), test_increment_attestation_raises_count(), test_record_bounce_lowers_count_and_retires_after_three(), test_retired_agent_excluded_from_pool(), test_update_pool_from_sprint_rewards_accepted_and_bounces_rejected(), test_roster_grant_report_uses_default_preset_without_override(), test_roster_grant_report_honors_policy_isolation_override(), test_roster_grant_report_defaults_unoverridden_role(), test_grant_report_text_empty_roster(), test_grant_report_text_lists_every_node(), test_model_override_applies_to_the_named_role(), test_unnamed_role_keeps_the_company_model(), test_empty_overrides_change_nothing(), test_malformed_entry_falls_back()]
 }
 
 fn run_all() -> [io, env, random, sql, fs_read, fs_write, time, crypto] Unit {

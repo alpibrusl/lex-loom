@@ -170,8 +170,51 @@ fn test_unattested_node_is_not_the_producer() -> Result[Unit, Str] {
   }
 }
 
+# Found live (tzk3r1 iter-1, the mixed-model run): py-build-core was denied
+# four times with "build does not compile", exhausted its retries and produced
+# not one file -- and the sprint still sealed success=true, fully_sealed=true,
+# because QA passed. run_qa_with_bounce returned a FABRICATED
+# { outcomes: [], success: true } for Implementation, which run_sprint then used
+# in place of the real phase result. Any sprint could seal with a completely
+# failed build as long as QA passed.
+fn test_failed_impl_node_cannot_report_success() -> Result[Unit, Str] {
+  let outs := [{ node_id: "b", attested: false, sealed: false, artifact: "", reason: "build does not compile" }, { node_id: "d", attested: true, sealed: true, artifact: "h", reason: "" }]
+  if orch.impl_phase_of(outs).success {
+    Err("a phase containing an unattested node must not report success — this is how a failed build sealed a green sprint")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_all_attested_reports_success() -> Result[Unit, Str] {
+  let outs := [{ node_id: "b", attested: true, sealed: true, artifact: "h1", reason: "" }, { node_id: "d", attested: true, sealed: true, artifact: "h2", reason: "" }]
+  if orch.impl_phase_of(outs).success {
+    Ok(())
+  } else {
+    Err("every node attested must report success")
+  }
+}
+
+# The bounce re-runs only the affected subgraph, so its outcome list is partial.
+# Merging must take the fresh result for re-run nodes and KEEP the prior one for
+# untouched nodes — otherwise a node that failed and was never re-run vanishes.
+fn test_merge_keeps_untouched_nodes_and_takes_fresh_ones() -> Result[Unit, Str] {
+  let prior := [{ node_id: "a", attested: false, sealed: false, artifact: "", reason: "failed" }, { node_id: "b", attested: false, sealed: false, artifact: "", reason: "failed" }]
+  let fresh := [{ node_id: "b", attested: true, sealed: true, artifact: "h", reason: "" }]
+  let merged := orch.merge_outcomes(prior, fresh)
+  if list.len(merged) == 2 {
+    if orch.impl_phase_of(merged).success {
+      Err("node 'a' was never re-run and is still failing — the merge must not lose it")
+    } else {
+      Ok(())
+    }
+  } else {
+    Err(str.concat("merge must keep both nodes, got ", int.to_str(list.len(merged))))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones()]
 }
 
 fn run_all() -> Unit {

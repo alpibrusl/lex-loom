@@ -272,8 +272,55 @@ fn test_verdict_fail_still_denied_regardless_of_case() -> Result[Unit, Str] {
   }
 }
 
+# Real launch-node outputs, taken from failing runs. The node was denied four
+# times in a row with "output is not valid JSON", which was true but useless:
+# the actual problem was different each time, and one of them was a model
+# claiming success for a tool it never called.
+fn test_json_object_followed_by_a_text_tool_call_is_denied() -> Result[Unit, Str] {
+  let out := "{\"ok\":true,\"url\":\"http://localhost:8080\",\"response\":\"\",\"pid\":\"\"}\n\n<function_calls>\n<invoke name=\"run_server\">"
+  match gates.evaluate("spec json-ok-true", out) {
+    GateAllow => Err("a claimed ok:true with an EMPTY response, next to the unmade call it claims to have made, must not pass"),
+    GateDeny(r) => if str.contains(r, "written as TEXT") {
+      Ok(())
+    } else {
+      Err(str.concat("the denial should name the real cause, not a parse error; got: ", r))
+    },
+  }
+}
+
+# A single object followed by the model second-guessing itself in prose. The
+# object is complete and is the answer; the prose is not JSON and must not
+# drag the parse down with it.
+fn test_object_followed_by_self_correction_prose_is_read() -> Result[Unit, Str] {
+  let out := "{\"ok\":false,\"url\":\"http://localhost:8080\",\"error\":\"no server binary\"}\n\nWait - I must actually attempt the launch as instructed."
+  match gates.evaluate("spec json-ok-true", out) {
+    GateAllow => Err("ok:false must still be denied"),
+    GateDeny(r) => if str.contains(r, "'ok' field is false") {
+      Ok(())
+    } else {
+      Err(str.concat("should be read as ok:false, not as malformed JSON; got: ", r))
+    },
+  }
+}
+
+# Two objects: the first must be read, not a span covering both (which parses
+# as neither and produced the misleading "trailing characters" denial).
+fn test_first_of_two_objects_is_extracted() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "{\"ok\":true}\nsome prose\n{\"ok\":false}") {
+    GateAllow => Ok(()),
+    GateDeny(r) => Err(str.concat("the first complete object should be read; got: ", r)),
+  }
+}
+
+fn test_pure_prose_is_still_denied() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "Let me start by exploring the work directory.") {
+    GateAllow => Err("prose with no JSON at all must be denied"),
+    GateDeny(_) => Ok(()),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded(), test_json_gate_accepts_fenced_payload(), test_json_gate_accepts_payload_with_trailing_prose(), test_json_gate_still_denies_false_inside_a_fence(), test_json_gate_still_denies_output_with_no_json_at_all(), test_verdict_pass_is_case_insensitive(), test_verdict_fail_still_denied_regardless_of_case()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded(), test_json_gate_accepts_fenced_payload(), test_json_gate_accepts_payload_with_trailing_prose(), test_json_gate_still_denies_false_inside_a_fence(), test_json_gate_still_denies_output_with_no_json_at_all(), test_verdict_pass_is_case_insensitive(), test_verdict_fail_still_denied_regardless_of_case(), test_json_object_followed_by_a_text_tool_call_is_denied(), test_object_followed_by_self_correction_prose_is_read(), test_first_of_two_objects_is_extracted(), test_pure_prose_is_still_denied()]
 }
 
 fn run_all() -> Unit {

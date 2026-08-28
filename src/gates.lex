@@ -319,37 +319,96 @@ fn extract_verdict(output :: Str) -> Option[Str] {
 # block, else the span from the first '{' to the last '}'. It does not weaken
 # any gate: whatever is recovered must still parse and still carry the
 # required fields.
-fn json_payload(output :: Str) -> Str {
-  let fenced := str.split(output, "```")
-  let candidate := if list.len(fenced) > 2 {
-    match list.head(list.tail(fenced)) {
-      None => output,
-      Some(block) => {
-        let nl := str.split(block, "\n")
-        match list.head(nl) {
-          None => block,
-          Some(first) => if str.contains(first, "{") {
-            block
-          } else {
-            str.join(list.tail(nl), "\n")
-          },
-        }
-      },
-    }
+# A model that writes a tool call as TEXT did not call the tool. Observed live
+# on a launch node: {"ok":true,...,"response":"","pid":""} followed by
+# <function_calls><invoke name="run_server">... -- a claimed success, an empty
+# response, and the call it claimed to have made sitting there unmade.
+# Accepting that JSON manufactures a green launch out of a model narrating its
+# intentions, so it is denied with the real reason rather than a parse error.
+fn contains_text_tool_call(output :: Str) -> Bool {
+  if str.contains(output, "<function_calls>") {
+    true
   } else {
-    output
+    str.contains(output, "<invoke")
   }
+}
+
+# The FIRST balanced JSON object. json_payload spans first "{" to last "}",
+# which is right for one object in prose and wrong the moment a second object
+# or a brace-bearing tool call follows: the span covers both and parses as
+# neither. This walks the "}" boundaries and returns the first prefix that
+# actually parses, so trailing junk is ignored rather than swallowed.
+fn first_json_object(candidate :: Str) -> Str {
   let opened := str.split(candidate, "{")
   if list.len(opened) < 2 {
-    str.trim(candidate)
+    ""
   } else {
-    let body := str.join(list.tail(opened), "{")
-    let closed := str.split(body, "}")
-    if list.len(closed) < 2 {
+    let body := str.concat("{", str.join(list.tail(opened), "{"))
+    let parts := str.split(body, "}")
+    list.fold(list.range(0, list.len(parts)), "", fn (found :: Str, i :: Int) -> Str {
+      if str.is_empty(found) {
+        let prefix := str.concat(str.join(take_n(parts, i + 1), "}"), "}")
+        match jv.parse(prefix) {
+          Ok(_) => prefix,
+          Err(_) => found,
+        }
+      } else {
+        found
+      }
+    })
+  }
+}
+
+fn take_n(xs :: List[Str], n :: Int) -> List[Str] {
+  match list.fold(xs, (0, []), fn (acc :: (Int, List[Str]), x :: Str) -> (Int, List[Str]) {
+    match acc {
+      (i, out) => if i < n {
+        (i + 1, list.concat(out, [x]))
+      } else {
+        (i + 1, out)
+      },
+    }
+  }) {
+    (_, out) => out,
+  }
+}
+
+fn json_payload(output :: Str) -> Str {
+  let balanced := first_json_object(output)
+  if not str.is_empty(balanced) {
+    balanced
+  } else {
+    let fenced := str.split(output, "```")
+    let candidate := if list.len(fenced) > 2 {
+      match list.head(list.tail(fenced)) {
+        None => output,
+        Some(block) => {
+          let nl := str.split(block, "\n")
+          match list.head(nl) {
+            None => block,
+            Some(first) => if str.contains(first, "{") {
+              block
+            } else {
+              str.join(list.tail(nl), "\n")
+            },
+          }
+        },
+      }
+    } else {
+      output
+    }
+    let opened := str.split(candidate, "{")
+    if list.len(opened) < 2 {
       str.trim(candidate)
     } else {
-      let inner := str.join(list.reverse(list.tail(list.reverse(closed))), "}")
-      str.join(["{", inner, "}"], "")
+      let body := str.join(list.tail(opened), "{")
+      let closed := str.split(body, "}")
+      if list.len(closed) < 2 {
+        str.trim(candidate)
+      } else {
+        let inner := str.join(list.reverse(list.tail(list.reverse(closed))), "}")
+        str.join(["{", inner, "}"], "")
+      }
     }
   }
 }
@@ -394,14 +453,18 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
               }
             } else {
               if trimmed == "spec json-ok-true" {
-                match jv.parse(json_payload(output)) {
-                  Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
-                  Ok(j) => match jv.get_field(j, "ok") {
-                    None => GateDeny("JSON output missing field 'ok'"),
-                    Some(JBool(true)) => GateAllow,
-                    Some(JBool(false)) => GateDeny("'ok' field is false"),
-                    Some(_) => GateDeny("'ok' field is not a boolean"),
-                  },
+                if contains_text_tool_call(output) {
+                  GateDeny("output contains a tool call written as TEXT (<invoke ...>), so the tool was never actually called — call the tool, then report its real result as JSON")
+                } else {
+                  match jv.parse(json_payload(output)) {
+                    Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
+                    Ok(j) => match jv.get_field(j, "ok") {
+                      None => GateDeny("JSON output missing field 'ok'"),
+                      Some(JBool(true)) => GateAllow,
+                      Some(JBool(false)) => GateDeny("'ok' field is false"),
+                      Some(_) => GateDeny("'ok' field is not a boolean"),
+                    },
+                  }
                 }
               } else {
                 if str.starts_with(trimmed, "spec json-field ") {

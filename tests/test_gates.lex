@@ -319,8 +319,50 @@ fn test_pure_prose_is_still_denied() -> Result[Unit, Str] {
   }
 }
 
+# The same pathology appeared three times today with three different models and
+# three different tools: a local model wrote lex_check as a ```json block,
+# another wrote a raw argument dict, and a hosted model wrote
+# <invoke name="run_server">. It is a framework-level failure, not a quirk of
+# one gate, so every gate that accepts a structured CLAIM about work done now
+# rejects it.
+fn test_verdict_gate_rejects_a_text_tool_call() -> Result[Unit, Str] {
+  let out := "{\"verdict\":\"PASS\",\"reason\":\"all tests pass\"}\n<invoke name=\"run_code\">"
+  match gates.evaluate("spec json-verdict-pass", out) {
+    GateAllow => Err("a PASS verdict next to the unmade call it claims to be based on must not pass"),
+    GateDeny(r) => if str.contains(r, "written as TEXT") {
+      Ok(())
+    } else {
+      Err(str.concat("should name the real cause; got: ", r))
+    },
+  }
+}
+
+fn test_plain_json_gate_rejects_a_text_tool_call() -> Result[Unit, Str] {
+  match gates.evaluate("spec json", "{\"a\":1}\n<function_calls>") {
+    GateAllow => Err("a structured claim beside an unmade tool call must not pass"),
+    GateDeny(_) => Ok(()),
+  }
+}
+
+# Prose gates must NOT trip on this. A docs or scribe node explaining a tool is
+# doing its job, and denying it would be a false positive on the one kind of
+# node whose output is meant to describe things.
+fn test_prose_gate_is_not_tripped_by_the_word_invoke() -> Result[Unit, Str] {
+  match gates.evaluate("spec len-gt 20", "To call it, write <invoke name=\"run_server\"> in your reply. This is documentation.") {
+    GateAllow => Ok(()),
+    GateDeny(r) => Err(str.concat("a docs node explaining a tool must not be denied; got: ", r)),
+  }
+}
+
+fn test_clean_structured_claim_still_passes() -> Result[Unit, Str] {
+  match gates.evaluate("spec json-ok-true", "{\"ok\":true,\"url\":\"http://localhost:8080\"}") {
+    GateAllow => Ok(()),
+    GateDeny(r) => Err(str.concat("a clean claim must still pass; got: ", r)),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded(), test_json_gate_accepts_fenced_payload(), test_json_gate_accepts_payload_with_trailing_prose(), test_json_gate_still_denies_false_inside_a_fence(), test_json_gate_still_denies_output_with_no_json_at_all(), test_verdict_pass_is_case_insensitive(), test_verdict_fail_still_denied_regardless_of_case(), test_json_object_followed_by_a_text_tool_call_is_denied(), test_object_followed_by_self_correction_prose_is_read(), test_first_of_two_objects_is_extracted(), test_pure_prose_is_still_denied()]
+  [test_empty_gate_always_denies(), test_non_empty_allows_content(), test_non_empty_denies_empty_output(), test_contains_allows_match(), test_contains_denies_no_match(), test_not_contains_allows_clean(), test_not_contains_denies_match(), test_starts_with_allows(), test_starts_with_denies(), test_json_allows_valid(), test_json_denies_invalid(), test_json_verdict_pass_allows_clean_pass(), test_json_verdict_pass_denies_fail(), test_json_verdict_pass_denies_missing_dependency_admission(), test_json_ok_true_allows_true(), test_json_ok_true_denies_false(), test_json_ok_true_denies_missing_field(), test_json_ok_true_denies_non_boolean(), test_json_ok_true_denies_invalid_json(), test_json_field_allows_present(), test_json_field_denies_missing(), test_len_gt_allows(), test_len_gt_denies(), test_unknown_gate_falls_back_to_non_empty(), test_compiles_is_grounded(), test_compiles_is_grounded_trimmed(), test_formal_gates_not_grounded(), test_json_gate_not_grounded(), test_json_ok_true_well_formed(), test_json_ok_true_gate_not_grounded(), test_judge_gate_recognized(), test_judge_well_formed(), test_sh_gate_recognized(), test_sh_well_formed(), test_judge_and_sh_not_plain_grounded(), test_json_gate_accepts_fenced_payload(), test_json_gate_accepts_payload_with_trailing_prose(), test_json_gate_still_denies_false_inside_a_fence(), test_json_gate_still_denies_output_with_no_json_at_all(), test_verdict_pass_is_case_insensitive(), test_verdict_fail_still_denied_regardless_of_case(), test_json_object_followed_by_a_text_tool_call_is_denied(), test_object_followed_by_self_correction_prose_is_read(), test_first_of_two_objects_is_extracted(), test_pure_prose_is_still_denied(), test_verdict_gate_rejects_a_text_tool_call(), test_plain_json_gate_rejects_a_text_tool_call(), test_prose_gate_is_not_tripped_by_the_word_invoke(), test_clean_structured_claim_still_passes()]
 }
 
 fn run_all() -> Unit {

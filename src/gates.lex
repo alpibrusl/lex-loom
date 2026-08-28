@@ -414,7 +414,45 @@ fn json_payload(output :: Str) -> Str {
 }
 
 # ── Gate DSL parser + evaluator ───────────────────────────────────────────────
+# Gates whose output is a machine-readable CLAIM about something the node did:
+# a launch that started a server, a deploy that shipped, a QA verdict about a
+# test run. For these a tool call written as text is decisive -- the claim is
+# about an action, and the evidence the action happened is exactly what is
+# missing.
+#
+# Prose gates are deliberately excluded. A docs or scribe node may legitimately
+# write "<invoke" while explaining a tool, and denying that would be a false
+# positive on the one kind of node whose job is to describe things.
+fn is_structured_claim_gate(gate :: Str) -> Bool {
+  let g := str.trim(gate)
+  if g == "spec json" {
+    true
+  } else {
+    if g == "spec json-ok-true" {
+      true
+    } else {
+      if g == "spec json-verdict-pass" {
+        true
+      } else {
+        str.starts_with(g, "spec json-field ")
+      }
+    }
+  }
+}
+
+# Three models did this today, with three different tools: a local model wrote
+# lex_check as a ```json block, another wrote a raw argument dict, and a hosted
+# model wrote <invoke name="run_server">. It is not a quirk of one model, so it
+# is checked once here rather than per gate.
 fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
+  if is_structured_claim_gate(gate) and contains_text_tool_call(output) {
+    GateDeny("output contains a tool call written as TEXT (<invoke ...>), so the tool was never actually called — call the tool, then report its real result")
+  } else {
+    evaluate_gate_body(gate, output)
+  }
+}
+
+fn evaluate_gate_body(gate :: Str, output :: Str) -> GateVerdict {
   if str.is_empty(gate) {
     GateDeny("gate is empty — ungated output not allowed")
   } else {
@@ -453,18 +491,14 @@ fn evaluate(gate :: Str, output :: Str) -> GateVerdict {
               }
             } else {
               if trimmed == "spec json-ok-true" {
-                if contains_text_tool_call(output) {
-                  GateDeny("output contains a tool call written as TEXT (<invoke ...>), so the tool was never actually called — call the tool, then report its real result as JSON")
-                } else {
-                  match jv.parse(json_payload(output)) {
-                    Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
-                    Ok(j) => match jv.get_field(j, "ok") {
-                      None => GateDeny("JSON output missing field 'ok'"),
-                      Some(JBool(true)) => GateAllow,
-                      Some(JBool(false)) => GateDeny("'ok' field is false"),
-                      Some(_) => GateDeny("'ok' field is not a boolean"),
-                    },
-                  }
+                match jv.parse(json_payload(output)) {
+                  Err(e) => GateDeny(str.concat("output is not valid JSON: ", e.message)),
+                  Ok(j) => match jv.get_field(j, "ok") {
+                    None => GateDeny("JSON output missing field 'ok'"),
+                    Some(JBool(true)) => GateAllow,
+                    Some(JBool(false)) => GateDeny("'ok' field is false"),
+                    Some(_) => GateDeny("'ok' field is not a boolean"),
+                  },
                 }
               } else {
                 if str.starts_with(trimmed, "spec json-field ") {

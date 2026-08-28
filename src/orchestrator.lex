@@ -1011,6 +1011,87 @@ fn bounce_stalled(qa_denial :: Str, prior_denial :: Str, new_impl_ref :: Str, pr
   }
 }
 
+# Which node produced this artifact. Empty when we cannot tell -- callers must
+# then fall back to re-running everything rather than silently doing less.
+# Merge a re-run's outcomes over the prior ones: a node the bounce re-ran takes
+# its fresh outcome, a node it did not keeps the old one. Needed because the
+# bounce now re-runs only the affected subgraph, so the fresh list is partial
+# and cannot stand alone as the phase result.
+fn merge_outcomes(prior :: List[NodeOutcome], fresh :: List[NodeOutcome]) -> List[NodeOutcome] {
+  let updated := list.map(prior, fn (o :: NodeOutcome) -> NodeOutcome {
+    list.fold(fresh, o, fn (acc :: NodeOutcome, f :: NodeOutcome) -> NodeOutcome {
+      if f.node_id == o.node_id {
+        f
+      } else {
+        acc
+      }
+    })
+  })
+  list.fold(fresh, updated, fn (acc :: List[NodeOutcome], f :: NodeOutcome) -> List[NodeOutcome] {
+    let seen := list.fold(prior, false, fn (b :: Bool, o :: NodeOutcome) -> Bool {
+      if b {
+        true
+      } else {
+        o.node_id == f.node_id
+      }
+    })
+    if seen {
+      acc
+    } else {
+      list.concat(acc, [f])
+    }
+  })
+}
+
+# An Implementation phase is successful only when every one of its nodes was
+# attested. Recomputed from the merged outcomes rather than carried, so a node
+# that failed and was never repaired cannot be lost.
+fn impl_phase_of(outcomes :: List[NodeOutcome]) -> PhaseResult {
+  { phase: graph.Implementation, outcomes: outcomes, success: list.fold(outcomes, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
+    if ok {
+      o.attested
+    } else {
+      false
+    }
+  }) }
+}
+
+fn producing_node(outcomes :: List[NodeOutcome], artifact :: Str) -> Str {
+  list.fold(outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
+    if str.is_empty(acc) {
+      if o.attested and o.artifact == artifact {
+        o.node_id
+      } else {
+        acc
+      }
+    } else {
+      acc
+    }
+  })
+}
+
+# The part of Implementation a QA failure actually implicates: the node whose
+# artifact QA rejected, plus everything downstream of it. Nodes the failure
+# cannot have touched are left alone.
+#
+# The bounce used to re-run the ENTIRE Implementation phase every round, which
+# is what made repair unaffordable: measured on this repo, three bounces turned
+# a ~10-minute company into 45+, and one all-local tzconvert run cost 2.7 hours
+# and 2.6M tokens. A repair loop you can afford to run ten times is a different
+# instrument from one you can afford to run four times.
+#
+# Returns the FULL graph when the producing node is unknown. Narrowing on a
+# guess would silently skip work that needed doing, which is a far worse
+# failure than re-running too much.
+fn affected_impl_subgraph(g :: graph.SprintGraph, node_id :: Str) -> graph.SprintGraph {
+  if str.is_empty(node_id) {
+    g
+  } else {
+    let ids := list.concat([node_id], graph.descendants(g, [node_id]))
+    graph.subgraph_of_ids(g, ids, graph.Implementation, "-affected")
+  }
+}
+
 # The Architect emits ONE graph carrying a single phase, so its QA nodes used
 # to execute inside Implementation and this bounce was reachable only when the
 # Architect FORGOT to include QA at all (the synthetic fallback). When it did
@@ -1019,15 +1100,15 @@ fn bounce_stalled(qa_denial :: Str, prior_denial :: Str, new_impl_ref :: Str, pr
 # builder never told. Observed live (tzlocal2): every iteration ended
 # bounced=0. The graph is now split into an Implementation half and a QA half
 # so a real QA failure sends the work back to whoever can fix it.
-fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
-  run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_ref, task_input, cfg, bounce, "", impl_ref)
+fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, impl_node :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
+  run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_result, impl_ref, impl_node, task_input, cfg, bounce, "", impl_ref)
 }
 
-fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_ref :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int, prior_denial :: Str, prior_impl_ref :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
+fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, impl_node :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int, prior_denial :: Str, prior_impl_ref :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
   let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
   let qa_passed := qa_result.success
   if qa_passed {
-    { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: true } }
+    { qa: qa_result, impl: impl_phase_of(impl_result.outcomes) }
   } else {
     let qa_denial := list.fold(qa_result.outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
       if str.is_empty(acc) {
@@ -1038,10 +1119,10 @@ fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph
     })
     if bounce_stalled(qa_denial, prior_denial, impl_ref, prior_impl_ref) {
       let __tst := tr.trail(cfg.db, cfg.id, "phase_bounce_stalled", str.join(["{\"bounce\":", int.to_str(bounce), ",\"reason\":\"", qa_denial, "\"}"], ""))
-      { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
+      { qa: qa_result, impl: impl_phase_of(impl_result.outcomes) }
     } else {
       if bounce > max_qa_bounces() {
-        { qa: qa_result, impl: { phase: graph.Implementation, outcomes: [], success: false } }
+        { qa: qa_result, impl: impl_phase_of(impl_result.outcomes) }
       } else {
         let __tb := tr.trail(cfg.db, cfg.id, "phase_bounced", str.join(["{\"from\":\"QA\",\"to\":\"Implementation\",\"bounce\":", int.to_str(bounce), "}"], ""))
         let __tt := tr.record_transition(cfg.db, cfg.id, "QA", "Implementation", "QaFailed")
@@ -1051,10 +1132,14 @@ fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph
           Ok(h) => h,
           Err(_) => impl_ref,
         }
-        let new_impl := run_phase(impl_graph, graph.Implementation, new_impl_ref, [], cfg)
+        let rerun_graph := affected_impl_subgraph(impl_graph, impl_node)
+        let __ti := tr.trail(cfg.db, cfg.id, "phase_bounce_scope", str.join(["{\"bounce\":", int.to_str(bounce), ",\"from_node\":\"", impl_node, "\",\"rerunning\":", int.to_str(list.len(rerun_graph.nodes)), ",\"of\":", int.to_str(list.len(impl_graph.nodes)), "}"], ""))
+        let new_impl := run_phase(rerun_graph, graph.Implementation, new_impl_ref, [], cfg)
         let new_impl_ref2 := first_accepted_artifact(new_impl.outcomes)
+        let next_node := producing_node(new_impl.outcomes, new_impl_ref2)
         let __tt2 := tr.record_transition(cfg.db, cfg.id, "Implementation", "QA", "NoEvidence")
-        run_qa_with_bounce_tracked(qa_graph, impl_graph, new_impl_ref2, task_input, cfg, bounce + 1, qa_denial, impl_ref)
+        let merged := impl_phase_of(merge_outcomes(impl_result.outcomes, new_impl.outcomes))
+        run_qa_with_bounce_tracked(qa_graph, impl_graph, merged, new_impl_ref2, next_node, task_input, cfg, bounce + 1, qa_denial, impl_ref)
       }
     }
   }
@@ -1246,10 +1331,10 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let __tph3 := tr.trail(cfg.db, cfg.id, "phase_advanced", "{\"from\":\"Implementation\",\"to\":\"QA\"}")
       let __tpm3 := tr.trail(cfg.db, cfg.id, "phase_manifest", str.join(["{\"phase\":\"QA\",\"grant\":\"", manifests.grant_summary_for_phase("QA"), "\"}"], ""))
       let qa_impl_result := if graph.has_qa_node(sprint_graph) {
-        run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph_ext, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
+        run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph_ext, impl_result, impl_ref, producing_node(impl_result.outcomes, impl_ref), resolve_input(cfg.db, design_ref), cfg, 1)
       } else {
         let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: graph.qa_role_for_graph(sprint_graph), gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
-        run_qa_with_bounce(synthetic_graph, impl_graph_ext, impl_ref, resolve_input(cfg.db, design_ref), cfg, 1)
+        run_qa_with_bounce(synthetic_graph, impl_graph_ext, impl_result, impl_ref, producing_node(impl_result.outcomes, impl_ref), resolve_input(cfg.db, design_ref), cfg, 1)
       }
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl

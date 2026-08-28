@@ -345,6 +345,24 @@ fn qa_role_for_graph(g :: SprintGraph) -> Str {
   }
 }
 
+# A subgraph restricted to an explicit set of node ids, keeping only edges
+# whose BOTH ends survived (an edge to a dropped node fails validate_edge_refs).
+# Used to re-run just the part of Implementation a QA failure actually
+# implicates, instead of the whole phase.
+fn subgraph_of_ids(g :: SprintGraph, ids :: List[Str], p :: Phase, suffix :: Str) -> SprintGraph {
+  let nodes := list.filter(g.nodes, fn (n :: Node) -> Bool {
+    str_contains(ids, n.id)
+  })
+  let edges := list.filter(g.edges, fn (e :: Edge) -> Bool {
+    if str_contains(ids, e.from) {
+      str_contains(ids, e.to)
+    } else {
+      false
+    }
+  })
+  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: edges }
+}
+
 fn qa_subgraph(g :: SprintGraph) -> SprintGraph {
   subgraph(g, true, QA, "-qa")
 }

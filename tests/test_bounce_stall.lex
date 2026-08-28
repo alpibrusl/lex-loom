@@ -13,6 +13,8 @@ import "std.list" as list
 
 import "../src/orchestrator" as orch
 
+import "../src/graph" as graph
+
 # First failure ever (no prior denial to compare against) must never be
 # treated as stalled -- every sprint's first QA bounce has to be allowed.
 fn test_first_failure_is_never_stalled() -> Result[Unit, Str] {
@@ -115,8 +117,104 @@ fn test_lowercase_fail_is_still_final() -> Result[Unit, Str] {
   }
 }
 
+# Incremental retrigger. The bounce used to re-run the ENTIRE Implementation
+# phase every round, which is what made repair unaffordable: measured here,
+# three bounces turned a ~10-minute company into 45+, and one all-local
+# tzconvert run cost 2.7 hours and 2.6M tokens. Only the node whose artifact QA
+# rejected, plus its descendants, can be implicated by that failure.
+fn test_affected_subgraph_is_node_plus_descendants() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "a", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "c", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "c", handoff: "schema {}" }] }
+  let sub := orch.affected_impl_subgraph(gph, "b")
+  if list.len(sub.nodes) == 2 {
+    if graph.str_contains(graph.node_ids(sub), "a") {
+      Err("node 'a' is upstream of nothing that failed — re-running it is the waste this removes")
+    } else {
+      Ok(())
+    }
+  } else {
+    Err(str.concat("expected b + its descendant c, got ", int.to_str(list.len(sub.nodes))))
+  }
+}
+
+# Narrowing on a guess would silently skip work that needed doing, which is a
+# worse failure than re-running too much. Unknown producer => full graph.
+fn test_unknown_producing_node_reruns_everything() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "a", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  if list.len(orch.affected_impl_subgraph(gph, "").nodes) == 2 {
+    Ok(())
+  } else {
+    Err("with no known producer the bounce must re-run everything, never guess a narrower set")
+  }
+}
+
+fn test_producing_node_identifies_the_artifact_author() -> Result[Unit, Str] {
+  let outs := [{ node_id: "a", attested: true, sealed: true, artifact: "hash-a", reason: "" }, { node_id: "b", attested: true, sealed: true, artifact: "hash-b", reason: "" }]
+  if orch.producing_node(outs, "hash-b") == "b" {
+    if str.is_empty(orch.producing_node(outs, "hash-missing")) {
+      Ok(())
+    } else {
+      Err("an unknown artifact must yield empty, so callers fall back to the full graph")
+    }
+  } else {
+    Err("must identify the node whose artifact this is")
+  }
+}
+
+# A node that was never attested did not produce the artifact under test.
+fn test_unattested_node_is_not_the_producer() -> Result[Unit, Str] {
+  let outs := [{ node_id: "a", attested: false, sealed: false, artifact: "hash-a", reason: "denied" }]
+  if str.is_empty(orch.producing_node(outs, "hash-a")) {
+    Ok(())
+  } else {
+    Err("a denied node did not produce the accepted artifact")
+  }
+}
+
+# Found live (tzk3r1 iter-1, the mixed-model run): py-build-core was denied
+# four times with "build does not compile", exhausted its retries and produced
+# not one file -- and the sprint still sealed success=true, fully_sealed=true,
+# because QA passed. run_qa_with_bounce returned a FABRICATED
+# { outcomes: [], success: true } for Implementation, which run_sprint then used
+# in place of the real phase result. Any sprint could seal with a completely
+# failed build as long as QA passed.
+fn test_failed_impl_node_cannot_report_success() -> Result[Unit, Str] {
+  let outs := [{ node_id: "b", attested: false, sealed: false, artifact: "", reason: "build does not compile" }, { node_id: "d", attested: true, sealed: true, artifact: "h", reason: "" }]
+  if orch.impl_phase_of(outs).success {
+    Err("a phase containing an unattested node must not report success — this is how a failed build sealed a green sprint")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_all_attested_reports_success() -> Result[Unit, Str] {
+  let outs := [{ node_id: "b", attested: true, sealed: true, artifact: "h1", reason: "" }, { node_id: "d", attested: true, sealed: true, artifact: "h2", reason: "" }]
+  if orch.impl_phase_of(outs).success {
+    Ok(())
+  } else {
+    Err("every node attested must report success")
+  }
+}
+
+# The bounce re-runs only the affected subgraph, so its outcome list is partial.
+# Merging must take the fresh result for re-run nodes and KEEP the prior one for
+# untouched nodes — otherwise a node that failed and was never re-run vanishes.
+fn test_merge_keeps_untouched_nodes_and_takes_fresh_ones() -> Result[Unit, Str] {
+  let prior := [{ node_id: "a", attested: false, sealed: false, artifact: "", reason: "failed" }, { node_id: "b", attested: false, sealed: false, artifact: "", reason: "failed" }]
+  let fresh := [{ node_id: "b", attested: true, sealed: true, artifact: "h", reason: "" }]
+  let merged := orch.merge_outcomes(prior, fresh)
+  if list.len(merged) == 2 {
+    if orch.impl_phase_of(merged).success {
+      Err("node 'a' was never re-run and is still failing — the merge must not lose it")
+    } else {
+      Ok(())
+    }
+  } else {
+    Err(str.concat("merge must keep both nodes, got ", int.to_str(list.len(merged))))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones()]
 }
 
 fn run_all() -> Unit {

@@ -102,6 +102,14 @@ org_edges = ",".join(f"{child}:{parent}" for child, parent in org_table.items())
 roles_table = m.get("roles", {}) if isinstance(m.get("roles", {}), dict) else {}
 role_packs = ",".join(str(x) for x in roles_table.get("packs", []) if str(x).strip())
 
+# [models] maps a role to the model that role should use, overriding
+# [stack].model for that role only. Flattened to "role:model,..." for
+# MODEL_OVERRIDES. Everything routes through LiteLLM, so a local Ollama name
+# and a hosted OpenCode name are interchangeable here -- the mix is a routing
+# choice, not an architectural one.
+models_table = m.get("models", {}) if isinstance(m.get("models", {}), dict) else {}
+model_overrides = ",".join(f"{k}:{v}" for k, v in models_table.items() if str(v).strip())
+
 # GOV2 (lex-loom#222): [budget.envelopes] declares per-scope spend caps in
 # integer cents: total = 5000, "role:build" = 2000. Flattened to
 # "scope:cents,..." for BUDGET_ENVELOPES; run_company_cmd validates and
@@ -121,6 +129,7 @@ out = {
     "CORG_EDGES": org_edges,
     "CROLE_PACKS": role_packs,
     "CBUDGET_ENVELOPES": budget_envelopes,
+    "CMODEL_OVERRIDES": model_overrides,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -266,7 +275,7 @@ fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
-  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' bin/run-company.sh"
+  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' MODEL_OVERRIDES='$CMODEL_OVERRIDES' bin/run-company.sh"
   exit 0
 fi
 
@@ -277,4 +286,5 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" \
+  MODEL_OVERRIDES="$CMODEL_OVERRIDES" \
   bin/run-company.sh

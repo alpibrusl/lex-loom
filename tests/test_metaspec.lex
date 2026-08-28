@@ -8,6 +8,8 @@ import "../src/graph" as graph
 
 import "../src/metaspec" as meta
 
+import "../src/orchestrator" as orch
+
 import "../src/role_kinds" as role_kinds
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -269,8 +271,53 @@ fn test_multi_language_graph_is_left_alone() -> Result[Unit, Str] {
   }
 }
 
+# Acceptance: the deliverable is checked, not the claim about it. Both false
+# greens this repo produced passed every gate -- one sealed with a QA verdict
+# of "11/11 tests pass" and no tests in the deliverable, another sealed after
+# its build node was denied four times and wrote no file. The gates grounded
+# verdicts in evidence the JUDGED PARTY produced. Acceptance re-executes what
+# was SEALED, mechanically, with no model to persuade.
+fn test_python_acceptance_requires_a_test_file() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  let cmd := orch.acceptance_command(gph)
+  if str.contains(cmd, "pytest") {
+    if str.contains(cmd, "no test file in the sealed artifact") {
+      Ok(())
+    } else {
+      Err("a sealed artifact with no tests must fail acceptance — that is the exact hole that let a zero-test deliverable seal")
+    }
+  } else {
+    Err("a Python graph must be accepted by running pytest")
+  }
+}
+
+fn test_lex_acceptance_requires_a_test_file() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  let cmd := orch.acceptance_command(gph)
+  if str.contains(cmd, "run_all") {
+    if str.contains(cmd, "no test file in the sealed artifact") {
+      Ok(())
+    } else {
+      Err("the Lex path must reject a testless artifact too")
+    }
+  } else {
+    Err("a Lex graph must be accepted by running its test suite")
+  }
+}
+
+# A stack with no acceptance runner abstains rather than inventing a pass.
+# Abstaining is recorded in the trail; a fake pass would not be.
+fn test_unknown_stack_abstains_rather_than_passing() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "ts_build", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }
+  if str.is_empty(orch.acceptance_command(gph)) {
+    Ok(())
+  } else {
+    Err("a stack with no runner must abstain, not run someone else's test command")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing()]
 }
 
 fn run_all() -> Unit {

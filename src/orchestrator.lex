@@ -1056,6 +1056,72 @@ fn impl_phase_of(outcomes :: List[NodeOutcome]) -> PhaseResult {
   }) }
 }
 
+# ── Acceptance: the deliverable is checked, not the claim about it ───────────
+#
+# Every green result this repo produced was wrong until something re-ran the
+# artifact. Twice, live: a sprint sealed success=true with a QA verdict of
+# "11/11 tests pass" and a deliverable containing no tests at all; and a sprint
+# sealed success=true after its build node was denied four times and wrote not
+# one file. Both passed every gate, because the gates grounded a verdict in
+# evidence the JUDGED PARTY produced -- QA's own run_code snippet, discarded
+# immediately after -- rather than in the artifact.
+#
+# So this is deliberately not another agent. An LLM auditor has the same
+# weakness: we watched a judge return a correct FAIL, get denied for saying
+# FAIL, and return PASS on identical code. What caught both bugs was
+# mechanical: materialise what was SEALED into a clean directory and run its
+# tests. No model, nothing to persuade.
+#
+# It reads the sealed artifact rather than the agent's work dir on purpose. The
+# work dir is where the agent was writing; the artifact is what the sprint is
+# claiming. Those diverged in practice -- one run's work dir held a stale file
+# from a later, failed iteration.
+fn acceptance_command(g :: graph.SprintGraph) -> Str {
+  let qa_kind := graph.qa_role_for_graph(g)
+  if qa_kind == "py_qa" {
+    "if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else echo 'ACCEPTANCE: no test file in the sealed artifact'; false; fi"
+  } else {
+    if qa_kind == "qa" {
+      "rc=0; found=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; found=1; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; if [ \"$found\" -eq 0 ]; then echo 'ACCEPTANCE: no test file in the sealed artifact'; rc=1; fi; [ \"$rc\" -eq 0 ]"
+    } else {
+      ""
+    }
+  }
+}
+
+# Ok(()) means the sealed artifact really passes its own tests. An empty
+# command means this stack has no acceptance runner yet, and the check abstains
+# rather than inventing a pass -- abstaining is visible in the trail, a fake
+# pass is not.
+fn run_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, artifact_ref :: Str) -> [io, proc, sql, fs_read, fs_write, time, random, crypto, vcs] Result[Unit, Str] {
+  let cmd := acceptance_command(g)
+  if str.is_empty(cmd) {
+    let __ts := tr.trail(cfg.db, cfg.id, "acceptance_skipped", "{\"reason\":\"no acceptance runner for this stack\"}")
+    Ok(())
+  } else {
+    let content := resolve_input(cfg.db, artifact_ref)
+    if str.is_empty(str.trim(content)) {
+      let __te := tr.trail(cfg.db, cfg.id, "acceptance_failed", "{\"reason\":\"sealed artifact is empty\"}")
+      Err("acceptance: the sprint sealed an empty artifact")
+    } else {
+      match runner.verify_shell_on_output(cmd, content, str.join([sanitize_id(cfg.id), "-acceptance"], "")) {
+        Ok(_) => {
+          let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed artifact re-executed in a clean dir\"}")
+          Ok(())
+        },
+        Err(e) => {
+          let __td := tr.trail(cfg.db, cfg.id, "acceptance_failed", str.join(["{\"reason\":", jv.stringify(JStr(str.slice(e, 0, 400))), "}"], ""))
+          Err(str.concat("acceptance: the sealed artifact does not pass its own tests: ", str.slice(e, 0, 300)))
+        },
+      }
+    }
+  }
+}
+
+fn sanitize_id(s :: Str) -> Str {
+  str.replace(str.replace(s, "/", "_"), " ", "_")
+}
+
 fn producing_node(outcomes :: List[NodeOutcome], artifact :: Str) -> Str {
   list.fold(outcomes, "", fn (acc :: Str, o :: NodeOutcome) -> Str {
     if str.is_empty(acc) {
@@ -1356,13 +1422,26 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         DigestFailed(e) => str.join([" Digest failed: ", e], ""),
       }
       let all_phases := [intake_result, impl_result2, qa_result]
-      let overall_ok := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
+      let phases_ok := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
         if not ok {
           false
         } else {
           pr.success
         }
       })
+      let acceptance := if phases_ok {
+        run_acceptance(cfg, sprint_graph, impl_ref)
+      } else {
+        Ok(())
+      }
+      let overall_ok := match acceptance {
+        Ok(_) => phases_ok,
+        Err(_) => false,
+      }
+      let acceptance_note := match acceptance {
+        Ok(_) => "",
+        Err(e) => str.concat(" ", e),
+      }
       let fully_sealed := list.fold(all_phases, true, fn (ok :: Bool, pr :: PhaseResult) -> Bool {
         if not ok {
           false
@@ -1434,10 +1513,14 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         false
       } else {
         overall_ok
-      }, fully_sealed: fully_sealed, summary: if any_parked {
+      }, fully_sealed: if str.is_empty(acceptance_note) {
+        fully_sealed
+      } else {
+        false
+      }, summary: if any_parked {
         str.join(["Sprint ", cfg.id, " PARKED — awaiting a blocking human gate decision."], "")
       } else {
-        summary
+        str.concat(summary, acceptance_note)
       }, parked: any_parked }
     },
   }

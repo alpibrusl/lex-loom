@@ -271,6 +271,51 @@ fn has_qa_node(g :: SprintGraph) -> Bool {
   })
 }
 
+# The handoff an original edge carried, or a default for an edge that only
+# exists because the node between them was removed.
+fn handoff_between(g :: SprintGraph, from_id :: Str, to_id :: Str) -> Str {
+  list.fold(g.edges, "schema {}", fn (acc :: Str, e :: Edge) -> Str {
+    if e.from == from_id {
+      if e.to == to_id {
+        e.handoff
+      } else {
+        acc
+      }
+    } else {
+      acc
+    }
+  })
+}
+
+# Edges over a kept set are the TRANSITIVE closure, not a filter.
+#
+# Filtering drops every edge that crossed out of the set, and with it the
+# ordering those edges carried. Measured on a real graph:
+#
+#   original   pm -> py_build -> py_qa -> launch
+#   filtered   pm -> py_build,  launch orphaned
+#   layers     [pm launch] then [py_build]
+#
+# launch became a ROOT and ran first, before a line of code existed. In a live
+# company exactly that happened: launch, devops, legal and scribe executed while
+# py_build and py_test_author were never enqueued, and QA then denied with
+# "work dir missing" because it was judging a build that had never run. It read
+# as model flakiness.
+#
+# A DAG's edges are its schedule. Removing a node must not remove the ordering
+# that passed THROUGH it: if A -> qa -> B, the implementation half needs A -> B.
+# Closure over a DAG stays a DAG, and every added edge is implied by the
+# originals, so nothing is over-constrained.
+fn closure_edges(g :: SprintGraph, nodes :: List[Node], ids :: List[Str]) -> List[Edge] {
+  list.fold(nodes, [], fn (acc :: List[Edge], a :: Node) -> List[Edge] {
+    list.fold(str_filter(descendants(g, [a.id]), fn (d :: Str) -> Bool {
+      str_contains(ids, d)
+    }), acc, fn (acc2 :: List[Edge], b :: Str) -> List[Edge] {
+      list.concat(acc2, [{ from: a.id, to: b, handoff: handoff_between(g, a.id, b) }])
+    })
+  })
+}
+
 # Keep only the nodes the predicate selects, plus every edge whose BOTH ends
 # survived -- an edge to a dropped node would fail validate_edge_refs.
 fn subgraph(g :: SprintGraph, keep_qa_half :: Bool, p :: Phase, suffix :: Str) -> SprintGraph {
@@ -284,14 +329,7 @@ fn subgraph(g :: SprintGraph, keep_qa_half :: Bool, p :: Phase, suffix :: Str) -
   let ids := list.map(nodes, fn (n :: Node) -> Str {
     n.id
   })
-  let edges := list.filter(g.edges, fn (e :: Edge) -> Bool {
-    if str_contains(ids, e.from) {
-      str_contains(ids, e.to)
-    } else {
-      false
-    }
-  })
-  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: edges }
+  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: closure_edges(g, nodes, ids) }
 }
 
 # Which QA role can actually read what this graph builds. The synthetic QA
@@ -353,14 +391,7 @@ fn subgraph_of_ids(g :: SprintGraph, ids :: List[Str], p :: Phase, suffix :: Str
   let nodes := list.filter(g.nodes, fn (n :: Node) -> Bool {
     str_contains(ids, n.id)
   })
-  let edges := list.filter(g.edges, fn (e :: Edge) -> Bool {
-    if str_contains(ids, e.from) {
-      str_contains(ids, e.to)
-    } else {
-      false
-    }
-  })
-  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: edges }
+  { id: str.concat(g.id, suffix), phase: p, nodes: nodes, edges: closure_edges(g, nodes, ids) }
 }
 
 fn qa_subgraph(g :: SprintGraph) -> SprintGraph {

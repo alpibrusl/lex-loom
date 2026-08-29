@@ -193,8 +193,52 @@ fn test_synthetic_qa_role_follows_the_build_language() -> Result[Unit, Str] {
   }
 }
 
+# A DAG's edges are its schedule. Filtering edges when splitting the graph
+# dropped every edge that crossed the halves, and with it the ordering those
+# edges carried: pm -> py_build -> py_qa -> launch became pm -> py_build with
+# launch orphaned, so launch became a ROOT and ran FIRST. In a live company
+# exactly that happened -- launch, devops, legal and scribe executed while
+# py_build and py_test_author were never enqueued, and QA then denied with
+# "work dir missing" because it judged a build that had never run.
+fn test_ordering_through_a_removed_node_survives() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "l", role: "launch", gate: "spec json-ok-true", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "s" }, { from: "q", to: "l", handoff: "s" }] }
+  let impl := graph.impl_subgraph(gph)
+  match graph.topo_sort(impl) {
+    Err(e) => Err(str.concat("impl half must stay a valid DAG: ", e)),
+    Ok(layers) => match list.head(layers) {
+      None => Err("no layers"),
+      Some(first) => if graph.str_contains(first, "l") {
+        Err("launch must NOT be in the first layer — the build has not run yet, which is how a launch node ended up executing before any code existed")
+      } else {
+        Ok(())
+      },
+    },
+  }
+}
+
+# The surviving order must be the real one: build strictly before launch.
+fn test_transitive_edge_is_added() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "l", role: "launch", gate: "spec json-ok-true", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "s" }, { from: "q", to: "l", handoff: "s" }] }
+  let has := list.fold(graph.impl_subgraph(gph).edges, false, fn (acc :: Bool, e :: graph.Edge) -> Bool {
+    if acc {
+      true
+    } else {
+      if e.from == "b" {
+        e.to == "l"
+      } else {
+        false
+      }
+    }
+  })
+  if has {
+    Ok(())
+  } else {
+    Err("b -> l must be synthesised: the ordering passed through the removed qa node")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none(), test_split_is_a_partition(), test_split_drops_edges_that_cross_the_halves(), test_language_specific_qa_roles_are_qa(), test_demo_alone_is_not_a_qa_node(), test_py_qa_nodes_are_detected_as_qa(), test_impl_half_alone_has_no_qa(), test_synthetic_qa_role_follows_the_build_language()]
+  [test_python_sprint_shape_is_detected_via_demo_role(), test_lex_sprint_shape_is_detected_via_qa_role(), test_bare_build_graph_has_none(), test_split_is_a_partition(), test_split_drops_edges_that_cross_the_halves(), test_language_specific_qa_roles_are_qa(), test_demo_alone_is_not_a_qa_node(), test_py_qa_nodes_are_detected_as_qa(), test_impl_half_alone_has_no_qa(), test_synthetic_qa_role_follows_the_build_language(), test_ordering_through_a_removed_node_survives(), test_transitive_edge_is_added()]
 }
 
 fn run_all() -> Unit {

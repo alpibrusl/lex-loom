@@ -275,6 +275,58 @@ fn rule_qa_matches_build_language(g :: graph.SprintGraph) -> List[Violation] {
   }
 }
 
+# ── Rule 14: tests must be authored independently of the implementation ──────
+#
+# A verdict grounded in "the tests pass" is worth exactly as much as the tests.
+# Found live (tzconvert): the build node wrote the service AND its tests. The
+# service was correct -- proper zoneinfo, proper email.utils formatting -- and
+# two tests were wrong: one asserted an epoch an hour off, the other demanded
+# the literal "GMT" where "+0000" is an equally valid RFC 2822 spelling. Every
+# gate then worked perfectly and refused to seal, and the bounce told the
+# builder its tests were failing. The rational response to that message is to
+# change correct code until a wrong test passes.
+#
+# Independence is enforced topologically rather than by instruction: the test
+# author must not have a build node as an ancestor, so it cannot have read the
+# implementation it is testing. The DAG is what makes this checkable.
+fn is_build_kind_role(role :: Str) -> Bool {
+  if role == "build" {
+    true
+  } else {
+    if role == "py_build" {
+      true
+    } else {
+      role == "ts_build"
+    }
+  }
+}
+
+fn rule_tests_authored_independently(g :: graph.SprintGraph) -> List[Violation] {
+  let build_ids := list.fold(g.nodes, [], fn (acc :: List[Str], n :: graph.Node) -> List[Str] {
+    if is_build_kind_role(n.role) {
+      list.concat(acc, [n.id])
+    } else {
+      acc
+    }
+  })
+  if list.is_empty(build_ids) {
+    []
+  } else {
+    let downstream := graph.descendants(g, build_ids)
+    list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+      if n.role == "test_author" {
+        if graph.str_contains(downstream, n.id) {
+          list.concat(acc, [{ rule: "tests-authored-independently", message: str.join(["node ", n.id, " authors tests but runs downstream of the implementation, so it can read the code it is meant to judge -- give it an edge from the spec instead"], "") }])
+        } else {
+          acc
+        }
+      } else {
+        acc
+      }
+    })
+  }
+}
+
 fn rule_roles_resolve(g :: graph.SprintGraph) -> List[Violation] {
   list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
     if str.is_empty(n.role) {
@@ -439,7 +491,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

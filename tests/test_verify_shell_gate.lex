@@ -106,8 +106,42 @@ fn test_verdict_suite_allows_an_empty_work_dir() -> [io, proc] Result[Unit, Str]
   }
 }
 
+# Derivation, made checkable rather than requested. The tzconvert run that
+# failed 0/2 asserted "1705340400" — a Unix epoch an hour off — against a
+# CORRECT implementation. Every gate then worked perfectly and refused to seal,
+# and the loop spent three iterations changing working code to satisfy it.
+# Asking a model to derive its expected values is a request; a computed value
+# leaves a computation in the source, and a pasted one leaves a literal, so the
+# difference is mechanically visible.
+fn test_pasted_expected_value_is_rejected() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_convert.py\ndef test_epoch():\n    assert convert(\"x\") == \"1705340400\"\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-pasted") {
+    Ok(_) => Err("a hand-written epoch is an unverifiable oracle and must be rejected"),
+    Err(_) => Ok(()),
+  }
+}
+
+fn test_derived_expected_value_is_allowed() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_convert.py\nfrom datetime import datetime\nfrom zoneinfo import ZoneInfo\n\ndef test_epoch():\n    expected = int(datetime(2024,1,15,12,0,0, tzinfo=ZoneInfo(\"America/New_York\")).timestamp())\n    assert convert(\"x\") == str(expected)\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-derived") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a test that computes its expected value must pass: ", e)),
+  }
+}
+
+# The check must not fire on inputs or on ordinary constants. A gate that cried
+# wolf on `== 400` would be switched off within a day, and then the real case
+# goes unchecked too.
+fn test_inputs_and_plain_constants_are_not_flagged() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_api.py\ndef test_rejects_bad_tz():\n    r = post(\"/convert\", {\"timestamp\": \"2024-01-15T12:00:00\", \"from_tz\": \"Nowhere\"})\n    assert r.status_code == 400\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-inputs") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a timestamp used as INPUT and a status code are not pasted oracles: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged()]
 }
 
 fn run_all() -> [io, proc] Unit {

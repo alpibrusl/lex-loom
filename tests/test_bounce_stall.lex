@@ -213,8 +213,36 @@ fn test_merge_keeps_untouched_nodes_and_takes_fresh_ones() -> Result[Unit, Str] 
   }
 }
 
+# A QA failure implicates the test author as much as the builder — that is the
+# point of writing the tests separately. The test author is a SIBLING of the
+# build node, not a descendant, so walking descendants alone re-runs only the
+# builder and the loop keeps telling one party to fix a disagreement the other
+# may have caused.
+fn test_bounce_reaches_the_test_author() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "d", role: "docs", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [] }
+  let ids := graph.node_ids(orch.affected_impl_subgraph(gph, "b"))
+  if graph.str_contains(ids, "t") {
+    if graph.str_contains(ids, "d") {
+      Err("an unrelated docs node must not be dragged into the re-run — that is the waste incremental retrigger removes")
+    } else {
+      Ok(())
+    }
+  } else {
+    Err("the test author must be re-run: it may be the party that is wrong")
+  }
+}
+
+fn test_bounce_still_includes_the_failing_builder() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [] }
+  if graph.str_contains(graph.node_ids(orch.affected_impl_subgraph(gph, "b")), "b") {
+    Ok(())
+  } else {
+    Err("the node whose artifact failed must still be re-run")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder()]
 }
 
 fn run_all() -> Unit {

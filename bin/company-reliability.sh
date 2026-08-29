@@ -40,8 +40,12 @@ GOAL="$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb')
 MODEL="${MODEL_OVERRIDE:-$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb'))['stack']['model'])" "$MANIFEST")}"
 MAXIT="$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb')).get('policy',{}).get('max_iterations',3))" "$MANIFEST")"
 PACKS="$(python3 -c "import tomllib,sys;print(','.join(tomllib.load(open(sys.argv[1],'rb')).get('roles',{}).get('packs',[])))" "$MANIFEST")"
+# [models] per-role overrides, so a mixed-model manifest measures what it says
+# it does rather than silently running every role on [stack].model.
+OVERRIDES="$(python3 -c "import tomllib,sys;m=tomllib.load(open(sys.argv[1],'rb')).get('models',{});print(','.join(f'{k}:{v}' for k,v in m.items()))" "$MANIFEST")"
 
 echo "[reliability] manifest=$MANIFEST model=$MODEL attempts=$N max_iterations=$MAXIT"
+[ -n "$OVERRIDES" ] && echo "[reliability] per-role models: $OVERRIDES"
 echo "[reliability] logs in $WORK"
 echo
 
@@ -54,7 +58,7 @@ for i in $(seq 1 "$N"); do
 
   started=$(date +%s)
   LOOM_WORKSPACE="$HOME/loom-companies" COMPANY_ID="$ID" MODEL="$MODEL" \
-    MAX_ITERATIONS="$MAXIT" ROLE_PACKS="$PACKS" DB_PATH="$DB" GOAL="$GOAL" \
+    MAX_ITERATIONS="$MAXIT" ROLE_PACKS="$PACKS" MODEL_OVERRIDES="$OVERRIDES" DB_PATH="$DB" GOAL="$GOAL" \
     bin/run-company.sh > "$WORK/$ID.log" 2>&1 || true
   elapsed=$(( $(date +%s) - started ))
 

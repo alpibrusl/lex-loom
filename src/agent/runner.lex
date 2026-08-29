@@ -442,11 +442,15 @@ fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, St
 # extract_fenced.py (same mechanism verify.lex's independent reverify_grounded
 # already uses for post-hoc verification) and run the gate command there —
 # grounding it in what THIS node actually produced, for any role.
+# LOOM_ROOT is exported before the cd so a gate command can reach the repo's own
+# tools (bin/check_derived_values.py and friends). Without it a gate can only
+# run what happens to be on PATH, since the command executes inside the scratch
+# directory the artifact was materialised into.
 fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
   let __w := io.write(art, output)
-  let script := str.join(["W=", work, "; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {
@@ -849,22 +853,41 @@ fn nth_or_empty(parts :: List[Str], i :: Int) -> Str {
   }
 }
 
+# A bounced test author is asked to RE-DERIVE, and is deliberately not shown
+# what the implementation produced.
+#
+# When a test fails, exactly one of two things is wrong, and the failure text
+# cannot tell you which: a real tzconvert run produced a correct service and a
+# test asserting an epoch an hour off. Handing the test author "expected
+# 1705340400, got 1705338000" invites it to paste the observed value, which
+# makes the test agree with the code whether or not the code is right -- the
+# same collapse as one agent writing both, arrived at one step later.
+#
+# So it gets the spec and its own prior tests, and neither the implementation
+# nor the observed values. If re-deriving yields what it had, the test stands
+# and the implementation is what is wrong. Saying that is an outcome the loop
+# previously had no way to express.
 fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
-  let is_bounce := if is_build_kind(kind) {
-    str.starts_with(msg_json, "<<<LOOM_BOUNCE>>>")
-  } else {
-    false
-  }
-  if is_bounce {
+  let bounced := str.starts_with(msg_json, "<<<LOOM_BOUNCE>>>")
+  if bounced and kind == "test_author" {
     let body := str.slice(msg_json, 17, str.len(msg_json))
     let parts := str.split(body, "<<<LOOM_SEP>>>")
     let task := nth_or_empty(parts, 0)
     let prior := nth_or_empty(parts, 1)
-    let feedback := nth_or_empty(parts, 2)
-    let critique := str.join(["Your previous attempt above did NOT pass QA.", "", "Reason: ", feedback, "", "Fix YOUR code: keep what worked, change only what failed. Call lex_check and repair until ok='true', then output the corrected file."], "\n")
+    let critique := str.join(["A test you wrote is failing against the implementation. One of the two is wrong, and which one is exactly what has to be decided now.", "", "You are NOT being shown the implementation or the values it produced, on purpose: if you were, the easy move would be to edit your expected values to match, and a test edited to agree with the code proves nothing about either.", "", "Re-derive every expected value in your tests from the SPEC alone. COMPUTE them -- from the standard library, in the test -- rather than restating a constant you wrote before.", "", "If re-deriving gives you the same values you already had, LEAVE THE TEST UNCHANGED and say so. That is the correct answer when the implementation is the thing that is wrong, and it is a real outcome, not a failure to act.", "", "Only change a test when your own re-derivation disagrees with what you wrote."], "\n")
     [llm_msg.UserMsg(task), llm_msg.AssistantMsg(prior, []), llm_msg.UserMsg(critique)]
   } else {
-    [llm_msg.UserMsg(msg_json)]
+    if bounced and is_build_kind(kind) {
+      let body := str.slice(msg_json, 17, str.len(msg_json))
+      let parts := str.split(body, "<<<LOOM_SEP>>>")
+      let task := nth_or_empty(parts, 0)
+      let prior := nth_or_empty(parts, 1)
+      let feedback := nth_or_empty(parts, 2)
+      let critique := str.join(["Your previous attempt above did NOT pass QA.", "", "Reason: ", feedback, "", "The tests were written by someone else from the same spec you were given, so a failure may mean your code is wrong OR that their test is. Fix your code where it is genuinely wrong; do not contort it to satisfy an assertion the spec does not require.", "", "Keep what worked, change only what failed. Call the check tool and repair until ok='true', then output the corrected file."], "\n")
+      [llm_msg.UserMsg(task), llm_msg.AssistantMsg(prior, []), llm_msg.UserMsg(critique)]
+    } else {
+      [llm_msg.UserMsg(msg_json)]
+    }
   }
 }
 

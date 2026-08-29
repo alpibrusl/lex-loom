@@ -292,8 +292,26 @@ model_list:
 
 litellm_settings:
   drop_params: true
-  request_timeout: 120
-  num_retries: 2
+  # 120s is far too short for a build node. Measured against the hosted models:
+  # a single call carrying ~31k tokens of context took 470s on qwen3.8-max and
+  # 103s on kimi-k3. lex-llm's own client allows 600s; this must not undercut it.
+  request_timeout: 600
+  # Retries are for TRANSIENT faults. A usage-quota 429 is not transient: the
+  # quota cannot recover inside a retry window, so every retry is a wasted call
+  # that counts against the same quota. Measured on a real run: 374 failures
+  # each retried twice, i.e. three upstream calls per failure, against a plan
+  # that was already exhausting its 5-hour cap. Retry nothing by default and let
+  # the fallback below do the recovering.
+  num_retries: 0
+  # When a hosted model is unavailable — quota exhausted, region-blocked, down —
+  # serve the request from the local model instead of failing the node. A slower
+  # answer is worth more than a dead sprint: a run that lost its hosted model
+  # mid-flight produced 40 provider errors and measured nothing at all.
+  fallbacks:
+    - qwen3.8-max: ["qwen3.8:27b-mlx"]
+    - kimi-k3: ["qwen3.8:27b-mlx"]
+    - kimi-k2.7-code: ["qwen3.8:27b-mlx"]
+    - glm-5.3-flash: ["qwen3.8:27b-mlx"]
 
 general_settings:
   # Enables Claude Code Max subscription forwarding.

@@ -327,7 +327,7 @@ fn test_unknown_stack_abstains_rather_than_passing() -> Result[Unit, Str] {
 # Independence is topological, not advisory: a test author downstream of the
 # build can read the code it is meant to judge.
 fn test_test_author_downstream_of_build_is_rejected() -> Result[Unit, Str] {
-  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "t", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "t", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
   match meta.check(gph) {
     Valid => Err("a test author that runs after the build can read the code it is judging — that must be rejected"),
     Invalid(_) => Ok(()),
@@ -336,7 +336,7 @@ fn test_test_author_downstream_of_build_is_rejected() -> Result[Unit, Str] {
 
 # The correct shape: test_author and build are SIBLINGS, both fed from the spec.
 fn test_test_author_as_a_sibling_of_build_is_accepted() -> Result[Unit, Str] {
-  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "b", handoff: "schema {}" }, { from: "pm", to: "t", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "b", handoff: "schema {}" }, { from: "pm", to: "t", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
   match meta.check(gph) {
     Valid => Ok(()),
     Invalid(vs) => Err(str.concat("the sibling shape is the one we are asking for and must stay valid: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
@@ -356,8 +356,42 @@ fn test_graph_without_a_build_is_unaffected() -> Result[Unit, Str] {
   }
 }
 
+# The test author is split by language for the same reason build/py_build are:
+# its tools ARE the language's tools. Measured directly against the model —
+# given a Python spec and the Lex tools alongside py_check, it called
+# lex_guidelines first, because that tool's own description says to call it
+# FIRST before writing any Lex code. Asked to enumerate its tools it listed all
+# three correctly, so this was never a perception problem; it was an
+# instruction aimed at the wrong language.
+fn test_python_build_with_lex_test_author_is_rejected() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "b", handoff: "schema {}" }, { from: "pm", to: "t", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Err("a Lex test author on a Python build gets Lex tools it must not use — that must be rejected"),
+    Invalid(_) => Ok(()),
+  }
+}
+
+fn test_python_build_with_py_test_author_is_accepted() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "b", handoff: "schema {}" }, { from: "pm", to: "t", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("the language-matched pairing must stay valid: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.message
+    }), "; "))),
+  }
+}
+
+# Independence still applies to the Python role, not just the Lex one.
+fn test_py_test_author_downstream_of_build_is_rejected() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "t", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Err("a Python test author that runs after the build can read the code it is judging"),
+    Invalid(_) => Ok(()),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected(), test_python_build_with_lex_test_author_is_rejected(), test_python_build_with_py_test_author_is_accepted(), test_py_test_author_downstream_of_build_is_rejected()]
 }
 
 fn run_all() -> Unit {

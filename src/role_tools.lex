@@ -19,46 +19,50 @@
 # in an op_grant — it is intentionally not a role policy entry.
 
 fn tools_for(role :: Str) -> List[Str] {
-  if role == "test_author" {
-    ["lex_guidelines", "lex_check", "py_check"]
+  if role == "py_test_author" {
+    ["py_check"]
   } else {
-    if role == "build" {
+    if role == "test_author" {
       ["lex_guidelines", "lex_check"]
     } else {
-      if role == "py_build" {
-        ["py_check"]
+      if role == "build" {
+        ["lex_guidelines", "lex_check"]
       } else {
-        if role == "ts_build" {
-          ["ts_check"]
+        if role == "py_build" {
+          ["py_check"]
         } else {
-          if role == "qa" {
-            ["lex_check", "lex_run"]
+          if role == "ts_build" {
+            ["ts_check"]
           } else {
-            if role == "py_qa" {
-              ["run_code"]
+            if role == "qa" {
+              ["lex_check", "lex_run"]
             } else {
-              if role == "ts_qa" {
-                ["run_node_code"]
+              if role == "py_qa" {
+                ["run_code"]
               } else {
-                if role == "launch" {
-                  ["run_server"]
+                if role == "ts_qa" {
+                  ["run_node_code"]
                 } else {
-                  if role == "deploy" {
-                    ["deploy_hetzner"]
+                  if role == "launch" {
+                    ["run_server"]
                   } else {
-                    if role == "security" {
-                      ["security_scan"]
+                    if role == "deploy" {
+                      ["deploy_hetzner"]
                     } else {
-                      if role == "content_creator" {
-                        ["publish_content"]
+                      if role == "security" {
+                        ["security_scan"]
                       } else {
-                        if role == "cx" {
-                          ["fetch_support_items"]
+                        if role == "content_creator" {
+                          ["publish_content"]
                         } else {
-                          if role == "research" {
-                            ["web_search"]
+                          if role == "cx" {
+                            ["fetch_support_items"]
                           } else {
-                            []
+                            if role == "research" {
+                              ["web_search"]
+                            } else {
+                              []
+                            }
                           }
                         }
                       }

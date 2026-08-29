@@ -301,6 +301,53 @@ fn is_build_kind_role(role :: Str) -> Bool {
   }
 }
 
+# Both test-author roles. They are split by language for the same reason
+# build/py_build are: a Python task handed the Lex tools gets lex_guidelines,
+# whose description tells the agent to call it FIRST before writing any Lex
+# code -- measured, that is exactly what the model then did on a Python spec.
+fn is_test_author_role(role :: Str) -> Bool {
+  if role == "test_author" {
+    true
+  } else {
+    role == "py_test_author"
+  }
+}
+
+# A test author must speak the language of the build it is writing tests for,
+# for the same reason a QA node must: its tools are the language's tools.
+fn test_author_kind_for_build(build_role :: Str) -> Str {
+  if build_role == "py_build" {
+    "py_test_author"
+  } else {
+    "test_author"
+  }
+}
+
+fn rule_test_author_matches_build_language(g :: graph.SprintGraph) -> List[Violation] {
+  let builds := build_roles_in(g)
+  if list.len(builds) == 1 {
+    match list.head(builds) {
+      None => [],
+      Some(b) => {
+        let want := test_author_kind_for_build(b)
+        list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+          if is_test_author_role(n.role) {
+            if n.role == want {
+              acc
+            } else {
+              list.concat(acc, [{ rule: "test-author-matches-build-language", message: str.join(["node ", n.id, " has role '", n.role, "' but this graph builds with '", b, "' -- use '", want, "', whose tools match that language"], "") }])
+            }
+          } else {
+            acc
+          }
+        })
+      },
+    }
+  } else {
+    []
+  }
+}
+
 fn rule_tests_authored_independently(g :: graph.SprintGraph) -> List[Violation] {
   let build_ids := list.fold(g.nodes, [], fn (acc :: List[Str], n :: graph.Node) -> List[Str] {
     if is_build_kind_role(n.role) {
@@ -314,7 +361,7 @@ fn rule_tests_authored_independently(g :: graph.SprintGraph) -> List[Violation] 
   } else {
     let downstream := graph.descendants(g, build_ids)
     list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
-      if n.role == "test_author" {
+      if is_test_author_role(n.role) {
         if graph.str_contains(downstream, n.id) {
           list.concat(acc, [{ rule: "tests-authored-independently", message: str.join(["node ", n.id, " authors tests but runs downstream of the implementation, so it can read the code it is meant to judge -- give it an edge from the spec instead"], "") }])
         } else {
@@ -491,7 +538,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

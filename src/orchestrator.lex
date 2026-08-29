@@ -348,6 +348,17 @@ fn blocking_precheck(n :: graph.Node, cfg :: SprintCfg) -> [sql, fs_read, fs_wri
   }
 }
 
+# Every denial keeps the artifact that was denied and the reason it was denied,
+# not just a label.
+#
+# The judge path always stored its rejected output; the gate paths discarded
+# theirs and recorded only a summary like {"reason":"gate command failed"}.
+# That made a gate denial unreconstructible, and it cost a real diagnosis: when
+# the derived-values gate denied a test author, nothing afterwards could say
+# whether it had caught a pasted constant or the gate command had simply
+# errored. The denied output is now stored under "<node>-denied-<attempt>", and
+# the trail carries the gate expression and up to 600 characters of the check's
+# own output.
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   match blocking_precheck(n, cfg) {
     Some(outcome) => outcome,
@@ -454,7 +465,8 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
             } else {
               match evaluate_gate(n.gate, output) {
                 GateDeny(reason) => {
-                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                  let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
+                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(reason)), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
                   let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
                   if verdict_fail_is_final(n.gate, output) {
                     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
@@ -469,7 +481,8 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                 },
                 GateAllow => match evaluate_gate(n.gate, output) {
                   GateDeny(reason) => {
-                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"re-check: ", reason, "\"}"], ""))
+                    let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-recheck-", int.to_str(attempt)], ""), output)
+                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(str.concat("re-check: ", reason))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
                     let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
                     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                   },
@@ -511,7 +524,8 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                           "build does not compile"
                         }
                       }
-                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                      let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
+                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"detail\":", jv.stringify(JStr(str.slice(compile_err, 0, 600))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
                       let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat(str.concat(gate_label, ": "), compile_err), attempt)
                       if attempt > max_node_retries() {
                         { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat(str.concat(gate_label, ": "), compile_err) }

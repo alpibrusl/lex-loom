@@ -266,27 +266,43 @@ fn company_of_sprint(sprint_id :: Str) -> Str {
 # sprint_graphs stores the full graph JSON; we parse and search.
 type GraphRow = { graph_json :: Str }
 
+# Search EVERY graph stored for this sprint, newest first -- not just the most
+# recent one.
+#
+# run_phase saves a graph per phase it runs, so a sprint has several rows: the
+# full Design graph, and one per phase actually executed. Taking only the latest
+# meant that once the QA half was stored -- which holds just the qa and demo
+# nodes -- any job claimed afterwards could not find its node, whatever the node
+# was. Found live: 15 jobs failed with "node not found in sprint graph" in a
+# single company run (finance, legal, cx, launch, scribe, test_author, ...), and
+# whether a node ran at all came down to whether its job happened to be claimed
+# before the next phase was persisted. It read as model flakiness.
+#
+# Any graph that contains the node describes it correctly, so the first match
+# wins and nothing depends on which phase was written last.
 fn load_node(db :: conn.ConnDb, sprint_id :: Str, node_id :: Str) -> [sql, fs_read] Option[graph.Node] {
-  let q := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC LIMIT 1"], "")
+  let q := str.join(["SELECT graph_json FROM sprint_graphs WHERE sprint_id='", sq(sprint_id), "' ORDER BY created_at DESC"], "")
   let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q, [])
   match rows {
     Err(_) => None,
-    Ok(rs) => match list.head(rs) {
-      None => None,
-      Some(r) => match graph.from_json_str(r.graph_json) {
-        Err(_) => None,
-        Ok(g) => list.fold(g.nodes, None, fn (acc :: Option[graph.Node], n :: graph.Node) -> Option[graph.Node] {
-          match acc {
-            Some(_) => acc,
-            None => if n.id == node_id {
-              Some(n)
-            } else {
-              None
-            },
-          }
-        }),
-      },
-    },
+    Ok(rs) => list.fold(rs, None, fn (found :: Option[graph.Node], r :: GraphRow) -> Option[graph.Node] {
+      match found {
+        Some(_) => found,
+        None => match graph.from_json_str(r.graph_json) {
+          Err(_) => None,
+          Ok(g) => list.fold(g.nodes, None, fn (acc :: Option[graph.Node], n :: graph.Node) -> Option[graph.Node] {
+            match acc {
+              Some(_) => acc,
+              None => if n.id == node_id {
+                Some(n)
+              } else {
+                None
+              },
+            }
+          }),
+        },
+      }
+    }),
   }
 }
 

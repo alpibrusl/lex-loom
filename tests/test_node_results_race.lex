@@ -18,6 +18,8 @@
 
 import "std.str" as str
 
+import "../src/worker" as worker
+
 import "std.list" as list
 
 import "std.io" as io
@@ -158,8 +160,39 @@ fn test_await_after_clear_sees_only_the_fresh_row() -> [random, sql, fs_read, fs
   }
 }
 
+# Found live: 15 jobs in one company run failed with "node not found in sprint
+# graph" -- finance, legal, cx, launch, scribe, test_author. run_phase saves a
+# graph per phase it runs, so a sprint holds several rows, and load_node took
+# only the most recent. Once the QA half was stored (just the qa and demo
+# nodes), any job claimed afterwards could not find its node whatever the node
+# was. Whether a node ran came down to whether its job was claimed before the
+# next phase was persisted, and it read as model flakiness.
+fn test_load_node_finds_a_node_from_an_earlier_phase_graph() -> [sql, fs_read, fs_write, time, random, crypto, io] Result[Unit, Str] {
+  match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
+    Err(_) => Err("open db failed"),
+    Ok(db) => match migrate.run(db.handle) {
+      Err(e) => Err(str.concat("migrate failed: ", e)),
+      Ok(_) => {
+        let sid := str.concat("sp-", crypto.random_str_hex(6))
+        let full := "{\"id\":\"g\",\"phase\":\"Design\",\"nodes\":[{\"id\":\"b\",\"role\":\"py_build\",\"gate\":\"spec compiles\"},{\"id\":\"t\",\"role\":\"test_author\",\"gate\":\"spec len-gt 50\"},{\"id\":\"q\",\"role\":\"py_qa\",\"gate\":\"spec json-verdict-pass\"}],\"edges\":[]}"
+        let qa_half := "{\"id\":\"g-qa\",\"phase\":\"QA\",\"nodes\":[{\"id\":\"q\",\"role\":\"py_qa\",\"gate\":\"spec json-verdict-pass\"}],\"edges\":[]}"
+        let __1 := tr.save_sprint_graph(db, sid, "Design", full)
+        let __2 := tr.save_sprint_graph(db, sid, "QA", qa_half)
+        match worker.load_node(db, sid, "t") {
+          None => Err("the test_author node is in the Design graph and must still be found after a later phase graph was stored — this is what silently stopped 15 nodes from running"),
+          Some(n) => if n.role == "test_author" {
+            Ok(())
+          } else {
+            Err("found the wrong node")
+          },
+        }
+      },
+    },
+  }
+}
+
 fn suite() -> [random, sql, fs_read, fs_write, time, crypto, io] List[Result[Unit, Str]] {
-  [test_clear_node_result_removes_stale_prior_round_row(), test_clear_node_result_only_clears_the_named_node(), test_await_after_clear_sees_only_the_fresh_row()]
+  [test_clear_node_result_removes_stale_prior_round_row(), test_clear_node_result_only_clears_the_named_node(), test_await_after_clear_sees_only_the_fresh_row(), test_load_node_finds_a_node_from_an_earlier_phase_graph()]
 }
 
 fn run_all() -> [random, sql, fs_read, fs_write, time, crypto, io] Unit {

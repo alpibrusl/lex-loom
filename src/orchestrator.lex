@@ -1149,11 +1149,26 @@ fn producing_node(outcomes :: List[NodeOutcome], artifact :: Str) -> Str {
 # Returns the FULL graph when the producing node is unknown. Narrowing on a
 # guess would silently skip work that needed doing, which is a far worse
 # failure than re-running too much.
+# The test author is implicated by a QA failure just as much as the builder is
+# -- that is the whole point of having written the tests separately. It is a
+# SIBLING of the build node, not a descendant, so walking descendants alone
+# re-runs only the builder, and the loop keeps telling one party to fix a
+# disagreement the other may have caused.
+fn test_author_ids(g :: graph.SprintGraph) -> List[Str] {
+  list.fold(g.nodes, [], fn (acc :: List[Str], n :: graph.Node) -> List[Str] {
+    if n.role == "test_author" {
+      list.concat(acc, [n.id])
+    } else {
+      acc
+    }
+  })
+}
+
 fn affected_impl_subgraph(g :: graph.SprintGraph, node_id :: Str) -> graph.SprintGraph {
   if str.is_empty(node_id) {
     g
   } else {
-    let ids := list.concat([node_id], graph.descendants(g, [node_id]))
+    let ids := list.concat(list.concat([node_id], graph.descendants(g, [node_id])), test_author_ids(g))
     graph.subgraph_of_ids(g, ids, graph.Implementation, "-affected")
   }
 }

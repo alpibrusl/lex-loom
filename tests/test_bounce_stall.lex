@@ -241,8 +241,43 @@ fn test_bounce_still_includes_the_failing_builder() -> Result[Unit, Str] {
   }
 }
 
+# A test author receives the GOAL, not the previous step's output. Bisected
+# against a live failure -- same agent, same tools, only the input differing:
+#
+#   sprint goal alone (720 chars)   tool_execs=1  answer 16090 chars  fenced
+#   the PM's PRD      (6360 chars)  tool_execs=0  answer   688 chars  no fence
+#
+# Not length: 8879 characters of filler did not break it. SHAPE. The PRD is a
+# formatted document and the model answers in kind -- in the live run, 30418
+# characters of markdown with ```json fences and no tool call at all.
+fn test_test_author_roles_are_recognised() -> Result[Unit, Str] {
+  if orch.is_test_author_role("py_test_author") {
+    if orch.is_test_author_role("test_author") {
+      Ok(())
+    } else {
+      Err("the Lex test author must get goal-only input too")
+    }
+  } else {
+    Err("the Python test author must get goal-only input")
+  }
+}
+
+# Everyone else keeps the previous step's output: a builder needs the design it
+# is implementing, and QA needs the artifact it is judging.
+fn test_other_roles_are_unaffected() -> Result[Unit, Str] {
+  if orch.is_test_author_role("py_build") {
+    Err("a builder must still receive the previous step output — it needs the design")
+  } else {
+    if orch.is_test_author_role("py_qa") {
+      Err("QA must still receive the artifact it is judging")
+    } else {
+      Ok(())
+    }
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected()]
 }
 
 fn run_all() -> Unit {

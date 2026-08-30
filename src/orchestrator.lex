@@ -382,7 +382,11 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
         let base_input := if str.is_empty(input) {
           cfg.request
         } else {
-          str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+          if is_test_author_role(n.role) {
+            cfg.request
+          } else {
+            str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+          }
         }
         let prompt := if str.is_empty(prior_denial) {
           base_input
@@ -1134,6 +1138,33 @@ fn run_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, artifact_ref :: Str)
 
 fn sanitize_id(s :: Str) -> Str {
   str.replace(str.replace(s, "/", "_"), " ", "_")
+}
+
+# A test author is given the GOAL, and not the previous step's output.
+#
+# Bisected against a live failure, same agent and tools throughout, only the
+# input differing:
+#
+#   sprint goal alone (720 chars)   tool_execs=1  answer 16090 chars  fenced
+#   the PM's PRD      (6360 chars)  tool_execs=0  answer   688 chars  no fence
+#   both together     (7079 chars)  tool_execs=0  answer   636 chars  no fence
+#
+# It is not length -- 8879 characters of filler did not break it. It is SHAPE.
+# The PRD arrives as a formatted document (## Goal, ## User Stories, ##
+# Acceptance Criteria, ## Out of Scope, ## Tech Notes) and the model answers in
+# kind: in the live run it produced 30418 characters of markdown analysis with
+# ```json fences and never called py_check at all. Handed the terse goal, the
+# same agent writes the test file and calls the tool.
+#
+# This also happens to be what independence wants. A test author is supposed to
+# derive its tests from the requirements, and the PRD is a derived restatement
+# of them -- one more artifact between the spec and the oracle.
+fn is_test_author_role(role :: Str) -> Bool {
+  if role == "test_author" {
+    true
+  } else {
+    role == "py_test_author"
+  }
 }
 
 fn producing_node(outcomes :: List[NodeOutcome], artifact :: Str) -> Str {

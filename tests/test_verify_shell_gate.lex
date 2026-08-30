@@ -176,8 +176,43 @@ fn test_fenced_answer_overrides_the_seeded_copy() -> [io, proc] Result[Unit, Str
   }
 }
 
+# A literal pinned to a derivation is checkable, so it is allowed. tzshdr1's
+# test author pasted "2025-07-11T08:00:00-04:00", was refused four times, and
+# the pasted value was RIGHT — it caught a real four-hour bug. Banning literals
+# outright cost us a correct oracle; what the check actually needs is that a
+# WRONG paste fails at the oracle rather than blaming the implementation.
+fn pinned_test_output() -> Str {
+  str.join(["Tests.\n\n```test_convert.py\n", "from datetime import datetime\n", "from zoneinfo import ZoneInfo\n\n", "def test_oracle_is_pinned():\n", "    assert \"2025-07-11T08:00:00-04:00\" == datetime(2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")).astimezone(ZoneInfo(\"America/New_York\")).isoformat()\n\n", "def test_iso():\n", "    assert body[\"result\"] == \"2025-07-11T08:00:00-04:00\"\n", "```\n"], "")
+}
+
+fn test_pinned_literal_is_allowed() -> [io, proc] Result[Unit, Str] {
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", pinned_test_output(), "dv-pinned") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a literal pinned to a derivation is checkable and must pass: ", e)),
+  }
+}
+
+# The pin must be a real pin: the same literal with the derivation removed is
+# still a bare paste, or the rule above would accept anything.
+fn test_unpinned_literal_is_still_rejected() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_convert.py\ndef test_iso():\n    assert body[\"result\"] == \"2025-07-11T08:00:00-04:00\"\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-unpinned") {
+    Ok(_) => Err("a bare pasted timestamp is still an unverifiable oracle"),
+    Err(_) => Ok(()),
+  }
+}
+
+# Pinning one value must not launder a DIFFERENT unpinned one.
+fn test_pinning_one_value_does_not_excuse_another() -> [io, proc] Result[Unit, Str] {
+  let out := str.join([pinned_test_output(), "\n```test_epoch.py\ndef test_epoch():\n    assert body[\"result\"] == 1752249600\n```\n"], "")
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-partial") {
+    Ok(_) => Err("an unpinned epoch in another file must still be caught"),
+    Err(_) => Ok(()),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another()]
 }
 
 fn run_all() -> [io, proc] Unit {

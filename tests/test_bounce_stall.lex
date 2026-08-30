@@ -276,8 +276,58 @@ fn test_other_roles_are_unaffected() -> Result[Unit, Str] {
   }
 }
 
+# QA must not be asked to judge a build that never ran. tzshdr1 spent two whole
+# iterations on exactly that: py_build was in the graph, never started, and
+# py_qa denied "work dir missing" four times per round.
+fn impl_graph_with_build() -> graph.SprintGraph {
+  { id: "g", phase: graph.Implementation, nodes: [{ id: "py-build", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "py-build", handoff: "prd" }] }
+}
+
+fn phase_with(outcomes :: List[orch.NodeOutcome]) -> orch.PhaseResult {
+  { phase: graph.Implementation, outcomes: outcomes, success: false }
+}
+
+fn test_build_that_never_ran_is_named() -> Result[Unit, Str] {
+  let res := phase_with([{ node_id: "pm", attested: true, sealed: true, artifact: "h1", reason: "" }])
+  let absent := orch.missing_producers(impl_graph_with_build(), res)
+  if absent == "py-build" {
+    Ok(())
+  } else {
+    Err(str.concat("a build node that never produced must be named, got: ", absent))
+  }
+}
+
+fn test_denied_build_still_counts_as_missing() -> Result[Unit, Str] {
+  let res := phase_with([{ node_id: "py-build", attested: false, sealed: false, artifact: "", reason: "denied" }])
+  if orch.missing_producers(impl_graph_with_build(), res) == "py-build" {
+    Ok(())
+  } else {
+    Err("a build that ran but was denied produced nothing for QA to judge")
+  }
+}
+
+# The negative controls: a build that DID produce must let QA run, and a graph
+# with no build at all (a docs-only sprint) must never be blocked.
+fn test_produced_build_lets_qa_run() -> Result[Unit, Str] {
+  let res := phase_with([{ node_id: "py-build", attested: true, sealed: true, artifact: "h2", reason: "" }])
+  if orch.missing_producers(impl_graph_with_build(), res) == "" {
+    Ok(())
+  } else {
+    Err("a build that produced an artifact must not block QA")
+  }
+}
+
+fn test_graph_without_a_build_is_not_blocked() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "docs", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }
+  if orch.missing_producers(gph, phase_with([])) == "" {
+    Ok(())
+  } else {
+    Err("a sprint with no build node has no producer to wait for")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked()]
 }
 
 fn run_all() -> Unit {

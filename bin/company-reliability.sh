@@ -77,6 +77,7 @@ for i in $(seq 1 "$N"); do
       # the node that actually sank it: the last denial recorded
       detail="$(sqlite3 "$DB" "select json_extract(data_json,'\$.node')||': '||json_extract(data_json,'\$.reason') from traces where event_kind='node_denied' order by id desc limit 1;" 2>/dev/null || true)"
       [ -n "$detail" ] && cls="fail" || { cls="fail"; detail="no node_denied recorded — check $WORK/$ID.log"; }
+      detail="${detail}${errnote}"
     fi
     toks=$(sqlite3 "$DB" "select coalesce(sum(json_extract(data_json,'\$.total_tokens')),0) from traces where event_kind='llm_usage';" 2>/dev/null || echo 0)
   fi

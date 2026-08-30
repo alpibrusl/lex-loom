@@ -46,19 +46,50 @@ def expected_side(line: str) -> str:
         return ""
     return line.split("==", 1)[1]
 
+LITERALS = ((EPOCH, "a Unix epoch"), (TIMESTAMP, "a timestamp"), (RFC2822, "an RFC 2822 date"))
+
+def pinned_literals(lines) -> set:
+    """Literals that the file itself checks against a derivation.
+
+    Banning literals outright is too blunt, and a real run proved it: a test
+    author pasted "2025-07-11T08:00:00-04:00", the gate refused it four times,
+    and the pasted value was RIGHT -- it caught a genuine four-hour bug in the
+    implementation. The property actually worth demanding is not "computed" but
+    "checkable". A literal pinned to a derivation on the same line
+
+        assert "2025-07-11T08:00:00-04:00" == datetime(
+            2025, 7, 11, 12, tzinfo=ZoneInfo("UTC")
+        ).astimezone(ZoneInfo("America/New_York")).isoformat()
+
+    is checkable: if the paste is wrong, THAT assertion fails and names the
+    oracle, instead of the implementation being blamed for the author's typo --
+    which is the failure this check exists to prevent. Once pinned, the literal
+    may be used freely for the rest of the file.
+    """
+    pins = set()
+    for line in lines:
+        if not looks_computed(line):
+            continue
+        for pat, _ in LITERALS:
+            pins.update(pat.findall(line))
+    return pins
+
 def scan(path: Path):
     out = []
-    for i, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    lines = path.read_text(errors="replace").splitlines()
+    pins = pinned_literals(lines)
+    for i, line in enumerate(lines, 1):
         s = line.strip()
         if s.startswith("#") or not ASSERTISH.search(s):
             continue
         rhs = expected_side(s)
         if not rhs or looks_computed(rhs):
             continue
-        for pat, what in ((EPOCH, "a Unix epoch"), (TIMESTAMP, "a timestamp"), (RFC2822, "an RFC 2822 date")):
+        for pat, what in LITERALS:
             m = pat.search(rhs)
             if m:
-                out.append((i, what, m.group(0), s[:100]))
+                if m.group(0) not in pins:
+                    out.append((i, what, m.group(0), s[:100]))
                 break
     return out
 
@@ -81,9 +112,21 @@ def main() -> int:
             print(f"      {src}")
     print("\nA hand-written expected value is an unverifiable oracle: if it is wrong,")
     print("the failure is indistinguishable from a bug in the implementation, and the")
-    print("loop will change working code to satisfy it. COMPUTE these in the test —")
-    print("e.g. int(datetime(..., tzinfo=ZoneInfo(...)).timestamp()) — so the test")
-    print("derives what it asserts instead of restating it.")
+    print("loop will change working code to satisfy it. Two ways to fix this —")
+    print("either is accepted:")
+    print("")
+    print("  1. COMPUTE the expected value where you assert it:")
+    print("       assert body[\"result\"] == datetime(")
+    print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
+    print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
+    print("")
+    print("  2. PIN the literal to a derivation ONCE, then reuse it freely:")
+    print("       assert \"2025-07-11T08:00:00-04:00\" == datetime(")
+    print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
+    print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
+    print("")
+    print("Both make a wrong paste fail at the ORACLE, naming your expected value,")
+    print("instead of the implementation being blamed for your typo.")
     return 1
 
 if __name__ == "__main__":

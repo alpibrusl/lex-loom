@@ -497,7 +497,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                       if runner.is_build_kind(n.role) {
                         runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
                       } else {
-                        runner.verify_shell_on_output(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""))
+                        runner.verify_shell_on_output_from(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id))
                       }
                     } else {
                       if gates.is_json_verdict_pass(n.gate) {

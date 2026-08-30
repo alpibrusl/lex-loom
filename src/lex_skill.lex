@@ -326,6 +326,34 @@ fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   })
 }
 
+# ── py_name_error ─────────────────────────────────────────────────────────────
+# Refuse a Python filename BEFORE it is ever written: an unsafe path, or a name
+# that shadows a stdlib top-level module. Python puts the working directory
+# first on sys.path, so a model-written `inspect.py` hides the real `inspect` —
+# and that poisons `py_compile` ITSELF, which imports traceback -> dataclasses
+# -> inspect long before it looks at the file it was handed. The gate then
+# reports COMPILE_FAIL against whichever innocent file it happened to check.
+# A real tzconvert run lost all three of its iterations to exactly this: the
+# builder believed the gate, concluded the Python toolchain was broken, and
+# spent its entire budget writing shims to re-export the stdlib instead of
+# writing the product. Refusing at the moment of creation is the only place the
+# message can still name the real cause. Returns "" when the name is fine.
+fn py_name_error(filename :: Str) -> [proc] Str {
+  let script := "import sys,re\nfn=sys.argv[1]\nhead=fn.split('/')[0]\nstem=head[:-3] if head.endswith('.py') else head\nif (not re.fullmatch(r'[A-Za-z0-9_./-]+',fn)) or '..' in fn or fn.startswith('/'):\n    print('UNSAFE')\nelif stem in sys.stdlib_module_names:\n    print('SHADOW')\nelse:\n    print('OK')\n"
+  match proc.run("python3", ["-c", script, filename]) {
+    Err(_) => "",
+    Ok(r) => if str.contains(r.stdout, "UNSAFE") {
+      str.join(["refusing filename '", filename, "': write a plain relative path (letters, digits, _, -, ., /), with no '..' and no leading '/'."], "")
+    } else {
+      if str.contains(r.stdout, "SHADOW") {
+        str.join(["refusing filename '", filename, "': it shadows a Python standard-library module of the same name. The working directory comes first on sys.path, so this file would hide the real stdlib module and break py_compile, pytest and the server itself — reporting errors that point at other, innocent files. Rename it (for example prefix it with the product name) and write it again."], "")
+      } else {
+        ""
+      }
+    },
+  }
+}
+
 # ── py_check ──────────────────────────────────────────────────────────────────
 # The Python build gate, symmetric with lex_check. Writes `code` to
 # py_work_dir/<filename> and compiles it with `python3 -m py_compile`. Files
@@ -345,24 +373,29 @@ fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
       _ => "",
     }
     let path := str.join([dir, "/", filename], "")
-    match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
-      Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-      Ok(_) => {
-        let __w := io.write(path, code)
-        let cmd := str.join(["python3 -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-        match proc.run("bash", ["-c", cmd]) {
-          Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-          Ok(r) => {
-            let combined := str.concat(r.stdout, r.stderr)
-            let ok := str.contains(combined, "##EXIT:0")
-            Ok(JObj([("ok", JStr(if ok {
-              "true"
-            } else {
-              "false"
-            })), ("output", JStr(combined))]))
-          },
-        }
-      },
+    let name_err := py_name_error(filename)
+    if not str.is_empty(name_err) {
+      Ok(JObj([("ok", JStr("false")), ("output", JStr(name_err))]))
+    } else {
+      match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+        Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+        Ok(_) => {
+          let __w := io.write(path, code)
+          let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+          match proc.run("bash", ["-c", cmd]) {
+            Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+            Ok(r) => {
+              let combined := str.concat(r.stdout, r.stderr)
+              let ok := str.contains(combined, "##EXIT:0")
+              Ok(JObj([("ok", JStr(if ok {
+                "true"
+              } else {
+                "false"
+              })), ("output", JStr(combined))]))
+            },
+          }
+        },
+      }
     }
   })
 }

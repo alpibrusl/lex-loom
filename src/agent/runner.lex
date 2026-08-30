@@ -446,11 +446,46 @@ fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, St
 # tools (bin/check_derived_values.py and friends). Without it a gate can only
 # run what happens to be on PATH, since the command executes inside the scratch
 # directory the artifact was materialised into.
+# The directory a role's own check tool writes into, or "" for a role that has
+# none. A `spec sh` gate re-materializes the node's fenced answer, which is
+# right for the roles that only ever reply in prose — but build, test_author,
+# py_build, py_test_author and ts_build write their files THROUGH
+# lex_check/py_check/ts_check, so their real work never appears in the answer at
+# all. Found live: a py_test_author wrote its test file with py_check exactly as
+# its tool instructed, summarised it in prose, and its check_derived_values gate
+# denied the node for "no fenced files". Seeding the gate's scratch dir from the
+# tool's own dir closes that gap; the fenced answer is still extracted on top,
+# so anything the node restated in its reply still wins.
+fn tool_work_dir_for_role(role :: Str, sprint_id :: Str) -> Str {
+  if role == "py_build" or role == "py_test_author" {
+    py_work_dir(sprint_id)
+  } else {
+    if role == "ts_build" {
+      ts_work_dir(sprint_id)
+    } else {
+      if role == "build" or role == "test_author" {
+        build_work_dir(sprint_id)
+      } else {
+        ""
+      }
+    }
+  }
+}
+
 fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  verify_shell_on_output_from(cmd, output, scratch, "")
+}
+
+fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
   let __w := io.write(art, output)
-  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; rm -rf $W; mkdir -p $W; python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let seed := if str.is_empty(seed_dir) {
+    ""
+  } else {
+    str.join(["if [ -d ", seed_dir, " ]; then cp -R ", seed_dir, "/. $W/ 2>/dev/null; find $W -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; fi; "], "")
+  }
+  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; rm -rf $W; mkdir -p $W; ", seed, "python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {
@@ -510,7 +545,7 @@ fn verify_compiles_at(ws_root :: Str, kind :: Str, sprint_id :: Str) -> [proc] R
   {
     let dir := work_dir_for(kind, sprint_id)
     let check := if kind == "py_build" {
-      "python3 -m py_compile"
+      "python3 -P -m py_compile"
     } else {
       if kind == "ts_build" {
         "loom_ts_check"

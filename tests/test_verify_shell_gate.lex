@@ -140,8 +140,44 @@ fn test_inputs_and_plain_constants_are_not_flagged() -> [io, proc] Result[Unit, 
   }
 }
 
+# A test author writes its file through py_check, not into its answer. Found
+# live (tzgor1): py-test-author was denied "no fenced files to check" for doing
+# exactly what its tool told it to. The gate must see the tool's dir too.
+fn test_shell_gate_sees_tool_written_files() -> [io, proc] Result[Unit, Str] {
+  let sid := "shellgate-toolwritten"
+  let dir := str.concat("/tmp/loom-py-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
+  let __w := io.write(str.concat(dir, "/test_convert.py"), "def test_ok():\n    assert 1 == 1\n")
+  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-yes", dir) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a file written through the node's own tool must reach the gate: ", e)),
+  }
+}
+
+# The negative control: the same prose-only answer with no seed dir must still
+# be refused, or the test above would pass for the wrong reason.
+fn test_shell_gate_without_seed_still_refuses_prose() -> [io, proc] Result[Unit, Str] {
+  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-no", "") {
+    Ok(_) => Err("prose with no files and no tool dir must still be refused"),
+    Err(_) => Ok(()),
+  }
+}
+
+# Overlay order: what the node restated in its answer is what the gate judges.
+fn test_fenced_answer_overrides_the_seeded_copy() -> [io, proc] Result[Unit, Str] {
+  let sid := "shellgate-overlay"
+  let dir := str.concat("/tmp/loom-py-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
+  let __w := io.write(str.concat(dir, "/test_convert.py"), "STALE\n")
+  let out := "Final:\n\n```test_convert.py\nFRESH\n```\n"
+  match runner.verify_shell_on_output_from("grep -q FRESH test_convert.py", out, "sg-overlay", dir) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("the fenced answer must overwrite the seeded copy: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy()]
 }
 
 fn run_all() -> [io, proc] Unit {

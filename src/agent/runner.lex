@@ -351,9 +351,15 @@ fn verify_build_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, S
 # way `spec compiles` wraps the compiler. Runs on the files the node produced
 # (build/py_build/fe_build work dir). Trusted-sprint use: the gate is author-
 # defined and runs at the same trust level as the build agent's own code.
+# LOOM_ROOT is exported before the cd so a gate can reach the repo's own tools
+# (bin/check_imports.py and friends) — the command runs inside the work dir, so
+# without it $LOOM_ROOT expands to nothing and the gate silently runs
+# `python3 /bin/...`. verify_shell_on_output already did this; this path did
+# not, so the same gate string worked on one kind of node and failed on the
+# other for a reason nothing reported.
 fn verify_shell(cmd :: Str, kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   let dir := work_dir_for(kind, sprint_id)
-  let script := str.join(["cd ", dir, " 2>/dev/null || { echo NO_WORKDIR; exit 3; }; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let script := str.join(["export LOOM_ROOT=\"$PWD\"; cd ", dir, " 2>/dev/null || { echo NO_WORKDIR; exit 3; }; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {

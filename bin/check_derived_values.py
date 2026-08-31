@@ -99,8 +99,16 @@ def main() -> int:
              and p.suffix in (".py", ".lex")
              and ("test" in p.name.lower() or p.name.lower().endswith("_test.lex"))]
     if not files:
-        print("check_derived_values: no test files found — nothing to check")
-        return 0
+        # Not "nothing to check" — this IS the finding. A test author whose
+        # gate exits 0 for writing no tests seals and hands off, and QA then
+        # dies three retries later with "NO TEST FILE", wearing the blame for
+        # the omission. Watched happen in tzpin: 3 QA denials, all misfiled.
+        print("check_derived_values: NO TEST FILE was written.\n")
+        print("A test author's deliverable is a test file. Write one (test_*.py,")
+        print("*_test.py, or *_test.lex) with py_check/lex_check so it is on disk,")
+        print("then restate it in a fenced block. Prose describing the tests you")
+        print("would write is not a test suite, and nothing downstream can run it.")
+        return 1
     bad = [(p, hits) for p in files for hits in [scan(p)] if hits]
     if not bad:
         print(f"check_derived_values: {len(files)} test file(s), expected values are derived")

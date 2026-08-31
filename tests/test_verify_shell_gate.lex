@@ -21,6 +21,8 @@ import "std.io" as io
 
 import "../src/agent/runner" as runner
 
+import "../src/lex_skill" as lexskill
+
 fn dockerfile_output() -> Str {
   str.join(["Here is the Dockerfile:\n\n```Dockerfile\n", "FROM python:3.11-slim\n", "WORKDIR /app\n", "COPY . .\n", "RUN pip install flask\n", "CMD [\"python3\", \"app.py\"]\n", "```\n"], "")
 }
@@ -211,8 +213,67 @@ fn test_pinning_one_value_does_not_excuse_another() -> [io, proc] Result[Unit, S
   }
 }
 
+# A test author that wrote nothing used to PASS its gate ("no test files found
+# — nothing to check", exit 0), seal, and hand off; py-qa then died three
+# retries later with "NO TEST FILE", wearing the blame. Watched happen in tzpin.
+fn test_no_test_file_is_a_failure() -> [io, proc] Result[Unit, Str] {
+  let out := "I would write tests covering the three output formats and both error paths.\n\n```notes.md\nplan\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-notests") {
+    Ok(_) => Err("a test author that produced no test file must not pass its gate"),
+    Err(_) => Ok(()),
+  }
+}
+
+# py_compile PARSES; it never resolves an import. A build naming a package
+# nobody installed compiles clean and then fails at launch, several nodes away.
+fn test_import_gate_catches_a_missing_package() -> [io, proc] Result[Unit, Str] {
+  let out := "Built.\n\n```main.py\nimport nonexistent_pkg_xyz\n\ndef convert(x):\n    return x\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-missing") {
+    Ok(_) => Err("a module that cannot import must fail the gate"),
+    Err(e) => if str.contains(e, "ModuleNotFoundError") {
+      Ok(())
+    } else {
+      Err(str.concat("failed, but without naming the import error: ", e))
+    },
+  }
+}
+
+# The same file passes py_compile, which is exactly the gap.
+fn test_compiles_gate_accepts_what_the_import_gate_rejects() -> [io, proc] Result[Unit, Str] {
+  let sprint := "t-import-gap"
+  let dir := lexskill.py_work_dir(sprint)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, "; mkdir -p ", dir], "")])
+  let __w := io.write(str.join([dir, "/main.py"], ""), "import nonexistent_pkg_xyz\n\ndef convert(x):\n    return x\n")
+  match runner.verify_build_compiles("py_build", sprint) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("py_compile should still accept this — the gap is the point: ", e)),
+  }
+}
+
+fn test_import_gate_passes_a_real_module() -> [io, proc] Result[Unit, Str] {
+  let out := "Built.\n\n```main.py\nimport json\n\ndef convert(x):\n    return json.dumps(x)\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-good") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a module that imports cleanly must pass: ", e)),
+  }
+}
+
+# The build-path gate runs INSIDE the work dir, so it needs LOOM_ROOT exported
+# just as the output path does. It was not, so the same gate string worked on a
+# non-build node and silently ran `python3 /bin/...` on a build one.
+fn test_build_path_gate_can_reach_repo_tools() -> [io, proc] Result[Unit, Str] {
+  let sprint := "t-loomroot-build"
+  let dir := lexskill.py_work_dir(sprint)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, "; mkdir -p ", dir], "")])
+  let __w := io.write(str.join([dir, "/main.py"], ""), "import json\n")
+  match runner.verify_shell("test -f $LOOM_ROOT/bin/check_imports.py", "py_build", sprint) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a build-node gate must be able to reach the repo's own tools: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools()]
 }
 
 fn run_all() -> [io, proc] Unit {

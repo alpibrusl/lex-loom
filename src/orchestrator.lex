@@ -1230,8 +1230,50 @@ fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintG
   run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_result, impl_ref, impl_node, task_input, cfg, bounce, "", impl_ref)
 }
 
+# The build nodes in this graph that never produced anything, as a printable
+# list -- "" when at least one of them did.
+#
+# QA cannot judge a build that never ran. Found live (tzshdr1, iterations 2 and
+# 3): the graph contained py_build and py_test_author, both were cast, neither
+# ever started, and py_qa then spent four retries per round denying "work dir
+# missing" and "NO TEST FILE". Two whole iterations and most of a 2.9M-token
+# budget went into a QA node re-reading an empty directory, and the run was
+# recorded as the QA model failing. Retrying against an artifact that does not
+# exist cannot succeed; the only honest move is to stop and name the producer.
+fn missing_producers(impl_graph :: graph.SprintGraph, impl_result :: PhaseResult) -> Str {
+  let builds := list.filter(impl_graph.nodes, fn (n :: graph.Node) -> Bool {
+    runner.is_build_kind(n.role)
+  })
+  if list.is_empty(builds) {
+    ""
+  } else {
+    let produced := list.filter(builds, fn (n :: graph.Node) -> Bool {
+      list.fold(impl_result.outcomes, false, fn (acc :: Bool, o :: NodeOutcome) -> Bool {
+        if acc {
+          true
+        } else {
+          o.attested and o.node_id == n.id
+        }
+      })
+    })
+    if list.is_empty(produced) {
+      str.join(list.map(builds, fn (n :: graph.Node) -> Str {
+        n.id
+      }), ", ")
+    } else {
+      ""
+    }
+  }
+}
+
 fn run_qa_with_bounce_tracked(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, impl_node :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int, prior_denial :: Str, prior_impl_ref :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
-  let qa_result := run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
+  let absent := missing_producers(impl_graph, impl_result)
+  let qa_result := if str.is_empty(absent) {
+    run_phase(qa_graph, graph.QA, impl_ref, [], cfg)
+  } else {
+    let __tp := tr.trail(cfg.db, cfg.id, "qa_skipped_no_producer", str.join(["{\"builds\":", jv.stringify(JStr(absent)), "}"], ""))
+    { phase: graph.QA, outcomes: [{ node_id: "qa", attested: false, sealed: false, artifact: "", reason: str.join(["QA did not run: the build node(s) ", absent, " never produced an artifact in this sprint, so there is nothing to judge"], "") }], success: false }
+  }
   let qa_passed := qa_result.success
   if qa_passed {
     { qa: qa_result, impl: impl_phase_of(impl_result.outcomes) }

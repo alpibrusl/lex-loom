@@ -49,6 +49,49 @@ echo "[reliability] manifest=$MANIFEST model=$MODEL attempts=$N max_iterations=$
 echo "[reliability] logs in $WORK"
 echo
 
+# Classify one finished run from its database alone. A function, not inline
+# shell, so it can be exercised without spending a real run: an earlier fix to
+# this logic was reported as landed when only half of it had been written to
+# the file, because the "verification" re-implemented the rule in a scratch
+# snippet instead of calling the artifact. demo/rel1-classifier-roundtrip.sh
+# now calls THIS.
+#
+# Echoes "<class>\t<detail>".
+classify_run() {
+  local DB="$1" WORK="${2:-}" ID="${3:-}"
+  local cls detail provider_errs calls accepted passed errnote
+    cls="unknown"; detail=""
+    if [ ! -f "$DB" ]; then
+      cls="infra"; detail="no company.db — the run never started"
+    else
+      provider_errs=$(sqlite3 "$DB" "select count(*) from traces where event_kind='llm_done' and data_json like '%[provider error%';" 2>/dev/null || echo 0)
+      calls=$(sqlite3 "$DB" "select count(*) from traces where event_kind='llm_start';" 2>/dev/null || echo 0)
+      accepted=$(sqlite3 "$DB" "select count(*) from traces where event_kind='node_accepted';" 2>/dev/null || echo 0)
+      passed=$(sqlite3 "$DB" "select count(*) from traces where event_kind='sprint_complete' and data_json like '%\"success\":true%';" 2>/dev/null || echo 0)
+      # A run is unmeasurable only when provider errors actually PREVENTED
+      # measurement. Any error at all used to void it: tzshdr1 was discarded as
+      # "infra - nothing measured" on 3 errors out of 64 calls, having produced
+      # 12 accepted nodes, 31 denials and 2.9M tokens of real pipeline behaviour.
+      # Six consecutive batches reported nothing for this reason. Void a run when
+      # nothing got through, or when errors are most of the traffic; otherwise
+      # measure it and carry the count as a note.
+      errnote=""
+      [ "${provider_errs:-0}" -gt 0 ] && errnote="  [${provider_errs}/${calls} calls hit a provider error]"
+      if [ "${provider_errs:-0}" -gt 0 ] && { [ "${accepted:-0}" -eq 0 ] || [ $(( provider_errs * 2 )) -gt "${calls:-1}" ]; }; then
+        cls="infra"; detail="$provider_errs/$calls calls failed, $accepted node(s) accepted — model/proxy unreachable, NOT a pipeline failure"
+      elif [ "${passed:-0}" -gt 0 ]; then
+        cls="pass"; detail="$(sqlite3 "$DB" "select count(*) from traces where event_kind='phase_bounced';" 2>/dev/null || echo 0) bounce(s)${errnote}"
+      else
+        # the node that actually sank it: the last denial recorded
+        detail="$(sqlite3 "$DB" "select json_extract(data_json,'\$.node')||': '||json_extract(data_json,'\$.reason') from traces where event_kind='node_denied' order by id desc limit 1;" 2>/dev/null || true)"
+        [ -n "$detail" ] && cls="fail" || { cls="fail"; detail="no node_denied recorded — check $WORK/$ID.log"; }
+        detail="${detail}${errnote}"
+      fi
+      toks=$(sqlite3 "$DB" "select coalesce(sum(json_extract(data_json,'\$.total_tokens')),0) from traces where event_kind='llm_usage';" 2>/dev/null || echo 0)
+    fi
+  printf '%s\t%s' "$cls" "$detail"
+}
+
 for i in $(seq 1 "$N"); do
   ID="${BASE_ID}r${i}"
   DB="$HOME/loom-companies/$ID/company.db"
@@ -63,24 +106,8 @@ for i in $(seq 1 "$N"); do
   elapsed=$(( $(date +%s) - started ))
 
   # ---- classify from the DB ----------------------------------------------
-  cls="unknown"; detail=""
-  if [ ! -f "$DB" ]; then
-    cls="infra"; detail="no company.db — the run never started"
-  else
-    provider_errs=$(sqlite3 "$DB" "select count(*) from traces where event_kind='llm_done' and data_json like '%[provider error%';" 2>/dev/null || echo 0)
-    passed=$(sqlite3 "$DB" "select count(*) from traces where event_kind='sprint_complete' and data_json like '%\"success\":true%';" 2>/dev/null || echo 0)
-    if [ "${passed:-0}" -gt 0 ]; then
-      cls="pass"; detail="$(sqlite3 "$DB" "select count(*) from traces where event_kind='phase_bounced';" 2>/dev/null || echo 0) bounce(s)"
-    elif [ "${provider_errs:-0}" -gt 0 ]; then
-      cls="infra"; detail="$provider_errs provider error(s) — model/proxy unreachable, NOT a pipeline failure"
-    else
-      # the node that actually sank it: the last denial recorded
-      detail="$(sqlite3 "$DB" "select json_extract(data_json,'\$.node')||': '||json_extract(data_json,'\$.reason') from traces where event_kind='node_denied' order by id desc limit 1;" 2>/dev/null || true)"
-      [ -n "$detail" ] && cls="fail" || { cls="fail"; detail="no node_denied recorded — check $WORK/$ID.log"; }
-      detail="${detail}${errnote}"
-    fi
-    toks=$(sqlite3 "$DB" "select coalesce(sum(json_extract(data_json,'\$.total_tokens')),0) from traces where event_kind='llm_usage';" 2>/dev/null || echo 0)
-  fi
+  IFS=$'\t' read -r cls detail <<< "$(classify_run "$DB" "$WORK" "$ID")"
+  toks=$(sqlite3 "$DB" "select coalesce(sum(json_extract(data_json,'$.total_tokens')),0) from traces where event_kind='llm_usage';" 2>/dev/null || echo 0)
   printf '%s\t%s\t%s\t%s\t%s\n' "$ID" "$cls" "${elapsed}s" "${toks:-0}" "$detail" >> "$RESULTS"
   printf '  [%d/%d] %-14s %-6s %5ss  %s\n' "$i" "$N" "$ID" "$cls" "$elapsed" "$detail"
 done

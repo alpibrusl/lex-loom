@@ -466,7 +466,7 @@ fn tool_work_dir_for_role(role :: Str, sprint_id :: Str) -> Str {
   if role == "py_build" or role == "py_test_author" {
     py_work_dir(sprint_id)
   } else {
-    if role == "ts_build" {
+    if role == "ts_build" or role == "ts_test_author" {
       ts_work_dir(sprint_id)
     } else {
       if role == "build" or role == "test_author" {

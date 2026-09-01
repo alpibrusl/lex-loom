@@ -10,12 +10,12 @@
 #
 # Usage (lex 0.9.8+ checks effects whole-program, so the read-only commands
 # need the same effect row as run_sprint_cmd — main.lex imports the orchestrator):
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
 #     src/main.lex run_sprint_cmd
 #
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval src/main.lex sprint_status
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval src/main.lex sprint_trail
-#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval src/main.lex sprint_digest
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream src/main.lex sprint_status
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream src/main.lex sprint_trail
+#   SPRINT_ID=sprint-1 lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream src/main.lex sprint_digest
 #
 # Environment:
 #   DB_PATH       — SQLite file path         (default: loom.db)
@@ -460,7 +460,7 @@ fn attest_sprint(db :: conn.ConnDb, sprint_id :: Str, verdicts_json :: Str, all_
 # this writes nothing back to the record: verifying a copy someone
 # handed you should not mutate it.
 #   DB_PATH=their.db SPRINT_ID=co/iter-1 lex run --max-steps 0 \
-#     --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs \
+#     --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream \
 #     src/main.lex verify_record_cmd
 fn verify_record_cmd() -> [env, io, sql, fs_read, fs_write, vcs, crypto, proc] Unit {
   let db_path := get_env("DB_PATH", "loom.db")

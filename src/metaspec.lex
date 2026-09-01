@@ -309,7 +309,11 @@ fn is_test_author_role(role :: Str) -> Bool {
   if role == "test_author" {
     true
   } else {
-    role == "py_test_author"
+    if role == "py_test_author" {
+      true
+    } else {
+      role == "ts_test_author"
+    }
   }
 }
 
@@ -319,7 +323,11 @@ fn test_author_kind_for_build(build_role :: Str) -> Str {
   if build_role == "py_build" {
     "py_test_author"
   } else {
-    "test_author"
+    if build_role == "ts_build" {
+      "ts_test_author"
+    } else {
+      "test_author"
+    }
   }
 }
 

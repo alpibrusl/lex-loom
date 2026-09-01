@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SPRINT_ID="${SPRINT_ID:-sprint-1}"
-EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval
+EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream
 # A sprint is trusted first-party code, not the untrusted agent-tool sandbox the
 # VM's opcode step-limit guards against — and node layers fan out via list.par_map
 # whose workers inherit this limit (lex vm.rs). Run unbounded (--max-steps 0) so a

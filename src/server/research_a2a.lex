@@ -189,7 +189,7 @@ fn mount_gated(r :: router.Router, agent :: srv.AgentDef, expected_token :: Str)
 # ── Entry point ───────────────────────────────────────────────────────────────
 # Run it:
 #   RESEARCH_API_TOKEN=<a real secret> \
-#   lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
+#   lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval,stream \
 #     src/server/research_a2a.lex serve_research_a2a
 #
 # Env:

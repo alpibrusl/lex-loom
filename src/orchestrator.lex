@@ -30,6 +30,8 @@ import "./graph" as graph
 
 import "./gates" as gates
 
+import "./role_contracts" as contracts
+
 import "./metaspec" as metaspec
 
 import "./phase" as phase
@@ -490,7 +492,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                     let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
                     { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                   },
-                  GateAllow => match if gates.is_grounded(n.gate) {
+                  GateAllow => match and_contract(n.role, output, cfg.id, str.join([sanitize_id(cfg.id), "-", n.id, "-contract-", int.to_str(attempt)], ""), if gates.is_grounded(n.gate) {
                     runner.verify_compiles(n.role, cfg.id)
                   } else {
                     if gates.is_shell_gate(n.gate) {
@@ -517,7 +519,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                         runner.verify_build_compiles(n.role, cfg.id)
                       }
                     }
-                  } {
+                  }) {
                     Err(compile_err) => {
                       let gate_label := if gates.is_shell_gate(n.gate) {
                         "gate command failed"
@@ -1163,7 +1165,11 @@ fn is_test_author_role(role :: Str) -> Bool {
   if role == "test_author" {
     true
   } else {
-    role == "py_test_author"
+    if role == "py_test_author" {
+      true
+    } else {
+      role == "ts_test_author"
+    }
   }
 }
 
@@ -1226,6 +1232,34 @@ fn affected_impl_subgraph(g :: graph.SprintGraph, node_id :: Str) -> graph.Sprin
 # builder never told. Observed live (tzlocal2): every iteration ended
 # bounced=0. The graph is now split into an Implementation half and a QA half
 # so a real QA failure sends the work back to whoever can fix it.
+# Enforce the role's own deliverable contract on top of whatever gate the
+# Architect chose. A pure wrapper around the gate result -- Err wins, and a
+# contract violation turns an otherwise-passing gate into a denial that names
+# the missing artifact.
+#
+# The gate is per-GRAPH and an LLM picks it; this is per-ROLE and always runs.
+# tzlaunch iteration 3 is the case for the distinction: bin/check_imports.py
+# existed, worked, and would have caught the module that could not import --
+# the Architect just did not attach it to that node. A check a model has to
+# remember to opt into is a suggestion, not a validation.
+fn and_contract(role :: Str, output :: Str, sprint_id :: Str, scratch :: Str, gate_result :: Result[Unit, Str]) -> [io, proc] Result[Unit, Str] {
+  match gate_result {
+    Err(e) => Err(e),
+    Ok(_) => {
+      let seed := runner.tool_work_dir_for_role(role, sprint_id)
+      list.fold(contracts.deliverables_for(role), Ok(()), fn (acc :: Result[Unit, Str], d :: contracts.Deliverable) -> [io, proc] Result[Unit, Str] {
+        match acc {
+          Err(e) => Err(e),
+          Ok(_) => match runner.verify_shell_on_output_from(contracts.check_cmd(d), output, scratch, seed) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(contracts.missing_message(role, d)),
+          },
+        }
+      })
+    },
+  }
+}
+
 fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, impl_node :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
   run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_result, impl_ref, impl_node, task_input, cfg, bounce, "", impl_ref)
 }

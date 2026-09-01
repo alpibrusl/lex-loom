@@ -152,7 +152,7 @@ fn run_verifier(tmp :: Str, sprint_id :: Str, rerun_grounded :: Bool) -> [proc] 
     "1"
   } else {
     "0"
-  }, "' lex run --max-steps 0 --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs src/main.lex verify_record_cmd"], "")
+  }, "' lex run --max-steps 0 --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream src/main.lex verify_record_cmd"], "")
   match process.run("sh", ["-c", cmd]) {
     Err(e) => Err(str.concat("verifier failed to run: ", e)),
     Ok(r) => match extract_verdicts(r.stdout) {
@@ -230,7 +230,7 @@ fn health_route() -> (ctx.Ctx) -> resp.Response {
 # ── Entry point ───────────────────────────────────────────────────────────────
 # Run it:
 #   VERIFY_API_TOKEN=<a real secret> LEX_STORE_ROOT=$(mktemp -d) \
-#   lex run --max-steps 0 --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs \
+#   lex run --max-steps 0 --allow-effects approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream \
 #     src/server/verify_api.lex serve_verify_api
 #
 # Env:

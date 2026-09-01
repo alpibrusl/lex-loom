@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 WS="$(mktemp -d "${TMPDIR:-/tmp}/loom-hb1-demo.XXXXXX")"
 trap 'rm -rf "$WS"' EXIT
 mkdir -p "$WS/wakeco" "$WS/stopco"

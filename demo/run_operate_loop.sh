@@ -34,7 +34,7 @@ TARGET_URL="http://127.0.0.1:$PORT"
 # so every command below grants the full set `lex check --strict` reports
 # for its file, matching the convention already used in bin/*.sh.
 DEMO_FILE_EFFECTS=concurrent,crypto,env,fs_read,fs_write,io,net,proc,random,sql,time
-MAIN_FILE_EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval
+MAIN_FILE_EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream
 
 TOY_PID=""
 

@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 
 N="${1:-5}"
 MODEL="${2:-kimi-k2.7-code}"
-EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval
+EFFECTS=env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream
 REQUEST='Build a minimal Lex HTTP server that compiles and responds to GET /health with HTTP 200 and a JSON body containing '"'"'status'"'"' and '"'"'privacy_note_url'"'"' fields. This is a standalone smoke test, not a full product -- no other routes, no x402 gating, no Python helper.'
 
 WORKDIR="$(mktemp -d /tmp/loom-smoke-health.XXXXXX)"

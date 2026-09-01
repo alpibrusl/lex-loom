@@ -32,7 +32,7 @@ rm -f "$DB_PATH"
 cleanup() { rm -f "$DB_PATH"; }
 trap cleanup EXIT
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 
 echo "+ seeding a company with [policy].isolation = $POLICY_ISOLATION"
 DB_PATH="$DB_PATH" COMPANY_ID="$COMPANY_ID" POLICY_ISOLATION="$POLICY_ISOLATION" \

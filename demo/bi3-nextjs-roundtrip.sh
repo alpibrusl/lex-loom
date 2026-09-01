@@ -88,7 +88,7 @@ curl -sf "http://127.0.0.1:$PORT/blog" | grep -q "BI3" && check "blog serves the
 
 echo
 echo "-- 4. sprint bridge gates this path with ZERO new gate code"
-EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs
+EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream
 TSWORK="/tmp/loom-ts-work-nextco_iter-1"
 rm -rf "$TSWORK" && mkdir -p "$TSWORK/app"
 cat > "$TSWORK/app/page.tsx" <<'TSX'

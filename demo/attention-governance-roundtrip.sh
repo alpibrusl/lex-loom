@@ -37,7 +37,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 
 echo "+ seeding a real company + a real pending human-gate item via src/transport.lex::push_attention"
 DB_PATH="$DB_PATH" COMPANY_ID="$COMPANY_ID" ORACLE="$ORACLE" \

@@ -20,7 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-EFFECTS="approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs"
+EFFECTS="approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream"
 WS="$(mktemp -d "${TMPDIR:-/tmp}/loom-gov4-demo.XXXXXX")"
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$WS"; }

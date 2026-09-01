@@ -97,7 +97,7 @@ echo "-- 5. sprint bridge (#256 BI2): the ts_build gate runs the REAL expo expor
 # A company sprint's work dir, overlaid on the bootstrapped workspace by
 # verify_compiles_at (ws_root "" -> $LOOM_WORKSPACE, the production path).
 # Broken JSX must FAIL the gate with bundler output; a valid .tsx must PASS.
-EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs
+EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream
 SPRINT="rnwebco/iter-1"
 TSWORK="/tmp/loom-ts-work-rnwebco_iter-1"
 rm -rf "$TSWORK" && mkdir -p "$TSWORK"

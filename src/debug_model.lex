@@ -1,6 +1,6 @@
 # debug_model.lex — diagnose which Ollama models work with lex-llm's provider.
 #
-# Run: OLLAMA_MODEL=mistral-small:latest lex run --allow-effects env,io,net,llm,proc,approval src/debug_model.lex check_model
+# Run: OLLAMA_MODEL=mistral-small:latest lex run --allow-effects env,io,net,llm,proc,approval,stream src/debug_model.lex check_model
 
 import "std.io" as io
 

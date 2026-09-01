@@ -58,19 +58,19 @@ done
 echo
 echo "+ seeding a company with [soft].settlement on"
 DB_PATH="$DB_PATH" COMPANY_ID="$COMPANY_ID" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex seed_company_cmd
 
 echo
 echo "+ checking revenue — real check_and_record_revenue, routed through soft_settlement"
 DB_PATH="$DB_PATH" COMPANY_ID="$COMPANY_ID" REVENUE_URL="http://127.0.0.1:$REVENUE_PORT" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex check_revenue_cmd
 
 echo
 echo "+ board_report — the settlement event should be cited (trail_id + verified)"
 REPORT=$(DB_PATH="$DB_PATH" COMPANY_ID="$COMPANY_ID" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex report_cmd)
 echo "$REPORT"
 
@@ -85,16 +85,16 @@ echo "+ extracted trail_id=$TRAIL_ID"
 echo
 echo "+ independent re-verification (fresh handle, honest trail) — should verify"
 DB_PATH="$DB_PATH" TRAIL_ID="$TRAIL_ID" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex reverify_cmd
 
 echo
 echo "+ tampering with the recorded event, then re-verifying again — should now FAIL"
 DB_PATH="$DB_PATH" TRAIL_ID="$TRAIL_ID" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex tamper_cmd
 DB_PATH="$DB_PATH" TRAIL_ID="$TRAIL_ID" \
-  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+  lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   demo/sa3_settlement.lex reverify_cmd
 
 echo

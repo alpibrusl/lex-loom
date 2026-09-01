@@ -39,7 +39,7 @@ rm -f "$DB_PATH"
 cleanup() { rm -f "$DB_PATH"; }
 trap cleanup EXIT
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 
 echo "+ case 1: no override — build keeps its own default grant (Implementation: exec Sandboxed)"
 BASELINE=$(DB_PATH="$DB_PATH" SPRINT_ID="oa2-demo/iter-1" POLICY_ISOLATION="" \

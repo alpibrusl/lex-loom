@@ -34,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 
 echo "+ seeding a real AG-UI replay row via agui_store.persist_agui_events (the exact function runner.lex's LLM branch calls)"
 DB_PATH="$DB_PATH" SPRINT_ID="$SPRINT_ID" RUN_ID="$RUN_ID" AGENT_ID="loom-build" TEXT="$TEXT" \

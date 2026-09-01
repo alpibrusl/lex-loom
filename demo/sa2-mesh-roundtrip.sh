@@ -45,7 +45,7 @@ trap cleanup EXIT
 
 echo "+ starting an independent federation node on :$FED_PORT"
 ( cd "$SOFT_ROOT" && DB_URL=":memory:" PORT="$FED_PORT" ORG="soft-node-b" \
-    lex run --allow-effects net,io,env,time,random,sql,fs_read,fs_write,concurrent,llm,proc,crypto,approval \
+    lex run --allow-effects net,io,env,time,random,sql,fs_read,fs_write,concurrent,llm,proc,crypto,approval,stream \
     src/federation_node.lex serve_federation ) &
 PIDS+=("$!")
 
@@ -71,7 +71,7 @@ PIDS+=("$!")
 
 echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated, URL-scoped to the product server — lex-loom#194)"
 ( cd "$REPO_ROOT" && PORT="$CX_PORT" CX_API_TOKEN="$CX_TOKEN" CX_ALLOWED_URL="http://127.0.0.1:$SUPPORT_PORT" \
-    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
+    lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval,stream \
     src/server/cx_a2a.lex serve_cx_a2a ) &
 PIDS+=("$!")
 
@@ -89,7 +89,7 @@ echo
 echo
 echo "+ registering CX into the federation node's mesh"
 ( cd "$REPO_ROOT" && lex run \
-    --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+    --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
     src/soft_register.lex register_role "\"http://localhost:$FED_PORT\"" "\"$ORG\"" '"cx"' "\"http://localhost:$CX_PORT\"" )
 
 echo

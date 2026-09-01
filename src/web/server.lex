@@ -18,7 +18,7 @@
 # LAST pattern segment, so the action verb moved before the id instead of
 # after it, e.g. /api/sprints/:id/status -> /api/sprint-status/*id).
 # Run:
-#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs,approval \
+#   lex run --allow-effects env,net,io,llm,proc,sql,fs_read,fs_write,time,crypto,random,concurrent,vcs,approval,stream \
 #     src/web/server.lex serve_loom
 #
 # Environment:

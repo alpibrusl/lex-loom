@@ -32,7 +32,7 @@
 # second, drifted reimplementation.
 #
 # Usage (one worker process):
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
 #     src/worker.lex run_worker
 #
 # Environment:

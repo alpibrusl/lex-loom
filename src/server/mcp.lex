@@ -11,7 +11,7 @@
 #   sprint_digest  — fetch Digest artifacts
 #
 # Usage:
-#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+#   lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
 #     src/server/mcp.lex run_mcp_server
 #
 # Environment:

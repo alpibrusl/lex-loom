@@ -42,13 +42,13 @@ trap cleanup EXIT
 
 echo "+ starting an independent federation node on :$FED_PORT"
 ( cd "$SOFT_ROOT" && DB_URL=":memory:" PORT="$FED_PORT" ORG="soft-node-c" \
-    lex run --allow-effects net,io,env,time,random,sql,fs_read,fs_write,concurrent,llm,proc,crypto,approval \
+    lex run --allow-effects net,io,env,time,random,sql,fs_read,fs_write,concurrent,llm,proc,crypto,approval,stream \
     src/federation_node.lex serve_federation ) &
 PIDS+=("$!")
 
 echo "+ starting loom's research A2A server on :$RESEARCH_PORT (token-gated)"
 PORT="$RESEARCH_PORT" RESEARCH_API_TOKEN="$RESEARCH_TOKEN" \
-  lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval \
+  lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,vcs,approval,stream \
   src/server/research_a2a.lex serve_research_a2a &
 PIDS+=("$!")
 
@@ -65,7 +65,7 @@ echo
 
 echo
 echo "+ registering research into the federation node's mesh"
-lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+lex run --allow-effects concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
   src/soft_register.lex register_role "\"http://localhost:$FED_PORT\"" "\"$ORG\"" '"research"' "\"http://localhost:$RESEARCH_PORT\""
 
 echo

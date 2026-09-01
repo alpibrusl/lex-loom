@@ -107,7 +107,7 @@ if [ "$EXEC_MODE" = "queue" ]; then
   echo "[run-company] EXEC_MODE=queue: launching $WORKER_COUNT worker process(es), logs in $WORKER_LOG_DIR"
   for i in $(seq 1 "$WORKER_COUNT"); do
     WORKER_ID="w$i" lex run --max-steps 0 \
-      --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+      --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
       src/worker.lex run_worker > "$WORKER_LOG_DIR/worker-$i.log" 2>&1 &
     WORKER_PIDS+=("$!")
   done
@@ -117,7 +117,7 @@ fi
 
 echo "[run-company] id=$COMPANY_ID model=$MODEL max_iterations=$MAX_ITERATIONS stop_when='${STOP_WHEN}' db=$DB_PATH exec_mode=$EXEC_MODE"
 lex run --max-steps 0 \
-  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
   src/main.lex run_company_cmd
 
 echo

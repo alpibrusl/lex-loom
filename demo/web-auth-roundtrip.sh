@@ -33,7 +33,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval"
+EFFECTS="concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream"
 
 echo "+ confirming serve_loom refuses to start with LOOM_API_TOKEN unset"
 UNSET_OUTPUT=$(PORT="$((WEB_PORT + 1))" DB_PATH="$DB_PATH" \

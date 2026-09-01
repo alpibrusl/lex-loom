@@ -38,7 +38,7 @@ LEX="${LEX_BIN:-lex}"
 # are deterministic proc: scripts, so only PM/Architect/QA/Demo use the model.
 MODEL="${MODEL:-qwen3.8:27b-mlx}"
 LAUNCH_PORT="${LAUNCH_PORT:-8090}"
-EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval"
+EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream"
 # JSON parsing in lex-schema is O(n^2); large QA/trail payloads blow the default
 # VM step limit (and par_map workers cap at 10M). Raise it generously.
 MAXSTEPS="${MAXSTEPS:-500000000}"

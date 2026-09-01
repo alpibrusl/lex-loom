@@ -59,5 +59,5 @@ export LOOM_WORKSPACE TICK_MS EVENT_POLL_MS MAX_RUNS_PER_TICK MAX_TICKS MAX_API_
 
 echo "[loom-scheduler] workspace=$LOOM_WORKSPACE tick_ms=$TICK_MS event_poll_ms=$EVENT_POLL_MS max_runs_per_tick=$MAX_RUNS_PER_TICK max_ticks=$MAX_TICKS exec_mode=$EXEC_MODE"
 exec lex run --max-steps 0 \
-  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval \
+  --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream \
   src/scheduler.lex run_scheduler

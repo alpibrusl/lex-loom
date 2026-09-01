@@ -382,6 +382,45 @@ fn rule_tests_authored_independently(g :: graph.SprintGraph) -> List[Violation] 
   }
 }
 
+# A graph that builds AND judges must have someone independent writing what it
+# is judged against.
+#
+# tests-authored-independently only fires when a test author is PRESENT: it
+# checks that the author is not downstream of the build. It says nothing about
+# a graph with no test author at all. Found live (tzcontract): the Architect
+# emitted three py_build nodes -- py-build-core, py-build-tests, py-build-app --
+# and routed test-writing to the one it NAMED "py-build-tests". Role py_build.
+# Every rule passed. The independent-test-author design, the language-matching
+# rule and the role's deliverable contract were all bypassed by naming a build
+# node after the job, and QA then judged an implementation against tests its own
+# author wrote -- the exact failure that cost three iterations in the run that
+# prompted building the test author in the first place.
+#
+# Language-parameterised: the required role comes from test_author_kind_for_build,
+# whose totality over build kinds is guarded in tests/test_role_contracts.lex, so
+# a new language inherits this rule rather than escaping it.
+fn rule_tests_have_an_independent_author(g :: graph.SprintGraph) -> List[Violation] {
+  if not graph.has_qa_node(g) {
+    []
+  } else {
+    list.fold(build_roles_in(g), [], fn (acc :: List[Violation], b :: Str) -> List[Violation] {
+      let want := test_author_kind_for_build(b)
+      let present := list.fold(g.nodes, false, fn (found :: Bool, n :: graph.Node) -> Bool {
+        if found {
+          true
+        } else {
+          n.role == want
+        }
+      })
+      if present {
+        acc
+      } else {
+        list.concat(acc, [{ rule: "tests-have-an-independent-author", message: str.join(["this graph builds with '", b, "' and has a QA node, but no '", want, "' node -- QA would judge the implementation against tests written by whoever wrote it. Naming a build node 'build-tests' does not make its author independent: add a ", want, " node fed from the spec, in parallel with the build"], "") }])
+      }
+    })
+  }
+}
+
 fn rule_roles_resolve(g :: graph.SprintGraph) -> List[Violation] {
   list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
     if str.is_empty(n.role) {
@@ -546,7 +585,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {

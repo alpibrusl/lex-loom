@@ -45,7 +45,7 @@ jobs:
       - name: Test
         run: |
           lex test --allow-effects \
-            concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval \
+            concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,approval,stream \
             tests
 
   # The offline roundtrip demos are the live acceptance proofs for the

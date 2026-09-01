@@ -73,7 +73,7 @@ fn test_valid_qa_demo() -> Result[Unit, Str] {
 }
 
 fn test_valid_pipeline() -> Result[Unit, Str] {
-  assert_valid("build→qa→demo", g("m3", [node("b", "build"), node("q", "qa"), node("d", "demo")], [edge("b", "q"), edge("q", "d")]))
+  assert_valid("build→qa→demo", g("m3", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("d", "demo")], [edge("ta", "q"), edge("b", "q"), edge("q", "d")]))
 }
 
 fn test_empty_fails_non_empty() -> Result[Unit, Str] {
@@ -101,7 +101,7 @@ fn test_demo_without_qa_fails() -> Result[Unit, Str] {
 }
 
 fn test_indirect_qa_valid() -> Result[Unit, Str] {
-  assert_valid("indirect qa→security→demo", g("m10", [node("b", "build"), node("q", "qa"), node("r", "security"), node("d", "demo")], [edge("b", "q"), edge("q", "r"), edge("r", "d")]))
+  assert_valid("indirect qa→security→demo", g("m10", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("r", "security"), node("d", "demo")], [edge("ta", "q"), edge("b", "q"), edge("q", "r"), edge("r", "d")]))
 }
 
 # ── #33: role-resolution + gate-well-formedness ───────────────────────────────
@@ -110,26 +110,26 @@ fn test_unknown_role_fails() -> Result[Unit, Str] {
 }
 
 fn test_known_roles_pass_resolution() -> Result[Unit, Str] {
-  assert_valid("launch is a known role", g("m13", [node("b", "build"), node("q", "qa"), node("l", "launch"), node("d", "demo")], [edge("b", "q"), edge("q", "l"), edge("l", "d")]))
+  assert_valid("launch is a known role", g("m13", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("l", "launch"), node("d", "demo")], [edge("ta", "q"), edge("b", "q"), edge("q", "l"), edge("l", "d")]))
 }
 
 # #84/#88: distribution roles resolve — a company can now build a graph that
 # markets what it shipped, not just build/QA/demo it.
 fn test_distribution_roles_pass_resolution() -> Result[Unit, Str] {
-  assert_valid("distribution roles are known", g("m13d", [node("b", "build"), node("q", "qa"), node("d", "demo"), node("bs", "brand_strategist"), node("cw", "copywriter"), node("cc", "content_creator"), node("seo", "seo_specialist"), node("sc", "scribe")], [edge("b", "q"), edge("q", "d"), edge("d", "bs"), edge("bs", "cw"), edge("cw", "cc"), edge("cc", "seo"), edge("seo", "sc")]))
+  assert_valid("distribution roles are known", g("m13d", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("d", "demo"), node("bs", "brand_strategist"), node("cw", "copywriter"), node("cc", "content_creator"), node("seo", "seo_specialist"), node("sc", "scribe")], [edge("ta", "q"), edge("b", "q"), edge("q", "d"), edge("d", "bs"), edge("bs", "cw"), edge("cw", "cc"), edge("cc", "seo"), edge("seo", "sc")]))
 }
 
 # #84/#92: finance + legal role-packs resolve — tech-agnostic business
 # functions, independent of the distribution phase.
 fn test_finance_legal_roles_pass_resolution() -> Result[Unit, Str] {
-  assert_valid("finance/legal roles are known", g("m13e", [node("b", "build"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), node("leg", "legal"), node("sc", "scribe")], [edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "leg"), edge("leg", "sc")]))
+  assert_valid("finance/legal roles are known", g("m13e", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), node("leg", "legal"), node("sc", "scribe")], [edge("ta", "q"), edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "leg"), edge("leg", "sc")]))
 }
 
 # #89: monetization_handoff resolves as a known role, AND is rejected unless
 # its gate is 'human <oracle>' — the one node a model must never self-certify.
 fn test_monetization_handoff_resolves_with_human_gate() -> Result[Unit, Str] {
   let mh := { id: "mh", role: "monetization_handoff", gate: "human founder", expand: None, activate_when: "" }
-  assert_valid("monetization_handoff with a human gate is valid", g("m13f", [node("b", "build"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), mh, node("sc", "scribe")], [edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "mh"), edge("mh", "sc")]))
+  assert_valid("monetization_handoff with a human gate is valid", g("m13f", [node("b", "build"), node("ta", "test_author"), node("q", "qa"), node("d", "demo"), node("fin", "finance"), mh, node("sc", "scribe")], [edge("ta", "q"), edge("b", "q"), edge("q", "d"), edge("d", "fin"), edge("fin", "mh"), edge("mh", "sc")]))
 }
 
 fn test_monetization_handoff_rejects_autonomous_gate() -> Result[Unit, Str] {
@@ -242,7 +242,7 @@ fn test_a_genuinely_unknown_role_is_still_rejected() -> Result[Unit, Str] {
 # always-staffed core pack, and has its own run_code tool; nothing enforced
 # the pairing, so the wrong pick was invisible until QA had spent the sprint.
 fn test_python_build_with_lex_qa_is_rejected() -> Result[Unit, Str] {
-  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }] }
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "ta", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }], edges: [{ from: "ta", to: "q", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }] }
   match meta.check(gph) {
     Valid => Err("a Lex qa node judging a Python build must be rejected — lex_check cannot read Python"),
     Invalid(_) => Ok(()),
@@ -250,7 +250,7 @@ fn test_python_build_with_lex_qa_is_rejected() -> Result[Unit, Str] {
 }
 
 fn test_python_build_with_py_qa_is_accepted() -> Result[Unit, Str] {
-  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "ta", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "ta", to: "q", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
   match meta.check(gph) {
     Valid => Ok(()),
     Invalid(vs) => Err(str.concat("the correct pairing must stay valid, got: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
@@ -261,8 +261,12 @@ fn test_python_build_with_py_qa_is_accepted() -> Result[Unit, Str] {
 
 # A graph building in BOTH languages is the documented DUAL LAUNCH pattern.
 # The pairing is genuinely ambiguous there, so the rule must not guess.
+# A dual-language graph needs an author per LANGUAGE. The sibling rules abstain
+# on multi-build graphs because they cannot tell which QA belongs to which
+# build; this one does not have to guess -- a Lex build and a Python build each
+# need their own independent oracle.
 fn test_multi_language_graph_is_left_alone() -> Result[Unit, Str] {
-  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b1", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b2", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b1", to: "q", handoff: "schema {}" }, { from: "b2", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "ta", role: "test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "ta2", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "b1", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "b2", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "ta", to: "q", handoff: "schema {}" }, { from: "ta2", to: "q", handoff: "schema {}" }, { from: "b1", to: "q", handoff: "schema {}" }, { from: "b2", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
   match meta.check(gph) {
     Valid => Ok(()),
     Invalid(vs) => Err(str.concat("a dual-language graph must not trip this rule, got: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
@@ -390,8 +394,49 @@ fn test_py_test_author_downstream_of_build_is_rejected() -> Result[Unit, Str] {
   }
 }
 
+# The evasion, exactly as it happened. tzcontract's Architect emitted three
+# py_build nodes and routed test-writing to the one it NAMED "py-build-tests".
+# Every rule passed, and QA judged the implementation against tests written by
+# the same role that wrote it.
+fn test_build_node_named_tests_does_not_count_as_an_author() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "py-build-core", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "py-build-tests", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "py-build-core", to: "py-build-tests", handoff: "schema {}" }, { from: "py-build-tests", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Err("a build node named 'py-build-tests' is still the implementer writing its own oracle"),
+    Invalid(_) => Ok(()),
+  }
+}
+
+fn test_a_real_test_author_satisfies_it() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "t", role: "py_test_author", gate: "spec len-gt 50", expand: None, activate_when: "" }, { id: "q", role: "py_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "b", handoff: "schema {}" }, { from: "pm", to: "t", handoff: "schema {}" }, { from: "b", to: "q", handoff: "schema {}" }, { from: "t", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("a build with a sibling test author and QA must be valid: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.message
+    }), "; "))),
+  }
+}
+
+# A build with no QA is not being judged, so it owes no independent oracle --
+# the rule must not force a test author onto every graph that compiles.
+fn test_build_without_qa_needs_no_author() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "py_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "dk", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "dk", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Ok(()),
+    Invalid(_) => Err("a graph with no QA node is judging nothing and needs no independent author"),
+  }
+}
+
+# Generality: the same requirement must reach a language the rule never names.
+fn test_the_rule_reaches_typescript() -> Result[Unit, Str] {
+  let gph := { id: "g", phase: graph.Implementation, nodes: [{ id: "b", role: "ts_build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "q", role: "ts_qa", gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }
+  match meta.check(gph) {
+    Valid => Err("a TS build judged by ts_qa with no ts_test_author must be rejected too"),
+    Invalid(_) => Ok(()),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected(), test_python_build_with_lex_test_author_is_rejected(), test_python_build_with_py_test_author_is_accepted(), test_py_test_author_downstream_of_build_is_rejected()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected(), test_python_build_with_lex_test_author_is_rejected(), test_python_build_with_py_test_author_is_accepted(), test_py_test_author_downstream_of_build_is_rejected(), test_build_node_named_tests_does_not_count_as_an_author(), test_a_real_test_author_satisfies_it(), test_build_without_qa_needs_no_author(), test_the_rule_reaches_typescript()]
 }
 
 fn run_all() -> Unit {

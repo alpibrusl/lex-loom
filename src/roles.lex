@@ -51,7 +51,7 @@ import "./deploy_scaffold" as scaffold
 # Starts a shell command in the background, polls the given port until the
 # server responds (or timeout_s elapses), then curls a test endpoint and
 # returns live evidence. Designed for the `launch` role agent.
-fn make_run_server_tool() -> t.Tool {
+fn make_run_server_tool(sprint_id :: Str) -> t.Tool {
   let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
   t.define("run_server", "Start `cmd` as a background server on `port`, wait up to `timeout_s` seconds for it to respond, then fetch `endpoint` and return {ok, url, response, pid, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let cmd := match jv.get_field(args, "cmd") {
@@ -76,7 +76,12 @@ fn make_run_server_tool() -> t.Tool {
       let port_str := int.to_str(port)
       let url := str.join(["http://localhost:", port_str, endpoint], "")
       let srv_log := str.join(["/tmp/loom-server-", port_str, ".log"], "")
-      let script := str.join(["lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n", "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n", "sleep 1\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"PID:$PID\"\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
+      let cd_prelude := if str.contains(cmd, "cd ") {
+        "# the caller named its own directory; leave it alone\n"
+      } else {
+        str.join(["for D in ", lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then cd \"$D\"; break; fi\n", "done\n"], "")
+      }
+      let script := str.join(["lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n", "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n", "sleep 1\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"PID:$PID\"\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {
@@ -93,10 +98,27 @@ fn make_run_server_tool() -> t.Tool {
             None => "",
             Some(s) => str.trim(s),
           }
+          let status := match list.head(list.tail(str.split(resp_part, "##STATUS:"))) {
+            None => "",
+            Some(v) => str.trim(v),
+          }
+          let body := str.trim(match list.head(str.split(resp_part, "##STATUS:")) {
+            None => resp_part,
+            Some(v) => v,
+          })
           if ok {
-            Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("response", JStr(str.slice(resp_part, 0, 500))), ("pid", JStr(pid_part)), ("error", JStr(""))]))
+            Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("status", JStr(status)), ("response", JStr(str.slice(body, 0, 500))), ("pid", JStr(pid_part)), ("error", JStr(""))]))
           } else {
-            Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(pid_part)), ("error", JStr(str.concat("server did not respond within ", str.concat(int.to_str(timeout_s), "s"))))]))
+            let log_part := match list.head(list.tail(str.split(combined, "SERVERLOG:"))) {
+              None => "",
+              Some(v) => str.trim(v),
+            }
+            let why := if str.is_empty(log_part) {
+              str.join(["server did not respond within ", int.to_str(timeout_s), "s, and wrote nothing to its log — check that the command actually starts a server"], "")
+            } else {
+              str.join(["server did not respond within ", int.to_str(timeout_s), "s on port ", port_str, ". The server itself said:\n", str.slice(log_part, 0, 800)], "")
+            }
+            Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(pid_part)), ("error", JStr(why))]))
           }
         },
       }
@@ -753,7 +775,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                 Some(make_run_code_tool(evidence_path))
               } else {
                 if name == "run_server" {
-                  Some(make_run_server_tool())
+                  Some(make_run_server_tool(sprint_id))
                 } else {
                   if name == "deploy_hetzner" {
                     Some(make_deploy_hetzner_tool())

@@ -44,7 +44,7 @@ fn tool_field(r :: jv.Json, key :: Str) -> Str {
 }
 
 fn py_check_tool(sprint :: Str, filename :: Str, code :: Str) -> [env, io, net, proc] Result[(Str, Str), Str] {
-  let tool := lexskill.make_py_check_tool(sprint)
+  let tool := lexskill.make_py_check_tool("/tmp/loom-evidence-test.json", sprint)
   match tool.execute(JObj([("filename", JStr(filename)), ("code", JStr(code))])) {
     Err(_) => Err("py_check errored"),
     Ok(r) => Ok((tool_field(r, "ok"), tool_field(r, "output"))),
@@ -136,8 +136,46 @@ fn test_py_check_still_accepts_a_normal_file() -> [env, io, net, proc] Result[Un
   }
 }
 
+# lex_check and lex_run recorded tool-level evidence; py_check and ts_check
+# recorded none. Surfaced by a review from the lex-code team, which looked in
+# the wrong file but was right about the gap: a Lex build could show which files
+# failed their check, and the Python and Node builds -- most of what these
+# companies actually produce -- left no trail at all.
+fn evidence_after_check(sprint :: Str, filename :: Str, code :: Str) -> [env, io, net, proc] Str {
+  let ev := str.join(["/tmp/loom-evidence-", sprint, ".json"], "")
+  let __rm := proc.run("bash", ["-c", str.concat("rm -f ", ev)])
+  let tool := lexskill.make_py_check_tool(ev, sprint)
+  match tool.execute(JObj([("filename", JStr(filename)), ("code", JStr(code))])) {
+    Err(_) => "TOOL ERROR",
+    Ok(_) => match proc.run("bash", ["-c", str.join(["cat ", ev, " 2>/dev/null"], "")]) {
+      Err(_) => "",
+      Ok(r) => str.trim(r.stdout),
+    },
+  }
+}
+
+fn test_py_check_records_a_failing_file() -> [env, io, net, proc] Result[Unit, Str] {
+  let ev := evidence_after_check("t-ev-bad", "broken.py", "def broken(\n")
+  if str.contains(ev, "broken.py") {
+    Ok(())
+  } else {
+    Err(str.concat("a failed py_check must leave the filename in the evidence trail, got: ", ev))
+  }
+}
+
+# The control: a passing check must NOT leave the file marked failed, or the
+# trail would condemn every build it recorded.
+fn test_py_check_does_not_record_a_passing_file_as_failed() -> [env, io, net, proc] Result[Unit, Str] {
+  let ev := evidence_after_check("t-ev-good", "fine.py", "def fine():\n    return 1\n")
+  if str.contains(ev, "fine.py") {
+    Err(str.concat("a passing py_check must not mark the file failed: ", ev))
+  } else {
+    Ok(())
+  }
+}
+
 fn run_all() -> [env, io, net, proc] Int {
-  let results := [("compiles gate survives stdlib shadow", test_compiles_gate_survives_stdlib_shadow()), ("compiles gate still fails on syntax error", test_compiles_gate_still_fails_on_syntax_error()), ("py_check refuses stdlib name", test_py_check_refuses_stdlib_name()), ("refused stdlib name is not written", test_refused_stdlib_name_is_not_written()), ("py_check refuses dotdot filename", test_py_check_refuses_dotdot_filename()), ("py_check still accepts a normal file", test_py_check_still_accepts_a_normal_file())]
+  let results := [("compiles gate survives stdlib shadow", test_compiles_gate_survives_stdlib_shadow()), ("compiles gate still fails on syntax error", test_compiles_gate_still_fails_on_syntax_error()), ("py_check refuses stdlib name", test_py_check_refuses_stdlib_name()), ("refused stdlib name is not written", test_refused_stdlib_name_is_not_written()), ("py_check refuses dotdot filename", test_py_check_refuses_dotdot_filename()), ("py_check still accepts a normal file", test_py_check_still_accepts_a_normal_file()), ("py_check records a failing file", test_py_check_records_a_failing_file()), ("py_check does not record a passing file as failed", test_py_check_does_not_record_a_passing_file_as_failed())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

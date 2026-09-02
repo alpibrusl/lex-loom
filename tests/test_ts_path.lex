@@ -104,7 +104,7 @@ fn tool_result_field(r :: jv.Json, key :: Str) -> Str {
 }
 
 fn check_tool(filename :: Str, code :: Str) -> [env, io, net, proc] Result[(Str, Str), Str] {
-  let tool := lexskill.make_ts_check_tool("t-tspath-dispatch")
+  let tool := lexskill.make_ts_check_tool("/tmp/loom-evidence-test.json", "t-tspath-dispatch")
   match tool.execute(JObj([("filename", JStr(filename)), ("code", JStr(code))])) {
     Err(_) => Err("ts_check errored"),
     Ok(r) => Ok((tool_result_field(r, "ok"), tool_result_field(r, "output"))),

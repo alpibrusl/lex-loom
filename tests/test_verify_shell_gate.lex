@@ -278,34 +278,62 @@ fn test_build_path_gate_can_reach_repo_tools() -> [io, proc] Result[Unit, Str] {
 # with the test file listed on stdout. That is the ordinary pytest layout, so
 # this denied QA in every run it was live for -- 12 denials in tzauthor alone,
 # sinking sprints whose suites passed 7/7 when run by hand.
-fn test_qa_sees_a_test_file_matching_only_one_pattern() -> [io, proc] Result[Unit, Str] {
-  let sid := "verdict-suite-one-pattern"
+#
+# Asserted WITHOUT depending on pytest being installed: CI never installs it,
+# and a first version of these tests passed locally and failed there. What is
+# under test is the PRESENCE check, so the assertion is that the gate does not
+# claim the file is absent -- true whether or not the suite can then run.
+fn seed_suite_dir(sid :: Str, test_name :: Str) -> [io, proc] Str {
   let dir := str.concat("/tmp/loom-py-work-", sid)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
   let __s := io.write(str.concat(dir, "/app.py"), "def convert(x):\n    return x\n")
-  let __t := io.write(str.concat(dir, "/test_convert.py"), "from app import convert\n\ndef test_ok():\n    assert convert(1) == 1\n")
+  let __t := if str.is_empty(test_name) {
+    Ok(())
+  } else {
+    io.write(str.join([dir, "/", test_name], ""), "from app import convert\n\ndef test_ok():\n    assert convert(1) == 1\n")
+  }
+  dir
+}
+
+fn denies_as_missing(sid :: Str) -> [io, proc] Bool {
   match runner.verify_verdict_suite("py_qa", sid) {
-    Ok(_) => Ok(()),
-    Err(e) => Err(str.concat("test_convert.py is right there; the gate must not claim there is no test file: ", e)),
+    Ok(_) => false,
+    Err(e) => str.contains(e, "NO TEST FILE"),
   }
 }
 
-# The mirror case, so the fix is not just "always pass": the other naming
-# convention alone must work too.
+fn test_qa_sees_a_test_file_matching_only_one_pattern() -> [io, proc] Result[Unit, Str] {
+  let __d := seed_suite_dir("verdict-suite-one-pattern", "test_convert.py")
+  if denies_as_missing("verdict-suite-one-pattern") {
+    Err("test_convert.py is right there; the gate must not claim there is no test file")
+  } else {
+    Ok(())
+  }
+}
+
+# The mirror convention, so the fix is not simply "never report missing".
 fn test_qa_sees_the_underscore_suffix_convention() -> [io, proc] Result[Unit, Str] {
-  let sid := "verdict-suite-suffix-pattern"
-  let dir := str.concat("/tmp/loom-py-work-", sid)
-  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
-  let __s := io.write(str.concat(dir, "/app.py"), "def convert(x):\n    return x\n")
-  let __t := io.write(str.concat(dir, "/convert_test.py"), "from app import convert\n\ndef test_ok():\n    assert convert(1) == 1\n")
-  match runner.verify_verdict_suite("py_qa", sid) {
-    Ok(_) => Ok(()),
-    Err(e) => Err(str.concat("*_test.py alone must also be found: ", e)),
+  let __d := seed_suite_dir("verdict-suite-suffix-pattern", "convert_test.py")
+  if denies_as_missing("verdict-suite-suffix-pattern") {
+    Err("*_test.py alone must also be found")
+  } else {
+    Ok(())
+  }
+}
+
+# The negative control that makes the two above mean something: source with no
+# test file at all MUST still be reported missing.
+fn test_qa_still_reports_a_genuinely_missing_test_file() -> [io, proc] Result[Unit, Str] {
+  let __d := seed_suite_dir("verdict-suite-truly-missing", "")
+  if denies_as_missing("verdict-suite-truly-missing") {
+    Ok(())
+  } else {
+    Err("source with no test file must still be denied — otherwise the fix is just always passing")
   }
 }
 
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file()]
 }
 
 fn run_all() -> [io, proc] Unit {

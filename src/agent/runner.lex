@@ -187,6 +187,54 @@ fn usage_json(model :: Str, p :: Int, c :: Int, t :: Int) -> Str {
 # straightforwardly by that owner id (#94). A no-op when cost_owner is empty
 # (proc_cmd/a2a_url paths never reach this branch anyway) or no provider in
 # this turn ever reported usage.
+# One trail row per step of a node's agent loop, rather than only the sum.
+#
+# Until now loom recorded llm_start as "{}", llm_done as the final answer, and
+# llm_usage as sum_usage_tokens over every step. Everything between -- each
+# call's own prompt size, every tool invocation and its arguments, the point at
+# which a provider failed -- was folded away and lost. Every diagnosis this week
+# had to reconstruct it by re-running the node under a probe or by reading gate
+# scratch directories in /tmp that happened not to have been cleaned yet.
+#
+# It is also why "is a single call approaching the context limit?" could not be
+# answered at all: the sum of 563,011 prompt tokens over a 38-step node says
+# nothing about the size of the largest call in it, and the two have completely
+# different fixes.
+#
+# Metadata always, content bounded: tool arguments are the field that answers
+# "what did the agent actually write", and 300 characters of them is enough to
+# see a filename and a fence label without storing a build's whole source twice.
+fn step_row_json(i :: Int, kind :: Str, body :: Str) -> Str {
+  str.join(["{\"i\":", int.to_str(i), ",\"kind\":\"", kind, "\"", body, "}"], "")
+}
+
+fn record_step_trail(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
+  if str.is_empty(cost_owner) {
+    ()
+  } else {
+    let __ := list.fold(steps, 0, fn (i :: Int, st :: d.Step) -> [sql, fs_write, time] Int {
+      let row := match st {
+        StepDelta(UsageDelta(p, c, t)) => step_row_json(i, "usage", str.join([",\"prompt_tokens\":", int.to_str(p), ",\"completion_tokens\":", int.to_str(c), ",\"total_tokens\":", int.to_str(t)], "")),
+        StepToolExec((nm, args)) => step_row_json(i, "tool_exec", str.join([",\"tool\":", jv.stringify(JStr(nm)), ",\"args\":", jv.stringify(JStr(str.slice(args, 0, 300)))], "")),
+        StepToolResult((nm, ok)) => step_row_json(i, "tool_result", str.join([",\"tool\":", jv.stringify(JStr(nm)), ",\"ok\":", if ok {
+          "true"
+        } else {
+          "false"
+        }], "")),
+        StepDone(m) => step_row_json(i, "done", str.join([",\"answer_len\":", int.to_str(str.len(llm_msg.content(m)))], "")),
+        _ => "",
+      }
+      let __r := if str.is_empty(row) {
+        ()
+      } else {
+        trace.record(db, run_id, cost_owner, "llm_step", row)
+      }
+      i + 1
+    })
+    ()
+  }
+}
+
 fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, model :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
   if str.is_empty(cost_owner) {
     ()
@@ -195,7 +243,8 @@ fn record_usage(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, model :: St
       (p, c, t) => if t == 0 {
         ()
       } else {
-        trace.record(db, run_id, cost_owner, "llm_usage", usage_json(model, p, c, t))
+        let __sum := trace.record(db, run_id, cost_owner, "llm_usage", usage_json(model, p, c, t))
+        record_step_trail(db, run_id, cost_owner, steps)
       },
     }
   }

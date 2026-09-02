@@ -419,10 +419,17 @@ fn suite_kind_for_qa(role :: Str) -> Str {
 # live on the first company-reliability run: the Lex branch ended with
 # `exit $rc`, so every Lex QA PASS was denied "verdict not grounded", the
 # sprint bounced its full 4 rounds, and a 10-minute company run took past 45.
+# COUNT the matches, never `ls a b` for presence. `ls test_*.py *_test.py`
+# exits NON-ZERO when either pattern matches nothing, even while printing the
+# files the other pattern found -- so a work dir holding test_convert.py and no
+# *_test.py reported "NO TEST FILE" with the test file listed on stdout. That
+# is the normal pytest layout, so this denied QA in every run it was live for:
+# 12 denials in tzauthor, 10 in tzpin, and it sank sprints whose suites passed
+# 7/7 when run by hand.
 fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   let kind := suite_kind_for_qa(role)
   if kind == "py_build" {
-    verify_shell("if ls *.py >/dev/null 2>&1; then if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; false; fi; else true; fi", kind, sprint_id)
+    verify_shell("if ls *.py >/dev/null 2>&1; then n=$(ls -1 test_*.py *_test.py 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; false; fi; else true; fi", kind, sprint_id)
   } else {
     if kind == "build" {
       verify_shell("rc=0; found=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; found=1; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; if [ \"$found\" -eq 0 ]; then if ls *.lex >/dev/null 2>&1; then echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; rc=1; fi; fi; [ \"$rc\" -eq 0 ]", kind, sprint_id)

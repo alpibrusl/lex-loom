@@ -53,8 +53,22 @@ for i in $(seq 1 "$N"); do
     cls=accept; detail=""
   else
     cls=deny
-    detail=$(echo "$line" | sed 's/.*reason=//' | cut -c1-90)
-    [ -z "$detail" ] && detail="no verdict line — see $WORK/attempt-$i.log"
+    # NodeOutcome.reason is a generic label ("gate command failed"); the text
+    # that says WHAT failed is the trail's `detail`. Reporting the label alone
+    # gave "gate command failed: gate command failed:" and hid the actual cause
+    # — the same discard-the-evidence defect this repo keeps finding in its own
+    # gates, reproduced in the tool built to measure them.
+    detail=$(sqlite3 "$WORK/attempt-$i.db" \
+      "select coalesce(json_extract(data_json,'\$.detail'), json_extract(data_json,'\$.reason')) from traces where event_kind='node_denied' order by id desc limit 1;" 2>/dev/null \
+      | tr '\n' ' ' | cut -c1-110)
+    [ -z "$detail" ] && detail=$(echo "$line" | sed 's/.*reason=//' | cut -c1-110)
+    if [ -z "$detail" ]; then
+      if grep -q 'step limit exceeded' "$WORK/attempt-$i.log" 2>/dev/null; then
+        detail="CRASH: step limit exceeded (large answer) — see attempt-$i.log"
+      else
+        detail="no verdict line — see $WORK/attempt-$i.log"
+      fi
+    fi
   fi
   printf '%s\t%s\t%ss\t%s\n' "$i" "$cls" "$elapsed" "$detail" >> "$RESULTS"
   printf '  [%d/%d] %-7s %4ss  %s\n' "$i" "$N" "$cls" "$elapsed" "$detail"

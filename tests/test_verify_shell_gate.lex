@@ -332,8 +332,42 @@ fn test_qa_still_reports_a_genuinely_missing_test_file() -> [io, proc] Result[Un
   }
 }
 
+# The pin idiom AS ACTUALLY WRITTEN: derive into a name, then pin the literal
+# against that name on a later line. Found live -- a probe produced exactly
+# this, comment and all, and the gate called it a pasted constant:
+#
+#     expected_dt  = datetime(2025,7,11,12, tzinfo=ZoneInfo("UTC")).astimezone(...)
+#     expected_iso = expected_dt.isoformat()
+#     # Pin: verify our derivation
+#     assert expected_iso == "2025-07-11T08:00:00-04:00"
+#
+# Two reasons it was missed: the derivation sat on a different line from the
+# literal, and it is TRANSITIVE (expected_iso is computed from expected_dt, not
+# directly from datetime). The gate was rejecting correct tests, including one
+# whose values were right and had caught a genuine four-hour bug.
+fn crossline_pin_output() -> Str {
+  str.join(["Tests.\n\n```test_convert.py\n", "from datetime import datetime\n", "from zoneinfo import ZoneInfo\n\n", "def test_iso():\n", "    expected_dt = datetime(2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")).astimezone(ZoneInfo(\"America/New_York\"))\n", "    expected_iso = expected_dt.isoformat()\n", "    assert expected_iso == \"2025-07-11T08:00:00-04:00\"\n", "```\n"], "")
+}
+
+fn test_pin_on_a_later_line_is_allowed() -> [io, proc] Result[Unit, Str] {
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", crossline_pin_output(), "dv-crossline") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a literal pinned to a name derived earlier is checkable and must pass: ", e)),
+  }
+}
+
+# The control that stops this becoming "any comparison to a variable passes":
+# the name must actually be bound to a derivation.
+fn test_a_literal_compared_to_an_undervied_name_is_still_rejected() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_convert.py\nlabel = \"run-7\"\n\ndef test_iso():\n    assert label == \"2025-07-11T08:00:00-04:00\"\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-undervied") {
+    Ok(_) => Err("comparing a literal to an unrelated variable derives nothing and must still be rejected"),
+    Err(_) => Ok(()),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected()]
 }
 
 fn run_all() -> [io, proc] Unit {

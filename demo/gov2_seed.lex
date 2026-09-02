@@ -117,7 +117,7 @@ fn run_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, con
   }
 }
 
-fn proc_agent(node_id :: Str, role :: Str) -> cast.RosterEntry {
+fn proc_agent(node_id :: Str, role :: Str) -> [env] cast.RosterEntry {
   { node_id: node_id, pool_agent_id: str.concat("proc-", node_id), agent_config: { id: str.concat("proc-", node_id), kind: role, system_prompt: "", model_name: "proc:cat", provider: providers.ollama_local(), tools: [], proc_cmd: "cat", a2a_url: "", sprint_id: "" } }
 }
 

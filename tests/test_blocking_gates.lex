@@ -62,7 +62,11 @@ fn test_blocking_parse() -> Result[Unit, Str] {
 }
 
 # ── Offline harness: proc agents + a hand-built graph ────────────────────────
-fn proc_agent(node_id :: Str) -> cast.RosterEntry {
+# providers.ollama_local() reads the environment since lex-llm 2861e13d
+# ("Ollama can live off localhost"), so anything constructing a provider now
+# carries the env effect. Declared here rather than widened at the call site:
+# the effect is real and belongs in the signature.
+fn proc_agent(node_id :: Str) -> [env] cast.RosterEntry {
   { node_id: node_id, pool_agent_id: str.concat("proc-", node_id), agent_config: { id: str.concat("proc-", node_id), kind: "docs", system_prompt: "", model_name: "proc:cat", provider: providers.ollama_local(), tools: [], proc_cmd: "cat", a2a_url: "", sprint_id: "" } }
 }
 
@@ -70,7 +74,7 @@ fn gate_graph(sprint_id :: Str) -> graph.SprintGraph {
   { id: sprint_id, phase: Implementation, nodes: [{ id: "legal_review", role: "docs", gate: "human legal blocking", expand: None, activate_when: "" }, { id: "publish", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "docs", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "legal_review", to: "publish", handoff: "schema {}" }] }
 }
 
-fn mk_cfg(db :: conn.ConnDb, sprint_id :: Str) -> orch.SprintCfg {
+fn mk_cfg(db :: conn.ConnDb, sprint_id :: Str) -> [env] orch.SprintCfg {
   let trail_none :: Option[tlog.Log] := None
   { id: sprint_id, request: "demo request", model: "proc:cat", db: db, api_calls_max: 50, roster: [proc_agent("legal_review"), proc_agent("publish"), proc_agent("docs")], trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
 }

@@ -66,7 +66,11 @@ fn open_db() -> [sql, fs_write, random, crypto] Result[conn.ConnDb, Str] {
   }
 }
 
-fn proc_agent(node_id :: Str, role :: Str) -> cast.RosterEntry {
+# providers.ollama_local() reads the environment since lex-llm 2861e13d
+# ("Ollama can live off localhost"), so anything constructing a provider now
+# carries the env effect. Declared here rather than widened at the call site:
+# the effect is real and belongs in the signature.
+fn proc_agent(node_id :: Str, role :: Str) -> [env] cast.RosterEntry {
   { node_id: node_id, pool_agent_id: str.concat("proc-", node_id), agent_config: { id: str.concat("proc-", node_id), kind: role, system_prompt: "", model_name: "proc:cat", provider: providers.ollama_local(), tools: [], proc_cmd: "cat", a2a_url: "", sprint_id: "" } }
 }
 

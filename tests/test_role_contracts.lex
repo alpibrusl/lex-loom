@@ -30,6 +30,8 @@ import "../src/role_tools" as role_tools
 
 import "../src/agent/runner" as runner
 
+import "lex-llm/src/message" as llm_msg
+
 import "../src/lex_skill" as lexskill
 
 fn seed(dir :: Str, filename :: Str, body :: Str) -> [io, proc] Unit {
@@ -208,8 +210,49 @@ fn test_test_author_mapping_is_total() -> Result[Unit, Str] {
   })
 }
 
+# A bounced test author must be told to RE-DERIVE, never to make its tests
+# pass. The critique was gated on the literal kind "test_author", so
+# py_test_author -- which does effectively all the work in these runs -- fell
+# through to the BUILDER's critique: "fix your code where it is genuinely
+# wrong ... repair until ok='true'". Given to a test author that is an
+# instruction to edit the oracle until it agrees with the code.
+fn bounce_input() -> Str {
+  "<<<LOOM_BOUNCE>>>spec text<<<LOOM_SEP>>>prior tests<<<LOOM_SEP>>>QA said FAIL"
+}
+
+fn critique_text(kind :: Str) -> Str {
+  list.fold(runner.conv_from_msg(kind, bounce_input()), "", fn (acc :: Str, m :: llm_msg.Message) -> Str {
+    match m {
+      UserMsg(t) => t,
+      _ => acc,
+    }
+  })
+}
+
+fn test_every_test_author_kind_gets_the_rederivation_critique() -> Result[Unit, Str] {
+  list.fold(["test_author", "py_test_author", "ts_test_author"], Ok(()), fn (acc :: Result[Unit, Str], k :: Str) -> Result[Unit, Str] {
+    match acc {
+      Err(e) => Err(e),
+      Ok(_) => if str.contains(critique_text(k), "Re-derive every expected value") {
+        Ok(())
+      } else {
+        Err(str.join(["a bounced ", k, " is not told to re-derive — it falls through to the builder critique, which tells it to make its tests pass"], ""))
+      },
+    }
+  })
+}
+
+# The negative control: a builder must still get the builder's critique.
+fn test_a_builder_still_gets_the_builder_critique() -> Result[Unit, Str] {
+  if str.contains(critique_text("py_build"), "Re-derive every expected value") {
+    Err("a build node must not be told to re-derive expected values — that is the test author's instruction")
+  } else {
+    Ok(())
+  }
+}
+
 fn run_all() -> [io, proc] Int {
-  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total())]
+  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

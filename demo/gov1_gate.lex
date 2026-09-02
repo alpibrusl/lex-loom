@@ -42,7 +42,7 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
   }
 }
 
-fn proc_agent(node_id :: Str) -> cast.RosterEntry {
+fn proc_agent(node_id :: Str) -> [env] cast.RosterEntry {
   { node_id: node_id, pool_agent_id: str.concat("proc-", node_id), agent_config: { id: str.concat("proc-", node_id), kind: "docs", system_prompt: "", model_name: "proc:cat", provider: providers.ollama_local(), tools: [], proc_cmd: "cat", a2a_url: "", sprint_id: "" } }
 }
 

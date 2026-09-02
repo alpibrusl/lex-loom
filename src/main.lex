@@ -49,6 +49,10 @@ import "./migrate" as migrate
 
 import "./orchestrator" as orch
 
+import "./transport" as tr
+
+import "./graph" as graph
+
 import "./digest" as dg
 
 import "./cast" as cast
@@ -182,6 +186,60 @@ fn run_sprint_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, n
       }
       let __p3 := io.print(str.join(["[loom] ", status, " — ", result.summary], ""))
       ()
+    },
+  }
+}
+
+# ── run_node ──────────────────────────────────────────────────────────────────
+# Run ONE role against one task and report whether its real gate accepts the
+# result. The atomic unit under the sprint.
+#
+# Why this exists: every measurement so far has been a whole company run --
+# three iterations, ~2.5 hours, dozens of nodes -- so a question as narrow as
+# "does the test author paste its expected values?" cost an afternoon and came
+# back confounded with everything else that went wrong on the way. Nine runs in,
+# the top failure has been the same single node's gate for three of them, and
+# each fix was checked by rebuilding the entire company around it.
+#
+# This runs the node through orch.run_phase -- the same path a real node takes,
+# including its gate, its grounded verification and its role contract -- on a
+# one-node graph. Not a re-implementation: a probe that reuses the machinery, so
+# a green here means the same thing it means in a sprint.
+#
+# Env: ROLE, GATE, TASK, SPRINT_ID, MODEL, DB_PATH
+fn run_node_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
+  let db_path := resolve_db_url()
+  let model := defaults.resolved_model()
+  let role := get_env("ROLE", "py_test_author")
+  let gate := get_env("GATE", "spec sh \"python3 $LOOM_ROOT/bin/check_derived_values.py .\"")
+  let task := get_env("TASK", "Write the tests for a service that converts a timestamp between IANA timezones.")
+  let sprint_id := get_env("SPRINT_ID", "probe-1")
+  match open_db(db_path) {
+    Err(e) => io.print(str.concat("[probe] FATAL: ", e)),
+    Ok(db) => {
+      let __seed := pool_seed.seed(db)
+      let trail_log_none :: Option[tlog.Log] := None
+      let cfg := { id: sprint_id, request: task, model: model, db: db, api_calls_max: parse_int_or(get_env("MAX_API_CALLS", "60"), 60), roster: cast.empty_roster(), trail_log: trail_log_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: defaults.resolved_exec_mode(), policy_isolation: "" }
+      let g := { id: str.concat("probe-", role), phase: graph.Implementation, nodes: [{ id: "probe", role: role, gate: gate, expand: None, activate_when: "" }], edges: [] }
+      match tr.artifact_put(db, sprint_id, "probe-input", task) {
+        Err(e) => io.print(str.concat("[probe] could not store the task: ", e)),
+        Ok(input_ref) => {
+          let res := orch.run_phase(g, graph.Implementation, input_ref, [], cfg)
+          let reason := list.fold(res.outcomes, "", fn (acc :: Str, o :: orch.NodeOutcome) -> Str {
+            if str.is_empty(acc) {
+              o.reason
+            } else {
+              acc
+            }
+          })
+          let verdict := if res.success {
+            "ACCEPTED"
+          } else {
+            "DENIED"
+          }
+          io.print(str.join(["[probe] role=", role, " ", verdict, " reason=", reason], ""))
+        },
+      }
     },
   }
 }

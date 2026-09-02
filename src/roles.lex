@@ -763,10 +763,10 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
         Some(lexskill.make_lex_run_tool(evidence_path, sprint_id))
       } else {
         if name == "py_check" {
-          Some(lexskill.make_py_check_tool(sprint_id))
+          Some(lexskill.make_py_check_tool(evidence_path, sprint_id))
         } else {
           if name == "ts_check" {
-            Some(lexskill.make_ts_check_tool(sprint_id))
+            Some(lexskill.make_ts_check_tool(evidence_path, sprint_id))
           } else {
             if name == "run_node_code" {
               Some(make_run_node_code_tool(evidence_path))

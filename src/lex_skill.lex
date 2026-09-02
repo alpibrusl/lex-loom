@@ -255,6 +255,12 @@ fn write_evidence_state(evidence_path :: Str, failed :: Str, run_called :: Bool,
 
 # Called after a real lex_check result: AND this call's ok into the running
 # "did every check so far pass" state, preserving any lex_run result already recorded.
+# Records one check-tool result. Named for Lex because Lex was the only build
+# language when it was written; nothing in it is Lex-specific, and py_check and
+# ts_check leave no trail at all without it -- an asymmetry a review from the
+# lex-code team surfaced. Lex builds could show which files failed their check
+# and whether a run happened; the Python and Node builds, which are most of what
+# these companies actually produce, could not.
 fn record_lex_check_evidence(evidence_path :: Str, filename :: Str, this_ok :: Bool) -> [io] Unit {
   let s := read_evidence_state(evidence_path)
   let others := list.filter(str.split(s.failed, ","), fn (f :: Str) -> Bool {
@@ -284,7 +290,7 @@ fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
 fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := work_dir(sprint_id)
   let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
-  t.define("lex_check", "Write `code` to <filename> and run `lex check`. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. ALWAYS call this after writing each .lex file and repair until ok='true' before finishing. Never claim code compiles without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  t.define("lex_check", "Write `code` to <filename> and run `lex check` on it, in one step. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "main.lex",
@@ -360,10 +366,10 @@ fn py_name_error(filename :: Str) -> [proc] Str {
 # accumulate so multi-file projects build, and the runner recovers them as the
 # node artifact. Without this gate a build agent can emit a prose plan that the
 # build node accepts; py_compile forces real, parseable Python.
-fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
+fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := py_work_dir(sprint_id)
   let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
-  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. ALWAYS call this after writing each .py file and repair until ok='true' before finishing. Never claim code compiles without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "app.py",
@@ -387,6 +393,7 @@ fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
             Ok(r) => {
               let combined := str.concat(r.stdout, r.stderr)
               let ok := str.contains(combined, "##EXIT:0")
+              let __ev := record_lex_check_evidence(evidence_path, filename, ok)
               Ok(JObj([("ok", JStr(if ok {
                 "true"
               } else {
@@ -411,7 +418,7 @@ fn make_py_check_tool(sprint_id :: Str) -> t.Tool {
 # Node 22, it parses every input as CommonJS regardless of extension or
 # --input-type, so both type annotations and import statements become bogus
 # SyntaxErrors.
-fn make_ts_check_tool(sprint_id :: Str) -> t.Tool {
+fn make_ts_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := ts_work_dir(sprint_id)
   let params := { title: "TsCheck", description: "Write a project file; syntax-check .ts/.js, parse-check .json, store the rest. Returns {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
   t.define("ts_check", "Write `code` to <filename> and validate it by type: .ts/.mts/.js/.mjs are syntax-checked with Node (type-strip + ES-module parse, no execution), .json/.webmanifest are parse-checked with JSON.parse, and any other file (html/css/svg/txt — including .tsx/.jsx, which have no node-builtin checker; the workspace npm run build is their gate) is stored as-is with output 'stored'. Returns {ok:'true'|'false', output:<errors, 'ok', or 'stored'>}. ALWAYS call this for every file you produce (static assets included) and repair until ok='true' before finishing. Never claim code parses without calling this.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -456,6 +463,7 @@ fn make_ts_check_tool(sprint_id :: Str) -> t.Tool {
               Ok(r) => {
                 let combined := str.concat(r.stdout, r.stderr)
                 let ok := str.contains(combined, "##EXIT:0")
+                let __ev := record_lex_check_evidence(evidence_path, filename, ok)
                 Ok(JObj([("ok", JStr(if ok {
                   "true"
                 } else {

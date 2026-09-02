@@ -915,9 +915,35 @@ fn nth_or_empty(parts :: List[Str], i :: Int) -> Str {
 # nor the observed values. If re-deriving yields what it had, the test stands
 # and the implementation is what is wrong. Saying that is an outcome the loop
 # previously had no way to express.
+# Every test-author kind, not just the Lex one.
+#
+# The re-derivation critique below exists to stop a bounced test author editing
+# its expected values to match the implementation. It was gated on the literal
+# kind "test_author", so py_test_author and ts_test_author never received it --
+# and py_test_author does effectively all the work in these runs. They fell
+# through to the BUILDER's critique instead, which tells its reader "fix your
+# code where it is genuinely wrong ... repair until ok='true'". Given to a test
+# author, that is an instruction to change the tests until they pass, which is
+# exactly the pasting the critique was written to prevent.
+#
+# Measured: probed in isolation, with no bounce, py_test_author accepted 13 of
+# 16 attempts and pasted a value ZERO times. The same role inside a company run
+# produced 26 pasted-value events. The bounce was the difference.
+fn is_test_author_kind(kind :: Str) -> Bool {
+  if kind == "test_author" {
+    true
+  } else {
+    if kind == "py_test_author" {
+      true
+    } else {
+      kind == "ts_test_author"
+    }
+  }
+}
+
 fn conv_from_msg(kind :: Str, msg_json :: Str) -> List[llm_msg.Message] {
   let bounced := str.starts_with(msg_json, "<<<LOOM_BOUNCE>>>")
-  if bounced and kind == "test_author" {
+  if bounced and is_test_author_kind(kind) {
     let body := str.slice(msg_json, 17, str.len(msg_json))
     let parts := str.split(body, "<<<LOOM_SEP>>>")
     let task := nth_or_empty(parts, 0)

@@ -34,7 +34,9 @@ def looks_computed(line: str) -> bool:
     """A line that calls into a date/time library is deriving, not pasting."""
     return any(t in line for t in (
         "datetime", "timestamp()", "zoneinfo", "ZoneInfo", "timedelta",
-        "fromisoformat", "strftime", "format_datetime", "time.", "calendar.",
+        "fromisoformat", "isoformat", "astimezone", "strftime",
+        "format_datetime", "formatdate", "utcfromtimestamp", "time.",
+        "calendar.",
     ))
 
 def expected_side(line: str) -> str:
@@ -66,9 +68,49 @@ def pinned_literals(lines) -> set:
     which is the failure this check exists to prevent. Once pinned, the literal
     may be used freely for the rest of the file.
     """
+    # A name bound to a derivation, e.g. `expected_iso = datetime(...).isoformat()`.
+    # Derivation is TRANSITIVE, because it is written that way:
+    #
+    #     expected_dt  = datetime(...).astimezone(...)   <- computed
+    #     expected_iso = expected_dt.isoformat()         <- computed FROM it
+    #
+    # Taking only the first pass would leave expected_iso unrecognised, which is
+    # precisely the name the pin below compares against.
+    derived_names = set()
+    for _ in range(4):
+        grew = False
+        for line in lines:
+            m = re.match(r"\s*([A-Za-z_]\w*)\s*=(?!=)", line)
+            if not m or m.group(1) in derived_names:
+                continue
+            rhs = line.split("=", 1)[1]
+            from_derived = any(re.search(r"\b%s\b" % re.escape(n), rhs) for n in derived_names)
+            if looks_computed(line) or from_derived:
+                derived_names.add(m.group(1)); grew = True
+        if not grew:
+            break
+
     pins = set()
     for line in lines:
-        if not looks_computed(line):
+        # The literal and the derivation on ONE line.
+        inline = looks_computed(line)
+        # Or the literal compared against a name bound to a derivation earlier.
+        # This is how the idiom is actually written, and rejecting it was a real
+        # false positive: a run produced exactly
+        #
+        #     expected_iso = datetime(2025, 7, 11, 12, tzinfo=ZoneInfo("UTC")) \
+        #         .astimezone(ZoneInfo("America/New_York")).isoformat()
+        #     # Pin: verify our derivation
+        #     assert expected_iso == "2025-07-11T08:00:00-04:00"
+        #
+        # -- derived, pinned, commented as a pin -- and this check called it a
+        # pasted constant. The gate was rejecting correct tests, including one
+        # whose values were right and had caught a genuine four-hour bug in an
+        # implementation.
+        via_name = "==" in line and any(
+            re.search(r"\b%s\b" % re.escape(n), line) for n in derived_names
+        )
+        if not (inline or via_name):
             continue
         for pat, _ in LITERALS:
             pins.update(pat.findall(line))

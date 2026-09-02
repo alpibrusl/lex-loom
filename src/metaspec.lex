@@ -501,6 +501,34 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
   })
 }
 
+# A shell gate that runs one of LOOM'S OWN verifiers, rather than a command the
+# model invented.
+#
+# The rule below exists because an Architect once scoped a Lex build node with
+# 'spec sh "npm ci && npm run build"', hallucinating an entire Node stack for a
+# project that never had one, and burned an iteration on a real npm error. That
+# hazard is a MODEL-INVENTED command, not shell gates as such.
+#
+# Drawing the line at "no spec sh on a build node" also made the repo
+# contradict itself. #286 added bin/check_imports.py and documented it to the
+# Architect as "strictly stronger than 'spec compiles' -- use this on py_build
+# whenever a launch or deploy node is in the graph", because py_compile only
+# PARSES and a module that cannot import surfaces four nodes later as
+# {"ok":false} at launch. tzauthor's Architect followed that instruction and
+# its graph was rejected for it: the model was punished for obeying the newer
+# of two disagreeing instructions, and fell back to the weaker gate.
+#
+# $LOOM_ROOT/bin/ is code in this repository, reviewed and tested here. A
+# command reaching into it is not a hallucinated stack. Language-neutral: any
+# verifier added to bin/ becomes usable by any build kind.
+fn is_loom_verifier_gate(gate :: Str) -> Bool {
+  if gates.is_shell_gate(gate) {
+    str.contains(gates.shell_command(gate), "$LOOM_ROOT/bin/")
+  } else {
+    false
+  }
+}
+
 # ── Rule 12: build/py_build MUST use 'spec compiles' (#pdfx2 follow-up) ──────
 # The inverse of rule_compiles_gate_matches_role (rule 10): that rule stops
 # OTHER roles from using 'spec compiles'; nothing stopped build/py_build from
@@ -537,10 +565,10 @@ fn rule_build_role_requires_compiles_gate(g :: graph.SprintGraph) -> List[Violat
       false
     }
     if applies {
-      if str.trim(n.gate) == "spec compiles" {
+      if str.trim(n.gate) == "spec compiles" or is_loom_verifier_gate(n.gate) {
         acc
       } else {
-        list.concat(acc, [{ rule: "build-role-requires-compiles-gate", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate '", n.gate, "', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written."], "") }])
+        list.concat(acc, [{ rule: "build-role-requires-compiles-gate", message: str.join(["node ", n.id, " (role '", n.role, "') uses gate '", n.gate, "', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written. A 'spec sh' gate IS allowed when it runs one of loom's own verifiers under $LOOM_ROOT/bin/ (e.g. check_imports.py) -- reviewed code in this repository, not a command the model invented."], "") }])
       }
     } else {
       acc
@@ -582,7 +610,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
     check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build/ts_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
     check({ id: "g8", phase: graph.Intake, nodes: [{ id: "n1", role: "monetization_handoff", gate: "spec judge \"looks good\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "monetization-handoff-human-gated", message: "node n1 (role 'monetization_handoff') uses gate 'spec judge \"looks good\"', but this role must NEVER be self-certified — its gate must be 'human <oracle>' (e.g. 'human founder')." }]),
-    check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate (including 'spec sh') has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written." }])
+    check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written. A 'spec sh' gate IS allowed when it runs one of loom's own verifiers under $LOOM_ROOT/bin/ (e.g. check_imports.py) -- reviewed code in this repository, not a command the model invented." }])
   }
 {
   let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {

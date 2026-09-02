@@ -208,6 +208,17 @@ fn step_row_json(i :: Int, kind :: Str, body :: Str) -> Str {
   str.join(["{\"i\":", int.to_str(i), ",\"kind\":\"", kind, "\"", body, "}"], "")
 }
 
+# NOTE on the tool rows. lex-llm DECLARES these variants as carrying a tuple
+# (delta.lex: `StepToolExec((Str, Str))`) but CONSTRUCTS them with two arguments
+# (agent.lex: `StepToolExec(disp.call.name, disp.call.id)`). Destructuring the
+# declared shape typechecks and then dies at runtime with
+# `GetElem on non-tuple: Str("py_check")` -- which is what shipped, and it broke
+# every tool-using node in the tzsteps run: 29 nodes cast, 3 started, no build
+# ever ran. Two binders, not one tuple.
+#
+# The second field is the call ID, not the arguments. lex-llm does not pass tool
+# arguments into the step at all, so the filename a build wrote is still not
+# visible here, contrary to what the change that added this claimed.
 fn record_step_trail(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps :: List[d.Step]) -> [sql, fs_write, time] Unit {
   if str.is_empty(cost_owner) {
     ()
@@ -215,8 +226,8 @@ fn record_step_trail(db :: conn.ConnDb, run_id :: Str, cost_owner :: Str, steps 
     let __ := list.fold(steps, 0, fn (i :: Int, st :: d.Step) -> [sql, fs_write, time] Int {
       let row := match st {
         StepDelta(UsageDelta(p, c, t)) => step_row_json(i, "usage", str.join([",\"prompt_tokens\":", int.to_str(p), ",\"completion_tokens\":", int.to_str(c), ",\"total_tokens\":", int.to_str(t)], "")),
-        StepToolExec((nm, args)) => step_row_json(i, "tool_exec", str.join([",\"tool\":", jv.stringify(JStr(nm)), ",\"args\":", jv.stringify(JStr(str.slice(args, 0, 300)))], "")),
-        StepToolResult((nm, ok)) => step_row_json(i, "tool_result", str.join([",\"tool\":", jv.stringify(JStr(nm)), ",\"ok\":", if ok {
+        StepToolExec(nm, call_id) => step_row_json(i, "tool_exec", str.join([",\"tool\":", jv.stringify(JStr(nm)), ",\"call_id\":", jv.stringify(JStr(call_id))], "")),
+        StepToolResult(call_id, ok) => step_row_json(i, "tool_result", str.join([",\"call_id\":", jv.stringify(JStr(call_id)), ",\"ok\":", if ok {
           "true"
         } else {
           "false"

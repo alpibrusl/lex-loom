@@ -361,6 +361,19 @@ fn blocking_precheck(n :: graph.Node, cfg :: SprintCfg) -> [sql, fs_read, fs_wri
 # errored. The denied output is now stored under "<node>-denied-<attempt>", and
 # the trail carries the gate expression and up to 600 characters of the check's
 # own output.
+# lex-llm surfaces a failed call as the literal answer text
+# "[provider error: <reason>]" (delta.lex). Loom then gated that string as if it
+# were the agent's work: in tzpin2, 12 of 19 denials were an HTTP 500 being
+# refused for "producing no fenced files to check". An infrastructure failure
+# laundered into a content denial, attributed to the test author, burning a
+# retry each time and landing in the failure-mode summary as a pipeline defect.
+#
+# The empty-output case beside this one already retries with a truthful reason.
+# This gives a provider failure the same treatment and the same honesty.
+fn is_provider_error(output :: Str) -> Bool {
+  str.starts_with(str.trim(output), "[provider error")
+}
+
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   match blocking_precheck(n, cfg) {
     Some(outcome) => outcome,
@@ -408,11 +421,20 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
           ()
         }
         let output := runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
-        if str.is_empty(output) {
+        let infra := is_provider_error(output)
+        if str.is_empty(output) or infra {
           if attempt > max_node_retries() {
-            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: "empty output after retries (model cold-start?)" }
+            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: if infra {
+              str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200))
+            } else {
+              "empty output after retries (model cold-start?)"
+            } }
           } else {
-            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"empty output\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", if infra {
+              "provider error"
+            } else {
+              "empty output"
+            }, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
             invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial, parent)
           }
         } else {

@@ -326,8 +326,46 @@ fn test_graph_without_a_build_is_not_blocked() -> Result[Unit, Str] {
   }
 }
 
+# lex-llm returns a failed call as the answer text "[provider error: ...]".
+# Gating that as content produced 12 of tzpin2's 19 denials -- an HTTP 500
+# refused for "producing no fenced files to check", blamed on the test author,
+# and counted in the failure-mode summary as a pipeline defect.
+fn test_provider_error_is_recognised() -> Result[Unit, Str] {
+  if orch.is_provider_error("[provider error: HTTP 500]") {
+    Ok(())
+  } else {
+    Err("a failed model call must be recognised as infrastructure, not judged as content")
+  }
+}
+
+fn test_leading_whitespace_does_not_hide_it() -> Result[Unit, Str] {
+  if orch.is_provider_error("\n  [provider error: connection refused]") {
+    Ok(())
+  } else {
+    Err("a provider error preceded by whitespace is still a provider error")
+  }
+}
+
+# The controls: real work must not be mistaken for an outage, including work
+# that merely mentions the phrase.
+fn test_real_output_is_not_an_outage() -> Result[Unit, Str] {
+  if orch.is_provider_error("```test_convert.py\ndef test_ok():\n    assert 1 == 1\n```") {
+    Err("a real answer must never be classified as a provider failure")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_prose_mentioning_the_phrase_is_not_an_outage() -> Result[Unit, Str] {
+  if orch.is_provider_error("The service returns 502 when the upstream [provider error] path is hit.") {
+    Err("a node discussing provider errors is still producing content")
+  } else {
+    Ok(())
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked(), test_provider_error_is_recognised(), test_leading_whitespace_does_not_hide_it(), test_real_output_is_not_an_outage(), test_prose_mentioning_the_phrase_is_not_an_outage()]
 }
 
 fn run_all() -> Unit {

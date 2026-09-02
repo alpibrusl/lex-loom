@@ -272,8 +272,40 @@ fn test_build_path_gate_can_reach_repo_tools() -> [io, proc] Result[Unit, Str] {
   }
 }
 
+# `ls a b` is not a presence test. `ls test_*.py *_test.py` exits NON-ZERO when
+# either pattern matches nothing, even while printing what the other found, so
+# a work dir holding test_convert.py and no *_test.py reported "NO TEST FILE"
+# with the test file listed on stdout. That is the ordinary pytest layout, so
+# this denied QA in every run it was live for -- 12 denials in tzauthor alone,
+# sinking sprints whose suites passed 7/7 when run by hand.
+fn test_qa_sees_a_test_file_matching_only_one_pattern() -> [io, proc] Result[Unit, Str] {
+  let sid := "verdict-suite-one-pattern"
+  let dir := str.concat("/tmp/loom-py-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
+  let __s := io.write(str.concat(dir, "/app.py"), "def convert(x):\n    return x\n")
+  let __t := io.write(str.concat(dir, "/test_convert.py"), "from app import convert\n\ndef test_ok():\n    assert convert(1) == 1\n")
+  match runner.verify_verdict_suite("py_qa", sid) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("test_convert.py is right there; the gate must not claim there is no test file: ", e)),
+  }
+}
+
+# The mirror case, so the fix is not just "always pass": the other naming
+# convention alone must work too.
+fn test_qa_sees_the_underscore_suffix_convention() -> [io, proc] Result[Unit, Str] {
+  let sid := "verdict-suite-suffix-pattern"
+  let dir := str.concat("/tmp/loom-py-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
+  let __s := io.write(str.concat(dir, "/app.py"), "def convert(x):\n    return x\n")
+  let __t := io.write(str.concat(dir, "/convert_test.py"), "from app import convert\n\ndef test_ok():\n    assert convert(1) == 1\n")
+  match runner.verify_verdict_suite("py_qa", sid) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("*_test.py alone must also be found: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention()]
 }
 
 fn run_all() -> [io, proc] Unit {

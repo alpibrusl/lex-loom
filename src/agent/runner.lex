@@ -558,18 +558,29 @@ fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_d
   } else {
     str.join(["if [ -d ", seed_dir, " ]; then cp -R ", seed_dir, "/. $W/ 2>/dev/null; find $W -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; fi; "], "")
   }
-  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; rm -rf $W; mkdir -p $W; ", seed, "python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; rm -rf $W; mkdir -p $W; ", seed, "python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {
       let combined := str.concat(r.stdout, r.stderr)
+      let saw := match list.head(list.tail(str.split(combined, "##GATE_SAW:"))) {
+        None => "",
+        Some(v) => str.trim(match list.head(str.split(v, "\n")) {
+          None => v,
+          Some(line) => line,
+        }),
+      }
       if str.contains(combined, "##GATE_EXIT:0") {
         Ok(())
       } else {
         if str.contains(combined, "NO_FILES") {
           Err("gate: node produced no fenced files to check (write your output as fenced code blocks, e.g. ```Dockerfile)")
         } else {
-          Err(str.concat("gate command failed:\n", str.slice(combined, 0, 1200)))
+          Err(str.join(["gate command failed (the gate saw these files: ", if str.is_empty(saw) {
+            "none"
+          } else {
+            saw
+          }, ")\n", str.slice(combined, 0, 1200)], ""))
         }
       }
     },

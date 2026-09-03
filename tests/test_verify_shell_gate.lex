@@ -366,8 +366,39 @@ fn test_a_literal_compared_to_an_undervied_name_is_still_rejected() -> [io, proc
   }
 }
 
+# When a gate denies, the one thing needed to act on it is what the gate was
+# actually looking at. It counted the files and threw the names away, so three
+# separate diagnoses this week had to be recovered from /tmp/loom-gate-*-work
+# directories that happened not to have been cleaned yet: the fence-labelling
+# failure (extract_fenced had named them file1.py and file2.py, invisible from
+# the denial), the NO TEST FILE denials, and the pin false-positive.
+fn test_a_failed_gate_names_the_files_it_saw() -> [io, proc] Result[Unit, Str] {
+  let out := "Here it is.\n\n```notes.md\nplan\n```\n"
+  match runner.verify_shell_on_output("test -f server.py", out, "saw-listing") {
+    Ok(_) => Err("the gate should fail — server.py was never produced"),
+    Err(e) => if str.contains(e, "the gate saw these files: notes.md") {
+      Ok(())
+    } else {
+      Err(str.concat("a denial must name what the gate was looking at, got: ", e))
+    },
+  }
+}
+
+# The control: an empty scratch dir must still say so plainly rather than
+# claiming to have seen a file.
+fn test_an_empty_gate_dir_still_reports_no_files() -> [io, proc] Result[Unit, Str] {
+  match runner.verify_shell_on_output("test -f server.py", "prose only, nothing fenced", "saw-empty") {
+    Ok(_) => Err("nothing was produced; the gate must fail"),
+    Err(e) => if str.contains(e, "no fenced files") {
+      Ok(())
+    } else {
+      Err(str.concat("an empty dir must be reported as such: ", e))
+    },
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected(), test_a_failed_gate_names_the_files_it_saw(), test_an_empty_gate_dir_still_reports_no_files()]
 }
 
 fn run_all() -> [io, proc] Unit {

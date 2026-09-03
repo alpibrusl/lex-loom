@@ -23,6 +23,16 @@ cd "$(dirname "$0")/.."
 LOOM_ROOT="$(pwd)"
 
 MANIFEST="${1:-}"
+
+# Preflight: a company whose model endpoint is unreachable, whose stack skeleton
+# does not exist, or whose QA has no test runner fails hours in, blaming an
+# agent. Free, deterministic, no LLM call. LOOM_SKIP_PREFLIGHT=1 to bypass.
+if [ "${LOOM_SKIP_PREFLIGHT:-}" != "1" ] && [ -n "$MANIFEST" ]; then
+  "$(dirname "$0")/check-company-env.sh" "$MANIFEST" || {
+    echo "[bootstrap] preflight failed — fix the above, or LOOM_SKIP_PREFLIGHT=1 to override" >&2
+    exit 1
+  }
+fi
 NORUN="${2:-}"
 if [ -z "$MANIFEST" ] || [ ! -f "$MANIFEST" ]; then
   echo "usage: bin/bootstrap-company.sh <company.toml> [--no-run]" >&2
@@ -288,3 +298,4 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" \
   MODEL_OVERRIDES="$CMODEL_OVERRIDES" \
   bin/run-company.sh
+

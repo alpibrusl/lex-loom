@@ -44,6 +44,6 @@ packs = ["engineering", "legal"]   # [enforced] engineering builds it; legal dra
 checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent] but real for production deploys (#101/#102) once this is actually deployed
 
 [policy]
-max_iterations = 24           # [enforced] → MAX_ITERATIONS -- raised from 12 so real mission progress (the /extract route, x402 gate) isn't cut off by iteration count alone
-budget_eur     = 1000         # [enforced] → STOP_WHEN="spend ge 1000.00" -- the est_spend ledger is a token-count proxy, not real billing: OpenCode Go is a flat ~€10/mo subscription, so actual financial risk is bounded to rate-limiting (429s), not this figure. Raised well above prior caps since we're auditing every step live, not letting it run unattended, and don't want the cap itself to be the reason a real bug goes undiagnosed
+max_iterations = 36           # [enforced] → MAX_ITERATIONS -- raised from 24 for this post-#113/#114/#115 relaunch, testing the fully hardened pipeline against the real /extract + x402 mission
+budget_eur     = 2000         # [enforced] → STOP_WHEN="spend ge 2000.00" -- the est_spend ledger is a token-count proxy, not real billing: OpenCode Go is a flat ~€10/mo subscription, so actual financial risk is bounded to rate-limiting (429s), not this figure. Raised so the cap itself isn't the reason this relaunch ends early; still audited step-by-step live
 human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants -- unchanged defaults; go-public covers actually listing on Agent.market, a real human step regardless of how the product is built

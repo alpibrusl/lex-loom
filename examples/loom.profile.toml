@@ -1,0 +1,82 @@
+# loom.profile.toml — the OPERATOR layer: which providers this machine talks to,
+# and how it reaches them. One per operator/environment, not one per company.
+#
+# Why this exists: seven example companies each restate the same Hetzner size
+# and the same GitHub org, and every credential is simply expected to be present
+# in the process environment, declared nowhere. company.toml was carrying two
+# different kinds of decision — what to BUILD (per company) and what this
+# machine can REACH (per operator) — and only the first belongs there.
+#
+# Two rules this file holds to:
+#
+#   1. REFERENCES, NEVER VALUES. `token_env = "GH_TOKEN"` names where a secret
+#      lives. loom never stores or logs a credential, so this file is safe to
+#      commit and safe to read in a trail.
+#   2. `kind` SELECTS AN ADAPTER. An unknown kind fails preflight loudly.
+#      [infra].hosting = "hetzner-cx22" is read by nothing today, so a company
+#      declaring "fly.io" silently gets no deploy at all.
+#
+# Default location: ~/.loom/profile.toml, or LOOM_PROFILE=/path/to/profile.toml
+
+[profile]
+name = "example-dev"
+
+[providers.model]
+kind         = "litellm"              # litellm | opencode | anthropic | openai
+base_url_env = "LITELLM_BASE_URL"
+
+[providers.vcs]
+kind      = "github"                  # github (only adapter today)
+org       = "alpibrusl"
+token_env = "GH_TOKEN"
+
+[providers.hosting]
+kind         = "hetzner"              # hetzner (only adapter today) | none
+host_env     = "HETZNER_HOST"
+ssh_key_path = "~/.ssh/id_rsa"
+
+# Grants are an OPERATOR decision, per environment, and belong here rather than
+# hardcoded in loom. deploy_hetzner needs exec=Full and publish_content needs
+# network=Full — both reach outside the sandbox, at a real server and a real
+# publishing endpoint. Off unless a person turns them on, here.
+[grants]
+allow_real_deploy = false
+allow_publishing  = false
+
+# ── environments ─────────────────────────────────────────────────────────────
+# Which targets this operator has, and which one a run is allowed to reach.
+#
+# Today the local-vs-deploy choice is a per-run LLM judgement: the Architect
+# decides whether to emit a deploy node by reading the mission text ("only add
+# when the mission asks to ship for real users"). So the same company.toml can
+# produce a deploying graph on one iteration and a local one on the next, there
+# is no dev -> test -> prod ladder, and nothing records which target a sealed
+# artifact was actually proven against.
+#
+# An environment makes that a DECLARED target instead of a re-decided one.
+# `local` is the default and deploys nowhere: launch starts the server on
+# localhost, curls it, and nothing leaves the machine. Reaching further is
+# opt-in, per environment, by a person -- which is the lesson of every gate in
+# this repo that turned out to be trustworthy only once a human declared the
+# reach.
+#
+# Select with LOOM_ENV; unset means `local`.
+
+[environments.local]
+kind = "none"                   # launch only — no deploy node may be emitted
+
+# [environments.dev]
+# kind     = "hetzner"
+# host_env = "HETZNER_DEV_HOST"
+
+# [environments.prod]
+# kind                = "hetzner"
+# host_env            = "HETZNER_PROD_HOST"
+# requires_human_gate = true    # promotion is attested, like monetization_handoff
+
+# NOT IN SCOPE, deliberately: provisioning. This file POINTS AT infra you
+# created (terraform apply in lex-hub/infra/terraform), it does not create it.
+# loom growing a cloud API would put spend and blast radius inside an agent
+# loop. The seam is left open — a hosting adapter could later gain a
+# `provision = true` that shells out to terraform — but that would stay a
+# deterministic script, decided from config, exactly like bootstrap is today.

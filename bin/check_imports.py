@@ -28,7 +28,22 @@ def modules(root: Path):
     """Top-level, importable, non-test, non-scratch modules."""
     for p in sorted(root.glob("*.py")):
         stem = p.stem
-        if stem.startswith("_") or "test" in stem.lower() or stem == "conftest":
+        # conftest.py is NOT skipped, though it looks like test scaffolding.
+        # pytest imports it unconditionally before collecting anything, so a
+        # broken one kills the entire suite and every test is reported as
+        # failing. Found live: an agent wrote pytest INI config into it —
+        #
+        #     [pytest]
+        #     asyncio_mode = auto
+        #
+        # which py_compile ACCEPTS, because `[pytest]` is a valid list literal.
+        # Importing it raises NameError, pytest dies at collection, and QA
+        # blames the implementation. This check skipped it by name.
+        #
+        # test_*.py stay skipped for a real reason: a test author writes them
+        # BEFORE the implementation exists, on purpose, so importing one would
+        # fail by design. They are exercised when QA runs the suite.
+        if stem.startswith("_") or ("test" in stem.lower() and stem != "conftest"):
             continue
         yield stem
 

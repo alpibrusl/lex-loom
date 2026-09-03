@@ -100,6 +100,39 @@ fn ops_file(run_id :: Str) -> Str {
 
 # Append one executed-tool record. Read-then-write is race-free here: calls
 # within one agent loop are sequential, and the path is unique per run_id.
+# One line per tool call: name, ok, a bounded slice of the ARGUMENTS, and a
+# bounded slice of what came back.
+#
+# wrap_tool has always seen all four and recorded two. So loom could say that
+# py_check ran and returned ok, but never WHICH FILE it wrote -- and the
+# filename is the fact three separate diagnoses needed. The fence-labelling
+# failure was only found by reading a /tmp scratch directory that happened not
+# to have been cleaned: the model had written ```python, extract_fenced named
+# the files file1.py and file2.py, and nothing in the trail said so.
+#
+# lex-llm does not pass tool arguments into its Step type, which is true and
+# was the reason given for not recording them. It is beside the point: loom
+# builds these closures itself and has the arguments in hand right here.
+#
+# Tab-separated because a tool's arguments contain braces, quotes and newlines,
+# and the reader should stay a split rather than become a parser.
+fn clip(sx :: Str, n :: Int) -> Str {
+  str.replace(str.replace(str.slice(sx, 0, n), "\n", " "), "\t", " ")
+}
+
+fn note_op_call_full(path :: Str, tool_name :: Str, ok :: Bool, args :: Str, result :: Str) -> [io] Unit {
+  let prior := match io.read(path) {
+    Ok(sx) => sx,
+    Err(_) => "",
+  }
+  let __w := io.write(path, str.join([prior, tool_name, "\t", if ok {
+    "ok"
+  } else {
+    "err"
+  }, "\t", clip(args, 300), "\t", clip(result, 300), "\n"], ""))
+  ()
+}
+
 fn note_op_call(path :: Str, tool_name :: Str, ok :: Bool) -> [io] Unit {
   let prior := match io.read(path) {
     Ok(s) => s,
@@ -124,17 +157,24 @@ fn wrap_tool(path :: Str, tl :: t.Tool) -> t.Tool {
       Ok(_) => true,
       Err(_) => false,
     }
-    let __n := note_op_call(path, tl.name, ok)
+    let __n := note_op_call_full(path, tl.name, ok, jv.stringify(args), match out {
+      Ok(r) => jv.stringify(r),
+      Err(_) => "",
+    })
     out
   } }
 }
 
-fn op_call_json(agent_id :: Str, tool_name :: Str, ok :: Bool) -> Str {
-  str.join(["{\"agent\":\"", agent_id, "\",\"tool\":\"", tool_name, "\",\"ok\":", if ok {
+fn op_call_json_full(agent_id :: Str, tool_name :: Str, ok :: Bool, args :: Str, result :: Str) -> Str {
+  str.join(["{\"agent\":", jv.stringify(JStr(agent_id)), ",\"tool\":", jv.stringify(JStr(tool_name)), ",\"ok\":", if ok {
     "true"
   } else {
     "false"
-  }, "}"], "")
+  }, ",\"args\":", jv.stringify(JStr(args)), ",\"result\":", jv.stringify(JStr(result)), "}"], "")
+}
+
+fn op_call_json(agent_id :: Str, tool_name :: Str, ok :: Bool) -> Str {
+  op_call_json_full(agent_id, tool_name, ok, "", "")
 }
 
 # Replay the ops file into the traces table as op_call events and remove it.
@@ -150,12 +190,34 @@ fn flush_op_calls(db :: conn.ConnDb, run_id :: Str, agent_id :: Str) -> [io, sql
     if str.is_empty(l) {
       ()
     } else {
-      let nm := match list.head(str.split(l, " ")) {
-        None => "",
-        Some(h) => h,
+      let parts := str.split(l, "\t")
+      let nth := fn (i :: Int) -> Str {
+        match list.fold(parts, ("", 0), fn (acc :: (Str, Int), v :: Str) -> (Str, Int) {
+          match acc {
+            (found, j) => if j == i {
+              (v, j + 1)
+            } else {
+              (found, j + 1)
+            },
+          }
+        }) {
+          (found, _) => found,
+        }
       }
-      let ok := str.ends_with(l, " ok")
-      trace.record(db, run_id, agent_id, "op_call", op_call_json(agent_id, nm, ok))
+      let nm := if list.len(parts) > 1 {
+        nth(0)
+      } else {
+        match list.head(str.split(l, " ")) {
+          None => "",
+          Some(h) => h,
+        }
+      }
+      let ok := if list.len(parts) > 1 {
+        nth(1) == "ok"
+      } else {
+        str.ends_with(l, " ok")
+      }
+      trace.record(db, run_id, agent_id, "op_call", op_call_json_full(agent_id, nm, ok, nth(2), nth(3)))
     }
   })
   ()

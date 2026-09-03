@@ -428,8 +428,44 @@ fn test_lowercase_fail_is_read_as_a_fail() -> Result[Unit, Str] {
   }
 }
 
+# wrap_tool has always seen the arguments and the result and recorded neither.
+# So loom could say py_check ran and returned ok, but never WHICH FILE it wrote
+# -- and the filename is the fact three separate diagnoses needed. The
+# fence-labelling failure was only found by reading a /tmp scratch directory
+# that happened not to have been cleaned yet.
+fn test_an_op_call_carries_the_filename() -> Result[Unit, Str] {
+  let row := runner.op_call_json_full("loom-py-build", "py_check", true, "{\"filename\":\"convert.py\"}", "{\"ok\":\"true\"}")
+  if str.contains(row, "convert.py") {
+    Ok(())
+  } else {
+    Err(str.concat("a tool call must record what it was asked to do: ", row))
+  }
+}
+
+fn test_an_op_call_carries_the_result() -> Result[Unit, Str] {
+  let row := runner.op_call_json_full("a", "py_check", false, "{}", "COMPILE_FAIL convert.py")
+  if str.contains(row, "COMPILE_FAIL") {
+    Ok(())
+  } else {
+    Err(str.concat("a tool call must record what came back: ", row))
+  }
+}
+
+# The control: the fields are bounded, so a build's whole source is not stored
+# twice in the trail.
+fn test_recorded_arguments_are_bounded() -> Result[Unit, Str] {
+  let long := str.join(list.map(list.range(0, 200), fn (i :: Int) -> Str {
+    "0123456789"
+  }), "")
+  if str.len(runner.clip(long, 300)) == 300 {
+    Ok(())
+  } else {
+    Err(str.concat("arguments must be clipped, got length ", int.to_str(str.len(runner.clip(long, 300)))))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked(), test_provider_error_is_recognised(), test_leading_whitespace_does_not_hide_it(), test_real_output_is_not_an_outage(), test_prose_mentioning_the_phrase_is_not_an_outage(), test_usage_step_keeps_its_own_numbers(), test_a_tool_row_names_the_tool_and_its_call(), test_lowercase_pass_is_read_as_a_pass(), test_lowercase_fail_is_read_as_a_fail(), test_claimed_pass_is_case_insensitive(), test_claimed_pass_rejects_a_fail()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked(), test_provider_error_is_recognised(), test_leading_whitespace_does_not_hide_it(), test_real_output_is_not_an_outage(), test_prose_mentioning_the_phrase_is_not_an_outage(), test_usage_step_keeps_its_own_numbers(), test_a_tool_row_names_the_tool_and_its_call(), test_lowercase_pass_is_read_as_a_pass(), test_lowercase_fail_is_read_as_a_fail(), test_claimed_pass_is_case_insensitive(), test_claimed_pass_rejects_a_fail(), test_an_op_call_carries_the_filename(), test_an_op_call_carries_the_result(), test_recorded_arguments_are_bounded()]
 }
 
 fn run_all() -> Unit {

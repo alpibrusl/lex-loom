@@ -397,8 +397,50 @@ fn test_an_empty_gate_dir_still_reports_no_files() -> [io, proc] Result[Unit, St
   }
 }
 
+# conftest.py looks like test scaffolding and is not: pytest imports it
+# unconditionally before collecting anything, so a broken one kills the whole
+# suite and every test is reported as failing. Found live (tzfixed iter-2): an
+# agent wrote pytest INI config into it —
+#
+#     [pytest]
+#     asyncio_mode = auto
+#
+# which py_compile ACCEPTS, because `[pytest]` is a valid list literal.
+# Importing it raises NameError, pytest dies at collection, and QA blames the
+# implementation for tests that never ran. check_imports skipped it by name.
+fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
+  let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\n[pytest]\nasyncio_mode = auto\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-bad") {
+    Ok(_) => Err("a conftest.py that cannot be imported kills every test in the directory and must be caught"),
+    Err(e) => if str.contains(e, "conftest") {
+      Ok(())
+    } else {
+      Err(str.concat("caught, but without naming conftest: ", e))
+    },
+  }
+}
+
+fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
+  let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\nimport pytest\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-good") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("an importable conftest must pass: ", e)),
+  }
+}
+
+# The control that keeps the exclusion honest: a test author writes its tests
+# BEFORE the implementation exists, deliberately, so a test file importing
+# something absent must NOT be treated as a broken module.
+fn test_a_test_file_importing_a_missing_impl_is_still_allowed() -> [io, proc] Result[Unit, Str] {
+  let out := "Tests.\n\n```test_a.py\nfrom nonexistent_impl import convert\n\ndef test_x():\n    assert convert(1) == 1\n```\n"
+  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-testonly") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a test written before its implementation is the point of an independent test author: ", e)),
+  }
+}
+
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected(), test_a_failed_gate_names_the_files_it_saw(), test_an_empty_gate_dir_still_reports_no_files()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected(), test_a_failed_gate_names_the_files_it_saw(), test_an_empty_gate_dir_still_reports_no_files(), test_a_broken_conftest_is_caught(), test_a_real_conftest_is_accepted(), test_a_test_file_importing_a_missing_impl_is_still_allowed()]
 }
 
 fn run_all() -> [io, proc] Unit {

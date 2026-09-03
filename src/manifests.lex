@@ -58,29 +58,56 @@ fn sprint_manifest_json(sprint_id :: Str) -> Str {
 # [policy.isolation] overrides pick from in company.toml, and what
 # cast.lex's grant report renders. Adding a 6th preset means adding both a
 # branch here and to manifest_json_for_preset below.
+# The preset a role's manifest comes from. Anything not named here falls through
+# to Demo, which grants NO exec -- and tool_grant then silently removes any tool
+# needing it, before the request is built.
+#
+# Five roles were losing their ONLY tool that way, and nothing said so:
+#
+#   test_author     lost lex_check          launch  lost run_server
+#   py_test_author  lost py_check           deploy  lost deploy_hetzner
+#   content_creator lost publish_content
+#
+# Both test authors could not write a file. That is the whole explanation for
+# months of "node produced no fenced files to check" and "NO TEST FILE was
+# written" denials, for test authors emitting prose instead of tests, and for
+# the launch node never calling run_server across five refuted hypotheses --
+# it was never offered the tool. The trail even recorded `op_grant tools:
+# run_server`, so it claimed the grant while the runtime had removed it.
+#
+# tests/test_role_contracts.lex now asserts that NO role loses a tool under its
+# own manifest, so a new role or a new tool cannot rejoin this list quietly.
 fn preset_name_for_kind(kind :: Str) -> Str {
-  if kind == "build" {
+  if kind == "test_author" or kind == "py_test_author" or kind == "ts_test_author" {
     "Implementation"
   } else {
-    if kind == "py_build" {
+    if kind == "launch" or kind == "deploy" {
       "Implementation"
     } else {
-      if kind == "fe_build" {
+      if kind == "build" {
         "Implementation"
       } else {
-        if kind == "qa" {
-          "QA"
+        if kind == "py_build" {
+          "Implementation"
         } else {
-          if kind == "py_qa" {
-            "QA"
+          if kind == "fe_build" {
+            "Implementation"
           } else {
-            if kind == "security" {
+            if kind == "qa" {
               "QA"
             } else {
-              if kind == "scribe" {
-                "Retro"
+              if kind == "py_qa" {
+                "QA"
               } else {
-                "Demo"
+                if kind == "security" {
+                  "QA"
+                } else {
+                  if kind == "scribe" {
+                    "Retro"
+                  } else {
+                    "Demo"
+                  }
+                }
               }
             }
           }

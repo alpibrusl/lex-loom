@@ -1163,9 +1163,14 @@ fn launch_system_prompt(sprint_id :: Str) -> Str {
   str.join(["You are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081, Node/TS gets PORT=8082 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd and port ONCE (the tool frees the port automatically before starting — do NOT add fuser/kill yourself):\n   - For Lex servers in ", lex_dir, ": cmd=\"cd ", lex_dir, " && PORT=<port> lex run --allow-effects env,io,time,net,sql,fs_read,fs_write,proc,concurrent <filename> <fn_name>\", port=<port>, timeout_s=45\n   - For Python servers in ", py_dir, ": cmd=\"cd ", py_dir, " && PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n   - For Node/TS servers in ", ts_dir, ": cmd=\"cd ", ts_dir, " && PORT=<port> node --experimental-strip-types <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."], "")
 }
 
-fn launch(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
+# evidence_path was hardcoded to "" here, so run_server's record_launch_evidence
+# no-opped and the gate that checks it found nothing. The node called the tool,
+# the tool started a real server and returned ok, and the sprint was still
+# denied "no run_server evidence found". for_role threads an evidence path
+# through s.make precisely so this cannot happen; launch and deploy dropped it.
+fn launch(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("launch", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
+  { id: "loom-launch", kind: "launch", system_prompt: launch_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("launch", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 # Deploys to a real, already-provisioned Hetzner server (#101) -- runs BEFORE
@@ -1182,9 +1187,9 @@ fn deploy_system_prompt(sprint_id :: Str) -> Str {
   str.join(["You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which work dir the build wrote to (Lex: ", lex_dir, ", Python: ", py_dir, ", Node/TS: ", ts_dir, "), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."], "")
 }
 
-fn deploy(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
+fn deploy(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("deploy", "", sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
+  { id: "loom-deploy", kind: "deploy", system_prompt: deploy_system_prompt(sprint_id), model_name: model, provider: p, tools: tools_of_role("deploy", evidence_path, sprint_id), proc_cmd: "", a2a_url: "", sprint_id: sprint_id }
 }
 
 fn demo(model :: Str) -> [env] runner.AgentDef {
@@ -1423,9 +1428,9 @@ fn builtin_specs() -> [env] List[RoleSpec] {
   } }, { kind: "fe_build", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
     fe_build(model)
   } }, { kind: "launch", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
-    launch(model, sid)
+    launch(model, ep, sid)
   } }, { kind: "deploy", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
-    deploy(model, sid)
+    deploy(model, ep, sid)
   } }, { kind: "demo", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
     demo(model)
   } }, { kind: "brand_strategist", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {

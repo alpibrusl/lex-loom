@@ -420,8 +420,13 @@ fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
   }
 }
 
+# Imports only the stdlib on purpose. The first version of this fixture used
+# `import pytest`, which made the test depend on pytest being installed on the
+# runner — CI does not install it, and the assertion "an importable conftest
+# must pass" then failed for a reason that had nothing to do with the check.
+# Fourth local-vs-CI divergence of this shape in this repo.
 fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
-  let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\nimport pytest\n```\n"
+  let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\nimport os\n\nMARKER = os.sep\n```\n"
   match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("an importable conftest must pass: ", e)),

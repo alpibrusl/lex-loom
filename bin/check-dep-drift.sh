@@ -74,7 +74,13 @@ while read -r dep _; do
   grep -q "^$dep " "$now" || echo "  - $dep  REMOVED" >&2
 done < "$LOCK"
 echo >&2
-echo "Review the diff above. If the change is expected, accept it with:" >&2
+echo "lex-schema and the lex toolchain move TOGETHER: lex-schema now
+  pins itself to a toolchain version and uses builtins from it (str.find_any
+  arrived in 0.10.14), so accepting a lex-schema drift without bumping the pin
+  in .github/workflows/*.yml stops every `lex check` in the repo. Reproduced:
+  0.10.11 + lex-schema f7911c94 fails 61 CI steps.
+
+  Review the diff above. If the change is expected, accept it with:" >&2
 echo "  bin/check-dep-drift.sh --update && git add deps.lock" >&2
 rm -f "$now"
 exit 1

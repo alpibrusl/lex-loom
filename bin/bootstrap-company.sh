@@ -277,10 +277,10 @@ fi
 # Preflight gates the RUN, not the scaffold. Scaffolding is free and
 # deterministic; starting a company spends money and takes hours. A company
 # whose model endpoint is unreachable, or whose QA has no test runner, fails
-# hours in and blames an agent — so check before the handoff, and let --no-run
-# scaffold regardless. The first version gated bootstrap itself, which broke
-# demo-bootstrap-install: a CI job that installs for real and has no model
-# endpoint by design.
+# hours in and blames an agent — so check before the handoff, and let
+# --no-run scaffold regardless. The first version of this gated bootstrap
+# itself, which broke demo-bootstrap-install: a CI job that installs for real
+# and has no model endpoint by design.
 if [ "$NORUN" != "--no-run" ] && [ "${LOOM_SKIP_PREFLIGHT:-}" != "1" ]; then
   "$(dirname "$0")/check-company-env.sh" "$MANIFEST" || {
     echo "[bootstrap] preflight failed — the workspace is scaffolded, but the company was not started." >&2

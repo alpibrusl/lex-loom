@@ -23,6 +23,7 @@ cd "$(dirname "$0")/.."
 LOOM_ROOT="$(pwd)"
 
 MANIFEST="${1:-}"
+
 NORUN="${2:-}"
 if [ -z "$MANIFEST" ] || [ ! -f "$MANIFEST" ]; then
   echo "usage: bin/bootstrap-company.sh <company.toml> [--no-run]" >&2
@@ -273,6 +274,21 @@ if [ -n "$CPOLICY_ISOLATION" ]; then
   echo "[bootstrap] policy.isolation → ${CPOLICY_ISOLATION} (enforced since OA2/#183: overrides mediate the LLM tool filter and lex-os exec; real-KVM Firecracker validation still open in #184)"
 fi
 
+# Preflight gates the RUN, not the scaffold. Scaffolding is free and
+# deterministic; starting a company spends money and takes hours. A company
+# whose model endpoint is unreachable, or whose QA has no test runner, fails
+# hours in and blames an agent — so check before the handoff, and let --no-run
+# scaffold regardless. The first version gated bootstrap itself, which broke
+# demo-bootstrap-install: a CI job that installs for real and has no model
+# endpoint by design.
+if [ "$NORUN" != "--no-run" ] && [ "${LOOM_SKIP_PREFLIGHT:-}" != "1" ]; then
+  "$(dirname "$0")/check-company-env.sh" "$MANIFEST" || {
+    echo "[bootstrap] preflight failed — the workspace is scaffolded, but the company was not started." >&2
+    echo "[bootstrap] fix the above and run the printed command, or LOOM_SKIP_PREFLIGHT=1 to override." >&2
+    exit 1
+  }
+fi
+
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
   echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' MODEL_OVERRIDES='$CMODEL_OVERRIDES' bin/run-company.sh"
@@ -288,3 +304,4 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" \
   MODEL_OVERRIDES="$CMODEL_OVERRIDES" \
   bin/run-company.sh
+

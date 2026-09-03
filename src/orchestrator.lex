@@ -528,10 +528,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                         runner.verify_launch_evidence(evidence_path, str.contains(str.replace(gates.first_json_object(output), " ", ""), "\"ok\":true"))
                       } else {
                         if gates.is_json_verdict_pass(n.gate) {
-                          let claimed_pass := match gates.extract_verdict(output) {
-                            Some(v) => v == "PASS",
-                            None => false,
-                          }
+                          let claimed_pass := claimed_pass_of(output)
                           match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
                             Err(e) => Err(e),
                             Ok(_) => if claimed_pass {
@@ -635,6 +632,24 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
 # Only an explicit FAIL is final. Any other unexpected verdict value is treated
 # as a formatting slip and stays retryable -- being final is a judgement about
 # the ARTIFACT, and only the word FAIL actually asserts anything about it.
+# Compared case-insensitively. The orchestrator compared `v == "PASS"` while the
+# gate compared `str.to_upper(str.trim(v))`, so a model answering "pass" was
+# read as claiming failure by one and success by the other -- and the evidence
+# check then compared that disagreement against what run_code really reported.
+# tzstep2 hit it: `verdict is 'passed', expected 'PASS'`.
+# Did the node claim a PASS? Extracted so it can be tested: this comparison used
+# to be written inline as `v == "PASS"` while the gate compared
+# `str.to_upper(str.trim(v))`, so a model answering "pass" was read as claiming
+# failure here and success there -- and the evidence check then compared that
+# disagreement against what run_code actually reported. tzstep2 hit it as
+# `verdict is 'passed', expected 'PASS'`.
+fn claimed_pass_of(output :: Str) -> Bool {
+  match gates.extract_verdict(output) {
+    Some(v) => str.to_upper(str.trim(v)) == "PASS",
+    None => false,
+  }
+}
+
 fn verdict_fail_is_final(gate :: Str, output :: Str) -> Bool {
   if gates.is_json_verdict_pass(gate) {
     match gates.extract_verdict(output) {

@@ -392,8 +392,44 @@ fn test_a_tool_row_names_the_tool_and_its_call() -> Result[Unit, Str] {
   }
 }
 
+# The orchestrator compared `v == "PASS"` while the gate compared
+# `str.to_upper(str.trim(v))`, so a model answering "pass" was read as claiming
+# failure by one and success by the other. tzstep2 hit it as
+# `verdict is 'passed', expected 'PASS'`.
+fn test_claimed_pass_is_case_insensitive() -> Result[Unit, Str] {
+  if orch.claimed_pass_of("{\"verdict\":\"pass\"}") {
+    Ok(())
+  } else {
+    Err("the orchestrator read \"pass\" as NOT a pass while the gate read it as one — they must agree")
+  }
+}
+
+fn test_claimed_pass_rejects_a_fail() -> Result[Unit, Str] {
+  if orch.claimed_pass_of("{\"verdict\":\"FAIL\"}") {
+    Err("a FAIL must never be read as a claimed pass")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_lowercase_pass_is_read_as_a_pass() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"pass\"}") {
+    Err("a lowercase pass must not be read as a final failure")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_lowercase_fail_is_read_as_a_fail() -> Result[Unit, Str] {
+  if orch.verdict_fail_is_final("spec json-verdict-pass", "{\"verdict\":\"fail\"}") {
+    Ok(())
+  } else {
+    Err("a lowercase fail must still be final")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked(), test_provider_error_is_recognised(), test_leading_whitespace_does_not_hide_it(), test_real_output_is_not_an_outage(), test_prose_mentioning_the_phrase_is_not_an_outage(), test_usage_step_keeps_its_own_numbers(), test_a_tool_row_names_the_tool_and_its_call()]
+  [test_first_failure_is_never_stalled(), test_identical_denial_is_stalled(), test_different_denial_and_changed_artifact_is_not_stalled(), test_unchanged_artifact_is_stalled_even_with_different_wording(), test_well_formed_fail_is_final(), test_malformed_verdict_is_retryable(), test_pass_verdict_is_not_final_failure(), test_other_gates_are_unaffected(), test_unexpected_verdict_value_is_retryable(), test_lowercase_fail_is_still_final(), test_affected_subgraph_is_node_plus_descendants(), test_unknown_producing_node_reruns_everything(), test_producing_node_identifies_the_artifact_author(), test_unattested_node_is_not_the_producer(), test_failed_impl_node_cannot_report_success(), test_all_attested_reports_success(), test_merge_keeps_untouched_nodes_and_takes_fresh_ones(), test_bounce_reaches_the_test_author(), test_bounce_still_includes_the_failing_builder(), test_test_author_roles_are_recognised(), test_other_roles_are_unaffected(), test_build_that_never_ran_is_named(), test_denied_build_still_counts_as_missing(), test_produced_build_lets_qa_run(), test_graph_without_a_build_is_not_blocked(), test_provider_error_is_recognised(), test_leading_whitespace_does_not_hide_it(), test_real_output_is_not_an_outage(), test_prose_mentioning_the_phrase_is_not_an_outage(), test_usage_step_keeps_its_own_numbers(), test_a_tool_row_names_the_tool_and_its_call(), test_lowercase_pass_is_read_as_a_pass(), test_lowercase_fail_is_read_as_a_fail(), test_claimed_pass_is_case_insensitive(), test_claimed_pass_rejects_a_fail()]
 }
 
 fn run_all() -> Unit {

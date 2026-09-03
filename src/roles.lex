@@ -187,7 +187,7 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
 # exactly [net, io, proc] (no [env]). Reading once and closing over the
 # values is also more honest: the deploy target can't drift mid-sprint if
 # something re-exports the env var between tool calls.
-fn make_deploy_hetzner_tool() -> [env] t.Tool {
+fn make_deploy_hetzner_tool(evidence_path :: Str) -> [env] t.Tool {
   let host := match env.get("HETZNER_HOST") {
     Some(v) => v,
     None => "",
@@ -260,6 +260,7 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
           Ok(r) => {
             let combined := str.concat(r.stdout, r.stderr)
             let ok := str.contains(combined, "READY")
+            let __ev := record_launch_evidence(evidence_path, ok)
             let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
               None => "",
               Some(s) => str.trim(s),
@@ -803,7 +804,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                   Some(make_run_server_tool(evidence_path, sprint_id))
                 } else {
                   if name == "deploy_hetzner" {
-                    Some(make_deploy_hetzner_tool())
+                    Some(make_deploy_hetzner_tool(evidence_path))
                   } else {
                     if name == "security_scan" {
                       Some(lexskill.make_security_scan_tool(sprint_id))

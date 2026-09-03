@@ -398,7 +398,12 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
           cfg.request
         } else {
           if is_test_author_role(n.role) {
-            cfg.request
+            let schema := response_schema_of(input)
+            if str.is_empty(schema) {
+              cfg.request
+            } else {
+              str.join([cfg.request, "\n\nThe response schema this product must return (from the spec — the implementation is being written separately against this same contract):\n", schema], "")
+            }
           } else {
             str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
           }
@@ -643,6 +648,38 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
 # failure here and success there -- and the evidence check then compared that
 # disagreement against what run_code actually reported. tzstep2 hit it as
 # `verdict is 'passed', expected 'PASS'`.
+# The one section of the PRD a test author must see: the wire contract.
+#
+# #282 cut test authors down to the sprint goal alone, because a document-shaped
+# PRD in the handoff reliably broke them. That fixed the shape and created a
+# gap: the builder works from the PRD and the test author from the raw goal, so
+# the two halves specify the product differently and neither is wrong.
+#
+# Found live (tzfixed iter-1). The service returned {"result": "1752235200"} --
+# the CORRECT epoch, verified by hand -- and the test asserted with a helper
+# that only accepts numeric leaves, so a correct string answer failed. QA
+# reported the implementation as broken and the bounce would have told the
+# builder to break working code to satisfy it. That is precisely the failure
+# the independent test author exists to prevent, arriving as a TYPE
+# disagreement rather than a wrong value, which no gate covered.
+#
+# Carrying the schema section only, not the PRD: a contract is a few lines, and
+# it is the document shape that broke the test author, not the content.
+fn response_schema_of(prd :: Str) -> Str {
+  let parts := str.split(prd, "## Response Schema")
+  if list.len(parts) < 2 {
+    ""
+  } else {
+    match list.head(list.tail(parts)) {
+      None => "",
+      Some(rest) => match list.head(str.split(rest, "\n## ")) {
+        None => "",
+        Some(body) => str.trim(body),
+      },
+    }
+  }
+}
+
 fn claimed_pass_of(output :: Str) -> Bool {
   match gates.extract_verdict(output) {
     Some(v) => str.to_upper(str.trim(v)) == "PASS",

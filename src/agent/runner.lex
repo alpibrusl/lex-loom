@@ -1162,6 +1162,11 @@ fn step(db :: conn.ConnDb, def :: AgentDef, msg_json :: Str, cost_owner :: Str, 
       let granted_tools := list.filter(def.tools, fn (tl :: t.Tool) -> Bool {
         tool_grant.tool_allowed_under_manifest(tl.name, manifest_json)
       })
+      let __strip := list.map(list.filter(def.tools, fn (tl :: t.Tool) -> Bool {
+        not tool_grant.tool_allowed_under_manifest(tl.name, manifest_json)
+      }), fn (tl :: t.Tool) -> [sql, fs_write, time] Unit {
+        trace.record(db, run_id, def.id, "tool_stripped", str.join(["{\"tool\":", jv.stringify(JStr(tl.name)), ",\"kind\":", jv.stringify(JStr(def.kind)), ",\"reason\":\"not permitted by this role's manifest grant\"}"], ""))
+      })
       let base_wrapped := list.map(granted_tools, fn (tl :: t.Tool) -> t.Tool {
         wrap_tool(ops_path, tl)
       })

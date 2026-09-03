@@ -24,6 +24,10 @@ import "../src/role_contracts" as contracts
 
 import "../src/role_kinds" as role_kinds
 
+import "../src/manifests" as manifests
+
+import "../src/tool_grant" as tool_grant
+
 import "../src/metaspec" as metaspec
 
 import "../src/role_tools" as role_tools
@@ -251,8 +255,52 @@ fn test_a_builder_still_gets_the_builder_critique() -> Result[Unit, Str] {
   }
 }
 
-fn run_all() -> [io, proc] Int {
-  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique())]
+# No role may be handed a tool its own manifest then removes. The removal is
+# silent at the point it happens, so this is the only place it can be caught.
+#
+# Found live, and it explains more than anything else this week: FIVE roles were
+# losing their only tool. Both test authors lost their check tool and so could
+# not write a file at all -- which is the whole story behind months of "node
+# produced no fenced files to check" and "NO TEST FILE was written" -- and
+# launch was never offered run_server, which is why five separate hypotheses
+# about the model refusing to call it were all refuted. There was no tool.
+#
+# deploy and content_creator are listed as KNOWN exceptions rather than fixed:
+# deploy_hetzner needs exec=Full and publish_content needs network=Full, which
+# reach a real server and a real publishing endpoint. Widening a grant that far
+# is a decision for a person, not a tidy-up. Listing them here keeps them
+# visible and keeps this test honest about what it does not cover.
+fn tool_strip_exception(kind :: Str) -> Bool {
+  if kind == "deploy" {
+    true
+  } else {
+    kind == "content_creator"
+  }
+}
+
+fn test_no_role_loses_its_own_tools() -> [env, fs_read] Result[Unit, Str] {
+  list.fold(role_kinds.known_kinds(), Ok(()), fn (acc :: Result[Unit, Str], k :: Str) -> [env, fs_read] Result[Unit, Str] {
+    match acc {
+      Err(e) => Err(e),
+      Ok(_) => if tool_strip_exception(k) {
+        Ok(())
+      } else {
+        let mj := manifests.manifest_json_for_kind_with_overrides(k, "guard/iter-1", manifests.parse_isolation_overrides(""))
+        let lost := list.filter(role_tools.tools_for(k), fn (t :: Str) -> Bool {
+          not tool_grant.tool_allowed_under_manifest(t, mj)
+        })
+        if list.is_empty(lost) {
+          Ok(())
+        } else {
+          Err(str.join(["role '", k, "' is granted ", str.join(lost, ", "), " and its own manifest (preset ", manifests.preset_name_for_kind(k), ") then removes it — the model never sees the tool, and nothing says so"], ""))
+        }
+      },
+    }
+  })
+}
+
+fn run_all() -> [env, fs_read, io, proc] Int {
+  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique()), ("no role loses its own tools", test_no_role_loses_its_own_tools())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

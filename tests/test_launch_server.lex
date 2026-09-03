@@ -29,6 +29,8 @@ import "std.process" as proc
 
 import "../src/roles" as roles
 
+import "../src/agent/runner" as runner
+
 import "../src/lex_skill" as lexskill
 
 import "lex-schema/json_value" as jv
@@ -54,7 +56,7 @@ fn seed_server(sprint :: Str) -> [io, proc] Unit {
 }
 
 fn launch(sprint :: Str, cmd :: Str, port :: Int) -> [env, io, net, proc] Result[jv.Json, Str] {
-  let tool := roles.make_run_server_tool(sprint)
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", sprint)
   match tool.execute(JObj([("cmd", JStr(cmd)), ("port", JInt(port)), ("endpoint", JStr("/")), ("timeout_s", JInt(15))])) {
     Err(_) => Err("run_server errored"),
     Ok(r) => Ok(r),
@@ -155,8 +157,46 @@ fn test_status_is_reported() -> [env, io, net, proc] Result[Unit, Str] {
   }
 }
 
+# The finding this exists for. Probed four times, the launch node called NO tool
+# at all and was ACCEPTED twice, on output beginning:
+#
+#   {"ok":true,"url":"http://localhost:8081","response":"{\"status\": \"ok\"}","pid":"4127"}
+#   Wait - I must actually call the tool first. Let me do that.
+#
+# It fabricated the success, noticed, then wrote the tool's arguments as prose
+# instead of calling it, and `spec json-ok-true` read the first JSON object and
+# sealed the node. loom's strongest claim -- a live URL and a real response --
+# was inventable, and had been invented.
+fn test_fabricated_launch_is_refused() -> [io, proc] Result[Unit, Str] {
+  let ev := "/tmp/loom-launch-evidence-none.json"
+  let __rm := proc.run("bash", ["-c", str.concat("rm -f ", ev)])
+  match runner.verify_launch_evidence(ev, true) {
+    Ok(_) => Err("a launch that never called run_server must not attest to a live server"),
+    Err(_) => Ok(()),
+  }
+}
+
+fn test_a_real_launch_is_accepted() -> [io, proc] Result[Unit, Str] {
+  let ev := "/tmp/loom-launch-evidence-real.json"
+  let __w := io.write(ev, "{\"launched\":true,\"ok\":true}")
+  match runner.verify_launch_evidence(ev, true) {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a launch backed by real run_server evidence must pass: ", e)),
+  }
+}
+
+# And the node cannot claim success when the tool reported failure.
+fn test_claiming_ok_over_a_failed_launch_is_refused() -> [io, proc] Result[Unit, Str] {
+  let ev := "/tmp/loom-launch-evidence-failed.json"
+  let __w := io.write(ev, "{\"launched\":true,\"ok\":false}")
+  match runner.verify_launch_evidence(ev, true) {
+    Ok(_) => Err("claiming ok=true when run_server reported ok=false must be refused"),
+    Err(_) => Ok(()),
+  }
+}
+
 fn run_all() -> [env, io, net, proc] Int {
-  let results := [("bare command starts the build", test_bare_command_starts_the_build()), ("the port reaches the server", test_the_port_reaches_the_server()), ("failure reports what the server said", test_failure_reports_what_the_server_said()), ("explicit cd is respected", test_explicit_cd_is_respected()), ("status is reported", test_status_is_reported())]
+  let results := [("bare command starts the build", test_bare_command_starts_the_build()), ("the port reaches the server", test_the_port_reaches_the_server()), ("failure reports what the server said", test_failure_reports_what_the_server_said()), ("explicit cd is respected", test_explicit_cd_is_respected()), ("status is reported", test_status_is_reported()), ("fabricated launch is refused", test_fabricated_launch_is_refused()), ("a real launch is accepted", test_a_real_launch_is_accepted()), ("claiming ok over a failed launch is refused", test_claiming_ok_over_a_failed_launch_is_refused())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

@@ -713,6 +713,32 @@ fn clear_qa_evidence(path :: Str) -> [proc] Unit {
 # Deny unless the agent actually called run_code and its real result
 # agrees with the verdict it claimed. `claimed_pass` is the gate's own
 # extract_verdict("PASS"/other) reduced to a bool by the caller.
+# The launch equivalent of verify_json_verdict_evidence. `spec json-ok-true`
+# only parses the model's own JSON, so a launch node that never called
+# run_server could write {"ok":true,...} and seal. Measured: four probes, zero
+# tool calls, two ACCEPTED.
+fn verify_launch_evidence(path :: Str, claimed_ok :: Bool) -> [io] Result[Unit, Str] {
+  match io.read(path) {
+    Err(_) => Err("no run_server evidence found — a launch node must actually call run_server, not describe calling it; {\"ok\":true} written by the model attests to nothing"),
+    Ok(raw) => {
+      let really_ok := str.contains(raw, "\"ok\":true")
+      if claimed_ok == really_ok {
+        Ok(())
+      } else {
+        Err(str.join(["claimed ok=", if claimed_ok {
+          "true"
+        } else {
+          "false"
+        }, " but run_server actually reported ok=", if really_ok {
+          "true"
+        } else {
+          "false"
+        }], ""))
+      }
+    },
+  }
+}
+
 fn verify_json_verdict_evidence(path :: Str, claimed_pass :: Bool) -> [io] Result[Unit, Str] {
   match io.read(path) {
     Err(_) => Err("no run_code evidence found — the QA agent must call run_code before emitting a verdict, never guess"),

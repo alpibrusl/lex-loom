@@ -524,21 +524,25 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                         runner.verify_shell_on_output_from(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id))
                       }
                     } else {
-                      if gates.is_json_verdict_pass(n.gate) {
-                        let claimed_pass := match gates.extract_verdict(output) {
-                          Some(v) => v == "PASS",
-                          None => false,
-                        }
-                        match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
-                          Err(e) => Err(e),
-                          Ok(_) => if claimed_pass {
-                            runner.verify_verdict_suite(n.role, cfg.id)
-                          } else {
-                            Ok(())
-                          },
-                        }
+                      if str.trim(n.gate) == "spec json-ok-true" {
+                        runner.verify_launch_evidence(evidence_path, str.contains(str.replace(gates.first_json_object(output), " ", ""), "\"ok\":true"))
                       } else {
-                        runner.verify_build_compiles(n.role, cfg.id)
+                        if gates.is_json_verdict_pass(n.gate) {
+                          let claimed_pass := match gates.extract_verdict(output) {
+                            Some(v) => v == "PASS",
+                            None => false,
+                          }
+                          match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
+                            Err(e) => Err(e),
+                            Ok(_) => if claimed_pass {
+                              runner.verify_verdict_suite(n.role, cfg.id)
+                            } else {
+                              Ok(())
+                            },
+                          }
+                        } else {
+                          runner.verify_build_compiles(n.role, cfg.id)
+                        }
                       }
                     }
                   }) {

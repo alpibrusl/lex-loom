@@ -51,7 +51,31 @@ import "./deploy_scaffold" as scaffold
 # Starts a shell command in the background, polls the given port until the
 # server responds (or timeout_s elapses), then curls a test endpoint and
 # returns live evidence. Designed for the `launch` role agent.
-fn make_run_server_tool(sprint_id :: Str) -> t.Tool {
+# Records that run_server really executed, and what it found. Without this the
+# launch gate is satisfied by any JSON the model writes: probed four times, the
+# launch node called NO tool at all and was ACCEPTED twice, on output that began
+#
+#   {"ok":true,"url":"http://localhost:8081","response":"{\"status\": \"ok\"}","pid":"4127"}
+#   Wait - I must actually call the tool first. Let me do that.
+#
+# It fabricated the success, noticed, and then wrote the tool's arguments as
+# prose instead of calling it. `spec json-ok-true` read the first JSON object
+# and sealed the node. loom's strongest claim -- a live URL and a real response
+# -- was inventable, and had been invented.
+fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
+  if str.is_empty(evidence_path) {
+    ()
+  } else {
+    let __ := io.write(evidence_path, str.join(["{\"launched\":true,\"ok\":", if ok {
+      "true"
+    } else {
+      "false"
+    }, "}"], ""))
+    ()
+  }
+}
+
+fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
   t.define("run_server", "Start `cmd` as a background server on `port`, wait up to `timeout_s` seconds for it to respond, then fetch `endpoint` and return {ok, url, response, pid, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let cmd := match jv.get_field(args, "cmd") {
@@ -106,6 +130,7 @@ fn make_run_server_tool(sprint_id :: Str) -> t.Tool {
             None => resp_part,
             Some(v) => v,
           })
+          let __ev := record_launch_evidence(evidence_path, ok)
           if ok {
             Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("status", JStr(status)), ("response", JStr(str.slice(body, 0, 500))), ("pid", JStr(pid_part)), ("error", JStr(""))]))
           } else {
@@ -162,7 +187,7 @@ fn make_run_server_tool(sprint_id :: Str) -> t.Tool {
 # exactly [net, io, proc] (no [env]). Reading once and closing over the
 # values is also more honest: the deploy target can't drift mid-sprint if
 # something re-exports the env var between tool calls.
-fn make_deploy_hetzner_tool() -> [env] t.Tool {
+fn make_deploy_hetzner_tool(evidence_path :: Str) -> [env] t.Tool {
   let host := match env.get("HETZNER_HOST") {
     Some(v) => v,
     None => "",
@@ -235,6 +260,7 @@ fn make_deploy_hetzner_tool() -> [env] t.Tool {
           Ok(r) => {
             let combined := str.concat(r.stdout, r.stderr)
             let ok := str.contains(combined, "READY")
+            let __ev := record_launch_evidence(evidence_path, ok)
             let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
               None => "",
               Some(s) => str.trim(s),
@@ -775,10 +801,10 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                 Some(make_run_code_tool(evidence_path))
               } else {
                 if name == "run_server" {
-                  Some(make_run_server_tool(sprint_id))
+                  Some(make_run_server_tool(evidence_path, sprint_id))
                 } else {
                   if name == "deploy_hetzner" {
-                    Some(make_deploy_hetzner_tool())
+                    Some(make_deploy_hetzner_tool(evidence_path))
                   } else {
                     if name == "security_scan" {
                       Some(lexskill.make_security_scan_tool(sprint_id))

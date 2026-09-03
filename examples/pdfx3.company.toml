@@ -1,0 +1,53 @@
+# pdfx3: metered PDF-to-text extraction API for AI agents, priced per call
+# via x402 (no subscription, no API key signup). A fresh, clean re-run after
+# pdfx2's 19-iteration audit surfaced (and this project fixed) three more
+# real gaps in loom itself, on top of the earlier fixes pdfx2 validated:
+#   - #105/#106/#108/#109/#110/#111/#112: sync-by-role, ground-truth Lex
+#     build status (drift-aware), dependency whitelist warning, build-role
+#     gate enforcement, and the qa role's grounding wiring (both the
+#     tool-level fix and the constructor-level wiring gap it initially
+#     missed).
+#   - #113: the improver no longer rewrites a role's prompt to demand
+#     capabilities beyond its real tools (found live: qa's prompt was
+#     corrupted into requiring it to "start a server", which only launch
+#     can do).
+#   - #114: the Strategist gets a bounded retry on an unparseable reply
+#     before falling back to its safe stop, instead of ending the company
+#     on a single transient glitch.
+#   - #115: the Architect is told to split an oversized build/py_build task
+#     (found live: asking for a route + payment gate + subprocess
+#     integration all at once reliably returned EMPTY output, 4 times).
+#
+# pdfx2 itself ended up in the terminal "sunset" lifecycle stage from the
+# now-fixed unparseable-reply bug -- rather than force-resetting that
+# terminal state by hand, this starts fresh so the Strategist's SHIPPED SO
+# FAR / sprint_graphs history is clean, same reasoning as pdfx2's own
+# comment header for why it didn't resume "pdfx".
+#
+# Field status:  [enforced] acted on today  ·  [declared-intent] recorded, realized as bootstrap/deploy wiring lands.
+
+[identity]
+id      = "pdfx3"                                              # [enforced] → COMPANY_ID + workspace dir
+name    = "pdfx3"
+mission = "Build pdfx3: a metered PDF-to-text extraction API for AI agents, priced per call via x402 (no subscription, no API key signup). Lex HTTP server (lex-x402-api golden path): GET /health is free. POST /extract is behind the x402 payment gate -- accepts a PDF (base64-encoded in the JSON body), shells out to a bundled Python helper script via std.proc to extract plain text per page, returns JSON {page_count, pages: [{text}]}. The Python helper MUST use only Python's standard library (no pip-installed packages -- the sandbox has no package-install step; a hand-rolled parser is the correct, expected approach, not a workaround). Digital-text PDFs only: a scanned/image-only PDF (no extractable text layer) returns a clear 422 {\"error\":\"not_text_based\"} rather than attempting OCR -- keep the Docker image lean and every call fast and cheap. Stateless: no uploaded PDF content or extracted output is persisted anywhere after the request completes -- state this explicitly in a short privacy note the /health response links to. Tests: the free health route; the Python extraction helper directly (a real multi-page text PDF, a corrupted/non-PDF input, and a scanned-image-only PDF each producing the expected shape or the 422 case); the x402 gate's unpaid-402/paid-200 behavior (reuse payments.lex's existing test pattern, never hand-roll the handshake); the priced /extract endpoint itself must call the Python helper and be gated by pay.gate -- this is the mission's core deliverable, not an optional extra."   # [enforced] → GOAL
+
+[stack]
+path  = "lex-x402-api"        # [enforced] → the only vetted path with a real, tested x402 payment gate (lex-x402/lex-guard are Lex-only, so the priced route must be a Lex server); PDF parsing itself shells out to a bundled Python helper via std.proc, not a second HTTP server
+model = "kimi-k2.7-code"      # [enforced] → MODEL -- confirmed live across pdfx/pdfx2 to reliably complete real tool calls; flat OpenCode Go subscription, so real financial risk is bounded (worst case is 429 rate-limiting, not open-ended billing)
+storage = "none"              # [declared-intent] stateless by design -- no PDF content or output is retained after a request
+
+[infra]
+# repo/hosting/domain intentionally left unset for v1: no GitHub repo requested
+# yet, and no Hetzner server is provisioned -- this run builds, QA's, and
+# launches LOCALLY only (no deploy node in the sprint graph).
+
+[roles]
+packs = ["engineering", "legal"]   # [enforced] engineering builds it; legal drafts the short "we don't store your PDFs" privacy note /health links to (a real, human-review-required draft, not a final policy) -- no distribution/finance packs yet: an agent-consumed API has no human marketing funnel, and pricing is fixed directly via the x402 gate's env config, not a finance workstream
+
+[monitoring]
+checks = ["liveness"]         # [enforced] liveness is live (OP1); error_rate/usage are [declared-intent] but real for production deploys (#101/#102) once this is actually deployed
+
+[policy]
+max_iterations = 24           # [enforced] → MAX_ITERATIONS -- a fresh start with all known gaps fixed should need fewer iterations than pdfx2's 19 needed while diagnosing them
+budget_eur     = 1500          # [enforced] → STOP_WHEN="spend ge 1500.00" -- the est_spend ledger is a token-count proxy, not real billing: OpenCode Go is a flat ~€10/mo subscription, so actual financial risk is bounded to rate-limiting (429s), not this figure
+human_gates    = ["payments", "go-public", "app-store"]   # [declared-intent] via lex-os-manifest grants -- unchanged defaults; go-public covers actually listing on Agent.market, a real human step regardless of how the product is built

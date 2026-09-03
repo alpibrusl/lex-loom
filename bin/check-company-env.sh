@@ -88,9 +88,89 @@ else
   bad "no model endpoint: set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
 fi
 
+# --- the operator profile: which providers this machine can reach -----------
+# company.toml says what to BUILD; the profile says what this machine can REACH.
+# Without it, [infra].hosting is read by nothing — a company declaring "fly.io"
+# silently gets no deploy — and every credential is merely assumed present.
+PROFILE="${LOOM_PROFILE:-$HOME/.loom/profile.toml}"
+if [ ! -f "$PROFILE" ]; then
+  note "no operator profile at $PROFILE — provider choices and grants are undeclared (see examples/loom.profile.toml)"
+else
+  LOOM_ENV="${LOOM_ENV:-local}"
+  read -r PHOST PVCS PMODEL PDEPLOY PPUB PHOSTENV EKIND EKNOWN EGATE EHOSTENV < <(python3 - "$PROFILE" "$LOOM_ENV" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f: d = tomllib.load(f)
+pr = d.get("providers") or {}
+g  = d.get("grants") or {}
+envs = d.get("environments") or {}
+want = sys.argv[2]
+e = envs.get(want)
+sel = lambda k, f, dflt="-": (pr.get(k) or {}).get(f, dflt)
+print(sel("hosting","kind"), sel("vcs","kind"), sel("model","kind"),
+      str(g.get("allow_real_deploy", False)).lower(),
+      str(g.get("allow_publishing", False)).lower(),
+      sel("hosting","host_env","-"),
+      (e or {}).get("kind", "-"),
+      "yes" if e is not None else ("none" if not envs else "no:" + ",".join(sorted(envs))),
+      str((e or {}).get("requires_human_gate", False)).lower(),
+      (e or {}).get("host_env", "-"))
+PY
+)
+  ok "operator profile: $PROFILE"
+
+  case "$PHOST" in
+    hetzner) ok "hosting adapter '$PHOST' is supported"
+             if [ "$PHOSTENV" != "-" ]; then
+               eval "hv=\${$PHOSTENV:-}"
+               [ -n "${hv:-}" ] && ok "$PHOSTENV is set" || note "$PHOSTENV is not set — deploy nodes cannot reach a host"
+             fi ;;
+    none|-)  note "no hosting adapter declared — deploy nodes cannot run" ;;
+    *)       bad "hosting.kind '$PHOST' has no adapter (available: hetzner, none) — a company declaring it would silently never deploy" ;;
+  esac
+  case "$PVCS" in
+    github|-|none) : ;;
+    *) bad "vcs.kind '$PVCS' has no adapter (available: github, none)" ;;
+  esac
+  case "$PMODEL" in
+    litellm|opencode|anthropic|openai|-) : ;;
+    *) bad "model.kind '$PMODEL' has no adapter (available: litellm, opencode, anthropic, openai)" ;;
+  esac
+
+  # Which target this run may reach. `local` deploys nowhere: launch starts the
+  # server on localhost and nothing leaves the machine. Today that choice is a
+  # per-run LLM judgement, so the same company can deploy on one iteration and
+  # not the next; naming an environment makes it declared instead.
+  case "$EKNOWN" in
+    yes)   ok "environment '$LOOM_ENV' (kind=$EKIND)" ;;
+    none)  note "profile declares no [environments] — falling back to local-only behaviour" ;;
+    no:*)  bad "LOOM_ENV='$LOOM_ENV' is not declared in the profile (declared: ${EKNOWN#no:})" ;;
+  esac
+  if [ "$EKNOWN" = "yes" ]; then
+    case "$EKIND" in
+      none) ok "'$LOOM_ENV' deploys nowhere — launch only, nothing leaves this machine" ;;
+      hetzner)
+        [ "$PDEPLOY" = "true" ] || bad "environment '$LOOM_ENV' targets hetzner but grants.allow_real_deploy is false — the deploy tool stays disarmed and the run would silently never deploy"
+        if [ "$EHOSTENV" != "-" ]; then
+          eval "ehv=\${$EHOSTENV:-}"
+          [ -n "${ehv:-}" ] && ok "$EHOSTENV is set for '$LOOM_ENV'" || bad "environment '$LOOM_ENV' names $EHOSTENV, which is unset"
+        fi
+        [ "$EGATE" = "true" ] && ok "'$LOOM_ENV' requires a human gate before promotion" || note "'$LOOM_ENV' reaches a real host with no human gate declared" ;;
+      *) bad "environment '$LOOM_ENV' has kind '$EKIND', which has no adapter (available: hetzner, none)" ;;
+    esac
+  fi
+
+  # Grants are the operator's decision and are OFF unless declared here.
+  [ "$PDEPLOY" = "true" ] && ok "grants.allow_real_deploy = true (deploy may reach a real server)" \
+                          || note "grants.allow_real_deploy = false — deploy_hetzner stays disarmed"
+  [ "$PPUB" = "true" ]    && ok "grants.allow_publishing = true (content_creator may publish for real)" \
+                          || note "grants.allow_publishing = false — publish_content stays disarmed"
+fi
+
 # --- things that only matter if the company asks for them -------------------
-if grep -q '^\s*hosting' "$TOML" 2>/dev/null && [ -z "${HETZNER_HOST:-}" ]; then
-  note "[infra].hosting is declared but HETZNER_HOST is unset — deploy nodes cannot run (this is [declared-intent] today)"
+# [infra].hosting in company.toml is read by NOTHING. The profile's
+# providers.hosting.kind is what selects an adapter, and it is checked above.
+if grep -q '^\s*hosting' "$TOML" 2>/dev/null && [ ! -f "${LOOM_PROFILE:-$HOME/.loom/profile.toml}" ]; then
+  note "[infra].hosting is declared in company.toml but nothing reads it — declare providers.hosting.kind in an operator profile instead"
 fi
 case "$CPACKS" in
   *content*) [ -n "${PUBLISH_URL:-}" ] || note "the 'content' pack includes content_creator, whose publish_content tool is not permitted by its manifest — it will be stripped" ;;

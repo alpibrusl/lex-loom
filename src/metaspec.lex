@@ -604,8 +604,8 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g0", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Valid,
     check({ id: "g1", phase: graph.Intake, nodes: [], edges: [] }) => Invalid([{ rule: "non-empty", message: "SprintGraph has no nodes" }]),
     check({ id: "g2", phase: graph.QA, nodes: [{ id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "qa-dominates-demo", message: "demo node d has no qa node ancestor (cannot demo unverified work)" }]),
-    check({ id: "g3", phase: graph.QA, nodes: [{ id: "q", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
-    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
+    check({ id: "g3", phase: graph.QA, nodes: [{ id: "b", role: "build", gate: "spec compiles", expand: None, activate_when: "" }, { id: "ta", role: "test_author", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "q", role: "qa", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "d", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "b", to: "q", handoff: "schema {}" }, { from: "ta", to: "q", handoff: "schema {}" }, { from: "q", to: "d", handoff: "schema {}" }] }) => Valid,
+    check({ id: "g4", phase: graph.Intake, nodes: [{ id: "a", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "b", role: "security", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "a", to: "b", handoff: "schema {}" }, { from: "b", to: "a", handoff: "schema {}" }] }) => Invalid([{ rule: "dag-or-budgeted-cycle", message: "cycle detected in SprintGraph — add an iteration budget to allow bounded cycles" }]),
     check({ id: "g5", phase: graph.Intake, nodes: [{ id: "n1", role: "builder", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "roles-resolve", message: "node n1 has unknown role 'builder' (no registered agent)" }]),
     check({ id: "g6", phase: graph.Intake, nodes: [{ id: "n1", role: "docs", gate: "spec maybe-ok", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "gates-well-formed", message: "node n1 has unrecognized gate 'spec maybe-ok' (would silently fall back to non-empty)" }]),
     check({ id: "g7", phase: graph.Intake, nodes: [{ id: "n1", role: "ux_designer", gate: "spec compiles", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "compiles-gate-matches-role", message: "node n1 (role 'ux_designer') uses gate 'spec compiles', but only build/py_build/ts_build nodes write files a compiler can check — this role's output is never persisted, so the gate can never pass. Use 'spec judge \"...\"' or 'spec len-gt N' instead." }]),
@@ -613,7 +613,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written. A 'spec sh' gate IS allowed when it runs one of loom's own verifiers under $LOOM_ROOT/bin/ (e.g. check_imports.py) -- reviewed code in this repository, not a command the model invented." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g), rule_consumers_need_a_build(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {
@@ -664,6 +664,51 @@ fn check_for_target(g :: graph.SprintGraph, deploy_allowed :: Bool) -> MetaspecR
         Invalid(extra)
       }
     },
+  }
+}
+
+# Judging, starting and shipping all presuppose something was BUILT.
+#
+# Found live (tzc3 iteration 2). The Architect emitted:
+#
+#   intake  pm  devops  deploy  py_qa  launch  demo  scribe
+#
+# No build node and no test author. py_qa was asked to judge an implementation
+# the graph never contained, and launch to start it; py_qa was denied five
+# times with "work dir missing" and "verdict not grounded", and the iteration
+# produced nothing at all.
+#
+# Every existing rule missed it because they all key off build_roles_in(g)
+# being NON-EMPTY -- qa-matches-build-language, tests-authored-independently,
+# tests-have-an-independent-author. A graph with no build satisfies all of them
+# vacuously. The orchestrator's own missing_producers precondition exempts a
+# graph with no build node too, deliberately, because a docs-only sprint has no
+# producer to wait for. That exemption is right there and wrong here: the
+# distinction is whether anything in the graph CONSUMES an implementation.
+fn rule_consumers_need_a_build(g :: graph.SprintGraph) -> List[Violation] {
+  if not list.is_empty(build_roles_in(g)) {
+    []
+  } else {
+    list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+      let consumes := if n.role == "qa" {
+        true
+      } else {
+        if n.role == "py_qa" {
+          true
+        } else {
+          if n.role == "ts_qa" {
+            true
+          } else {
+            n.role == "launch"
+          }
+        }
+      }
+      if consumes {
+        list.concat(acc, [{ rule: "consumers-need-a-build", message: str.concat("node ", str.concat(n.id, str.concat(" (role '", str.concat(n.role, "') judges or starts an implementation, but this graph contains no build node at all. It would be denied every attempt for a work dir that was never written. Add the build node that produces what it consumes, or drop it")))) }])
+      } else {
+        acc
+      }
+    })
   }
 }
 

@@ -472,8 +472,43 @@ fn test_invented_shell_command_on_a_build_is_still_rejected() -> Result[Unit, St
   }
 }
 
+# A deploy node in a local-only run is a node that cannot work: deploy_hetzner
+# needs exec=Full, which no local manifest grants, so it is stripped and the
+# node fails every attempt. tzc3 lost 7 of its 17 denials to exactly that, while
+# both iterations that produced code passed their own tests 9/9 and 5/5.
+fn graph_with_deploy() -> graph.SprintGraph {
+  { id: "d1", phase: graph.Implementation, nodes: [node("pm", "pm"), node("b", "py_build"), node("ta", "py_test_author"), node("q", "py_qa"), node("dep", "deploy"), node("d", "demo")], edges: [edge("pm", "b"), edge("pm", "ta"), edge("b", "q"), edge("ta", "q"), edge("q", "dep"), edge("dep", "d")] }
+}
+
+fn test_deploy_is_rejected_when_nothing_can_be_deployed_to() -> Result[Unit, Str] {
+  match meta.check_for_target(graph_with_deploy(), false) {
+    Valid => Err("a deploy node in a local-only run has no tool and fails every attempt — the graph must be rejected instead"),
+    Invalid(_) => Ok(()),
+  }
+}
+
+fn test_deploy_is_allowed_against_a_real_target() -> Result[Unit, Str] {
+  match meta.check_for_target(graph_with_deploy(), true) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("with a real target declared, deploy must be permitted: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.rule
+    }), ","))),
+  }
+}
+
+# The control: a local run with no deploy node is untouched.
+fn test_a_local_graph_without_deploy_is_unaffected() -> Result[Unit, Str] {
+  let gph := g("d2", [node("pm", "pm"), node("b", "py_build"), node("ta", "py_test_author"), node("q", "py_qa"), node("d", "demo")], [edge("pm", "b"), edge("pm", "ta"), edge("b", "q"), edge("ta", "q"), edge("q", "d")])
+  match meta.check_for_target(gph, false) {
+    Valid => Ok(()),
+    Invalid(vs) => Err(str.concat("a local graph that never deploys must pass: ", str.join(list.map(vs, fn (v :: meta.Violation) -> Str {
+      v.rule
+    }), ","))),
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected(), test_python_build_with_lex_test_author_is_rejected(), test_python_build_with_py_test_author_is_accepted(), test_py_test_author_downstream_of_build_is_rejected(), test_build_node_named_tests_does_not_count_as_an_author(), test_a_real_test_author_satisfies_it(), test_build_without_qa_needs_no_author(), test_the_rule_reaches_typescript(), test_loom_verifier_shell_gate_is_allowed_on_a_build(), test_invented_shell_command_on_a_build_is_still_rejected()]
+  [test_valid_single_node(), test_valid_qa_demo(), test_valid_pipeline(), test_empty_fails_non_empty(), test_ungated_fails(), test_no_role_fails(), test_no_handoff_fails(), test_cycle_fails_dag(), test_demo_without_qa_fails(), test_indirect_qa_valid(), test_multiple_violations_collected(), test_unknown_role_fails(), test_known_roles_pass_resolution(), test_distribution_roles_pass_resolution(), test_finance_legal_roles_pass_resolution(), test_monetization_handoff_resolves_with_human_gate(), test_monetization_handoff_rejects_autonomous_gate(), test_unrecognized_gate_fails(), test_grounded_gate_is_well_formed(), test_expand_weak_gate_fails(), test_expand_strong_gate_valid(), test_expand_non_empty_gate_valid(), test_build_role_with_shell_gate_fails(), test_py_build_role_with_judge_gate_fails(), test_build_role_with_compiles_gate_passes(), test_expand_build_node_with_shell_gate_is_exempt(), test_every_registered_role_kind_is_accepted(), test_cx_and_research_specifically(), test_a_genuinely_unknown_role_is_still_rejected(), test_python_build_with_lex_qa_is_rejected(), test_python_build_with_py_qa_is_accepted(), test_multi_language_graph_is_left_alone(), test_python_acceptance_requires_a_test_file(), test_lex_acceptance_requires_a_test_file(), test_unknown_stack_abstains_rather_than_passing(), test_test_author_downstream_of_build_is_rejected(), test_test_author_as_a_sibling_of_build_is_accepted(), test_graph_without_a_build_is_unaffected(), test_python_build_with_lex_test_author_is_rejected(), test_python_build_with_py_test_author_is_accepted(), test_py_test_author_downstream_of_build_is_rejected(), test_build_node_named_tests_does_not_count_as_an_author(), test_a_real_test_author_satisfies_it(), test_build_without_qa_needs_no_author(), test_the_rule_reaches_typescript(), test_loom_verifier_shell_gate_is_allowed_on_a_build(), test_invented_shell_command_on_a_build_is_still_rejected(), test_deploy_is_rejected_when_nothing_can_be_deployed_to(), test_deploy_is_allowed_against_a_real_target(), test_a_local_graph_without_deploy_is_unaffected()]
 }
 
 fn run_all() -> Unit {

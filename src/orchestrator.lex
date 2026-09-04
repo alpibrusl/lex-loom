@@ -680,6 +680,23 @@ fn response_schema_of(prd :: Str) -> Str {
   }
 }
 
+# Whether this run may reach a real host. Default is local, which deploys
+# nowhere: LOOM_ENV unset or "local" means a deploy node has no tool and would
+# fail every attempt, so the graph should not contain one.
+fn deploy_target_allowed() -> [env] Bool {
+  match env.get("LOOM_ENV") {
+    None => false,
+    Some(v) => {
+      let e := str.trim(v)
+      if str.is_empty(e) {
+        false
+      } else {
+        not (e == "local")
+      }
+    },
+  }
+}
+
 fn claimed_pass_of(output :: Str) -> Bool {
   match gates.extract_verdict(output) {
     Some(v) => str.to_upper(str.trim(v)) == "PASS",
@@ -1039,7 +1056,7 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
           let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
           run_design(prd, request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
         },
-        Ok(_) => match metaspec.check(g) {
+        Ok(_) => match metaspec.check_for_target(g, deploy_target_allowed()) {
           Invalid(vs) => {
             let error_str := list.fold(vs, "", fn (acc :: Str, v :: metaspec.Violation) -> Str {
               str.join([acc, v.rule, ": ", v.message, "; "], "")

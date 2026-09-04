@@ -623,3 +623,47 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
   }
 }
 
+# A graph may only reach outside the machine when the operator has said it may.
+#
+# `local` is the default environment and deploys nowhere -- launch starts the
+# server on localhost and nothing leaves the box. That was declared in
+# loom.profile.toml and enforced nowhere, so the Architect went on emitting
+# deploy nodes and they failed, correctly, for having no tool: deploy_hetzner
+# needs exec=Full, which no local manifest grants.
+#
+# tzc3 is what that cost. Seven of its seventeen denials were "deploy: 'ok'
+# field is false" -- the single largest cause in the run -- while both
+# iterations that produced code passed their own tests, 9/9 and 5/5. The sprint
+# could not complete because of a node that was never permitted to work.
+#
+# A declared target should be binding, not advisory.
+fn rule_deploy_needs_a_real_target(g :: graph.SprintGraph, deploy_allowed :: Bool) -> List[Violation] {
+  if deploy_allowed {
+    []
+  } else {
+    list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+      if n.role == "deploy" {
+        list.concat(acc, [{ rule: "deploy-needs-a-real-target", message: str.concat("node ", str.concat(n.id, " deploys, but this run targets an environment that deploys nowhere (LOOM_ENV=local by default). Its tool is not permitted by any local manifest, so the node fails every attempt for lack of a tool. Drop the deploy node, or run against an environment whose profile declares a real host and sets grants.allow_real_deploy")) }])
+      } else {
+        acc
+      }
+    })
+  }
+}
+
+# check() stays pure and environment-blind; the caller supplies the one fact it
+# cannot know.
+fn check_for_target(g :: graph.SprintGraph, deploy_allowed :: Bool) -> MetaspecResult {
+  match check(g) {
+    Invalid(vs) => Invalid(vs),
+    Valid => {
+      let extra := rule_deploy_needs_a_real_target(g, deploy_allowed)
+      if list.is_empty(extra) {
+        Valid
+      } else {
+        Invalid(extra)
+      }
+    },
+  }
+}
+

@@ -1,0 +1,52 @@
+# LiteLLM proxy config for lex-loom — LOCAL models only.
+#
+# This is the config the DEFAULT provider path uses. config.yaml alongside it
+# carries the full roster (Anthropic, OpenAI, OpenCode Zen, ChatGPT), and the
+# ChatGPT routes there use an OAuth device flow that blocks proxy startup on an
+# interactive sign-in:
+#
+#     Sign in with ChatGPT using device code:
+#     1) Visit https://auth.openai.com/codex/device
+#     2) Enter code: XXXX-XXXXX
+#
+# A default has to be startable without a human at the keyboard, so the default
+# holds only routes that need no credential at all. Use config.yaml when you
+# want the hosted models and are willing to complete that sign-in.
+#
+#   Local only (default):  docker compose up -d
+#   Full roster:           LITELLM_CONFIG=./config.yaml docker compose up -d
+#
+# Requires ollama on the host: the api_base points at OLLAMA_BASE_URL, which
+# docker-compose.yml defaults to http://host.docker.internal:11434. Inside a
+# container, localhost is the container — that mismatch is why every ollama
+# route previously failed with APIConnectionError.
+
+model_list:
+
+  # Default local model for a company run:
+  #   ollama pull qwen3.8:27b-mlx
+  - model_name: qwen3.8:27b-mlx
+    litellm_params:
+      model: ollama_chat/qwen3.8:27b-mlx
+      api_base: os.environ/OLLAMA_BASE_URL
+
+  - model_name: muse-glimmer:30b-mlx
+    litellm_params:
+      model: ollama_chat/muse-glimmer:30b-mlx
+      api_base: os.environ/OLLAMA_BASE_URL
+
+  - model_name: gemma4:latest
+    litellm_params:
+      model: ollama_chat/gemma4:latest
+      api_base: os.environ/OLLAMA_BASE_URL
+
+litellm_settings:
+  drop_params: true
+  # Kept identical to config.yaml: 120s is far too short for a build node, and
+  # lex-llm's own client allows 600s, which this must not undercut.
+  request_timeout: 600
+  # A usage-quota 429 is not transient, so retries only burn the same quota.
+  num_retries: 0
+
+general_settings:
+  forward_client_headers_to_llm_api: true

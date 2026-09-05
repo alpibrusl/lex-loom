@@ -37,20 +37,28 @@ fn test_override_can_also_force_opencode() -> Result[Unit, Str] {
   case("LOOM_PROVIDER=opencode with no key", "opencode", "", "opencode")
 }
 
+fn test_override_can_name_litellm_explicitly() -> Result[Unit, Str] {
+  case("LOOM_PROVIDER=litellm with an opencode key present", "litellm", "sk-a-key-that-is-present", "litellm")
+}
+
 # An addition, not a replacement: with no override the old behaviour must be
 # untouched in BOTH directions, since every existing run depends on it.
-fn test_no_override_keeps_the_key_behaviour() -> Result[Unit, Str] {
-  match case("no override, key set", "", "sk-a-key-that-is-present", "opencode") {
-    Err(e) => Err(e),
-    Ok(_) => case("no override, no key", "", "", "ollama"),
-  }
+# The DEFAULT is LiteLLM in front of ollama. It used to be ollama-direct, which
+# meant a run with nothing configured quietly executed against whatever local
+# model happened to be installed instead of saying it was unconfigured.
+fn test_the_default_is_litellm() -> Result[Unit, Str] {
+  case("nothing configured", "", "", "litellm")
+}
+
+fn test_an_opencode_key_alone_still_selects_opencode() -> Result[Unit, Str] {
+  case("no override, key set", "", "sk-a-key-that-is-present", "opencode")
 }
 
 # A whitespace-only or empty key is not a key. run-company.sh writes the file
 # contents through verbatim, so a blank credentials file must not silently
 # select a provider that will then fail on every call.
 fn test_a_blank_key_is_not_a_key() -> Result[Unit, Str] {
-  case("no override, whitespace key", "", "   ", "ollama")
+  case("no override, whitespace key", "", "   ", "litellm")
 }
 
 # An unrecognised value must defer to the keys rather than silently meaning
@@ -59,7 +67,7 @@ fn test_a_blank_key_is_not_a_key() -> Result[Unit, Str] {
 fn test_an_unknown_value_defers_to_the_keys() -> Result[Unit, Str] {
   match case("unknown override, key set", "not-a-provider", "sk-a-key-that-is-present", "opencode") {
     Err(e) => Err(e),
-    Ok(_) => case("unknown override, no key", "not-a-provider", "", "ollama"),
+    Ok(_) => case("unknown override, no key", "not-a-provider", "", "litellm"),
   }
 }
 
@@ -73,7 +81,7 @@ fn test_the_value_is_forgiving_about_case_and_spacing() -> Result[Unit, Str] {
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [test_override_beats_a_present_key(), test_override_can_also_force_opencode(), test_no_override_keeps_the_key_behaviour(), test_a_blank_key_is_not_a_key(), test_an_unknown_value_defers_to_the_keys(), test_the_value_is_forgiving_about_case_and_spacing()]
+  [test_override_beats_a_present_key(), test_override_can_also_force_opencode(), test_override_can_name_litellm_explicitly(), test_the_default_is_litellm(), test_an_opencode_key_alone_still_selects_opencode(), test_a_blank_key_is_not_a_key(), test_an_unknown_value_defers_to_the_keys(), test_the_value_is_forgiving_about_case_and_spacing()]
 }
 
 fn run_all() -> Unit {

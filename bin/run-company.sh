@@ -44,7 +44,13 @@ cd "$(dirname "$0")/.."
 # Fall back to the credentials file if the key isn't already in the environment —
 # a missing key here causes every LLM call to silently return an empty answer
 # (no error), which is easy to mistake for a provider outage.
-if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
+# Only when the operator has actually asked for opencode. Loading the key
+# unconditionally meant merely HAVING ~/.credentials/opencode/key on disk
+# silently overrode the default provider: a run the operator believed was
+# going through LiteLLM to a local model went to opencode instead, and when
+# the model id did not match it returned an auth error on every call — which
+# the company then reported as an "unparseable strategist reply".
+if [ "${LOOM_PROVIDER:-}" = "opencode" ] && [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
   OPENCODE_API_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
   export OPENCODE_API_KEY
 fi

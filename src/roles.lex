@@ -719,6 +719,19 @@ fn make_vertex_provider() -> [env] prov.Provider {
 # LiteLLM is selected when LITELLM_BASE_URL is set (default: http://localhost:4000).
 # Vertex AI is selected when VERTEX_ACCESS_TOKEN and VERTEX_PROJECT are both set.
 fn make_provider() -> [env] prov.Provider {
+  let override := match env.get("LOOM_PROVIDER") {
+    Some(v) => str.to_lower(str.trim(v)),
+    None => "",
+  }
+  match override {
+    "ollama" => make_ollama_provider(),
+    "opencode" => providers.opencode_go(),
+    "litellm" => providers.litellm(),
+    _ => make_provider_by_env(),
+  }
+}
+
+fn make_provider_by_env() -> [env] prov.Provider {
   match env.get("MLX_URL") {
     Some(u) => if str.is_empty(u) {
       make_provider_no_mlx()
@@ -837,26 +850,32 @@ fn choose_provider(override :: Str, opencode_key :: Str) -> Str {
   match str.to_lower(str.trim(override)) {
     "ollama" => "ollama",
     "opencode" => "opencode",
+    "litellm" => "litellm",
     _ => if key_is_set(opencode_key) {
       "opencode"
     } else {
-      "ollama"
+      "litellm"
     },
   }
 }
 
+# The DEFAULT is LiteLLM in front of ollama, and an unconfigured default is a
+# failure rather than a silent substitution. Falling back used to mean a run
+# quietly executed against a different model than the operator believed, which
+# is the same class of problem as a gate reporting a cause that is not true.
+#
+# An explicit LOOM_PROVIDER still wins -- including over LITELLM_BASE_URL,
+# which the previous placement of this check did not, because it sat at the end
+# of the provider chain rather than the front.
 fn make_provider_no_mistral() -> [env] prov.Provider {
-  let override := match env.get("LOOM_PROVIDER") {
-    Some(v) => v,
-    None => "",
-  }
   let key := match env.get("OPENCODE_API_KEY") {
     Some(v) => v,
     None => "",
   }
-  match choose_provider(override, key) {
+  match choose_provider("", key) {
     "opencode" => providers.opencode_go(),
-    _ => make_ollama_provider(),
+    "ollama" => make_ollama_provider(),
+    _ => providers.litellm(),
   }
 }
 

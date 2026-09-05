@@ -770,8 +770,13 @@ fn make_mistral_provider() -> [env] prov.Provider {
   providers.mistral()
 }
 
+# Trimmed, because a credentials file holding only a newline is not a key.
+# run-company.sh pipes ~/.credentials/opencode/key through verbatim, so an
+# empty-but-not-zero-length file selected a provider that then returned an
+# auth error on every single call -- and the company reported that as an
+# "unparseable strategist reply" rather than as a missing credential.
 fn key_is_set(k :: Str) -> Bool {
-  str.len(k) > 0
+  str.len(str.trim(k)) > 0
 }
 
 fn make_provider_no_vertex() -> [env] prov.Provider {
@@ -818,14 +823,40 @@ fn make_provider_no_google() -> [env] prov.Provider {
   }
 }
 
-fn make_provider_no_mistral() -> [env] prov.Provider {
-  match env.get("OPENCODE_API_KEY") {
-    Some(k) => if key_is_set(k) {
-      providers.opencode_go()
+# LOOM_PROVIDER names the provider outright. Without it, merely HAVING an
+# opencode key on disk made a local ollama run impossible: run-company.sh
+# loads ~/.credentials/opencode/key into OPENCODE_API_KEY whenever it is
+# unset, and this function then prefers opencode whenever that variable is
+# non-empty. There was no way to say "use the local model" short of moving
+# the operator's credential file.
+# The decision, separated from the effects so it can be tested without a
+# network call or a mutable environment: std.env is read-only, so a test that
+# went through make_provider could only observe whatever the machine happens
+# to have configured.
+fn choose_provider(override :: Str, opencode_key :: Str) -> Str {
+  match str.to_lower(str.trim(override)) {
+    "ollama" => "ollama",
+    "opencode" => "opencode",
+    _ => if key_is_set(opencode_key) {
+      "opencode"
     } else {
-      make_ollama_provider()
+      "ollama"
     },
-    None => make_ollama_provider(),
+  }
+}
+
+fn make_provider_no_mistral() -> [env] prov.Provider {
+  let override := match env.get("LOOM_PROVIDER") {
+    Some(v) => v,
+    None => "",
+  }
+  let key := match env.get("OPENCODE_API_KEY") {
+    Some(v) => v,
+    None => "",
+  }
+  match choose_provider(override, key) {
+    "opencode" => providers.opencode_go(),
+    _ => make_ollama_provider(),
   }
 }
 

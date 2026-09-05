@@ -179,8 +179,46 @@ fn test_a_foreign_process_on_the_port_is_not_killed() -> [env, net, io, proc, fs
   }
 }
 
+# Loom must be able to reclaim a port IT started. #316 recorded the pid of the
+# `nohup bash -c` wrapper, but the process holding the port is that wrapper's
+# CHILD, so loom saw its own server as a stranger and refused to restart on the
+# same port. Every existing test missed it because each one kills its port
+# explicitly between cases; the probe that caught it did not, and four of five
+# launch attempts failed with "held by another process that loom did not start"
+# -- naming loom's own python.
+# Loom must be able to reclaim a port IT started. #316 recorded the pid of the
+# `nohup bash -c` wrapper, but the process holding the port is that wrapper's
+# CHILD, so loom saw its own server as a stranger and refused to restart on the
+# same port. Every existing test missed it because each one kills its port
+# explicitly between cases; the probe that caught it did not, and four of five
+# launch attempts failed with "held by another process that loom did not
+# start" -- naming loom's own python.
+#
+# So the two calls below deliberately share a port with no cleanup between
+# them, which is exactly the state a retrying launch node is in.
+fn test_loom_can_restart_on_a_port_it_started() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-restart")
+  let first := match tool.execute(JObj([("cmd", JStr(serve_cmd(8796))), ("port", JInt(8796)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false))]),
+    Ok(r) => r,
+  }
+  let second := match tool.execute(JObj([("cmd", JStr(serve_cmd(8796))), ("port", JInt(8796)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
+    Ok(r) => r,
+  }
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  match get_bool(first, "ok") {
+    Some(true) => match get_bool(second, "ok") {
+      Some(true) => Ok(()),
+      _ => Err(str.concat("loom refused to reuse a port its own previous call had started: ", get_str(second, "error"))),
+    },
+    _ => Err("the first launch did not come up, so this proves nothing about reclaiming its port"),
+  }
+}
+
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {
@@ -196,15 +234,5 @@ fn run_all() -> [env, net, io, proc, fs_write] Unit {
     let __force_fail := 1 / 0
     ()
   }
-}
-
-fn report() -> [env, net, io, proc, fs_write] Unit {
-  let __ := list.map(suite(), fn (r :: Result[Unit, Str]) -> [io] Unit {
-    match r {
-      Ok(_) => io.print("ok\n"),
-      Err(e) => io.print(str.concat("FAIL: ", str.concat(e, "\n"))),
-    }
-  })
-  ()
 }
 

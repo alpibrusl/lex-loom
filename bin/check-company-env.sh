@@ -69,6 +69,15 @@ case "$CPATH" in
 esac
 
 # --- the model endpoint, the one that costs hours to discover ---------------
+# Mirror run-company.sh exactly: it falls back to the credentials file when
+# the key is not already exported. Checking anything else checks a provider
+# the run will not use.
+OC_FILE_KEY=""
+OC_FROM_FILE=""
+if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
+  OC_FILE_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
+  OC_FROM_FILE=1
+fi
 BASE="${LITELLM_BASE_URL:-}"
 if [ -n "$BASE" ]; then
   if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" >/dev/null 2>&1; then
@@ -80,12 +89,43 @@ if [ -n "$BASE" ]; then
   else
     bad "LITELLM_BASE_URL is set to $BASE but nothing answers there"
   fi
-elif [ -n "${OPENCODE_API_KEY:-}" ]; then
-  ok "OPENCODE_API_KEY is set (no local proxy configured)"
+elif [ -n "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" ]; then
+  # run-company.sh loads the key from ~/.credentials/opencode/key when it is
+  # not already exported, so a preflight that only reads the environment
+  # checks a DIFFERENT provider than the run will use. That is not academic:
+  # it reported "ollama serves qwen3.8" and the run then sent that ollama
+  # model id to OpenCode and got HTTP 401 on every single call, which the
+  # company reported as an "unparseable strategist reply".
+  OCK="${OPENCODE_API_KEY:-${OC_FILE_KEY:-}}"
+  OCB="${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1}"
+  OC_MODELS=$(curl -s -m 10 -H "Authorization: Bearer $OCK" "$OCB/models" 2>/dev/null || true)
+  # Only what /models can actually prove. It needs no auth, so it cannot
+  # validate the key -- and lex-llm's opencode-go provider uses a different
+  # call shape than a plain curl, so a hand-rolled auth probe here reports
+  # 401 for a key that works. Claiming "the key is good" on that basis would
+  # be the same lie this preflight exists to prevent.
+  if [ -z "$OC_MODELS" ]; then
+    bad "opencode at $OCB did not answer — the run cannot reach its provider"
+  elif printf '%s' "$OC_MODELS" | grep -q "\"$CMODEL\""; then
+    ok "opencode serves '$CMODEL'${OC_FROM_FILE:+ (key from ~/.credentials/opencode/key)}; the key itself is not exercised here"
+  else
+    bad "opencode does not serve '$CMODEL' — every call fails on the model id (this is what sent an ollama model id to opencode and produced HTTP 401 on every node)"
+  fi
 elif [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
   ok "a provider API key is set"
+elif curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" >/dev/null 2>&1; then
+  # The native Ollama adapter is used automatically when no proxy or cloud key
+  # is set (README "Providers"), so a reachable Ollama IS a model endpoint.
+  # This check used to fail that configuration outright -- and it is the one
+  # every local run actually uses, which made the preflight refuse a working
+  # setup while claiming each failure "costs a full run to discover".
+  if curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" 2>/dev/null | grep -q "\"$CMODEL\""; then
+    ok "ollama serves '$CMODEL' (native adapter, no proxy needed)"
+  else
+    bad "ollama is up but does not have '$CMODEL' — pull it first, or the run fails on its first node"
+  fi
 else
-  bad "no model endpoint: set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
+  bad "no model endpoint: start ollama, or set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
 fi
 
 # --- the operator profile: which providers this machine can reach -----------

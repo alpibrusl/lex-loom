@@ -84,6 +84,13 @@ fi
 case "$(printf '%s' "${LOOM_PROVIDER:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
   ollama)   OC_FILE_KEY=""; OC_FROM_FILE=""; OPENCODE_API_KEY=""; LITELLM_BASE_URL="" ;;
   opencode) LITELLM_BASE_URL=""; : "${OPENCODE_API_KEY:=${OC_FILE_KEY:-}}" ;;
+  litellm)  OC_FILE_KEY=""; OC_FROM_FILE=""; OPENCODE_API_KEY=""; : "${LITELLM_BASE_URL:=http://localhost:4000}" ;;
+  "")
+    # The DEFAULT is LiteLLM in front of ollama. run-company.sh no longer loads
+    # the opencode key unless asked for it, so with nothing configured this is
+    # the path a run takes, and it must be CHECKED rather than assumed.
+    OC_FILE_KEY=""; OC_FROM_FILE=""
+    : "${LITELLM_BASE_URL:=http://localhost:4000}" ;;
 esac
 
 BASE="${LITELLM_BASE_URL:-}"
@@ -95,7 +102,7 @@ if [ -n "$BASE" ]; then
       bad "proxy at $BASE is up but does not list '$CMODEL' — the run will fail on its first node"
     fi
   else
-    bad "LITELLM_BASE_URL is set to $BASE but nothing answers there"
+    bad "no LiteLLM at $BASE — this is the default provider and there is no silent fallback. Start it with:  (cd litellm && docker compose up -d)   …or pick another with LOOM_PROVIDER=ollama|opencode"
   fi
 elif [ -n "$(printf '%s' "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" | tr -d ' \n')" ]; then
   # run-company.sh loads the key from ~/.credentials/opencode/key when it is

@@ -374,6 +374,26 @@ fn is_provider_error(output :: Str) -> Bool {
   str.starts_with(str.trim(output), "[provider error")
 }
 
+# "[max_steps reached]" is lex-llm reporting that the agent ran out of step
+# budget, not an answer. It reached the gates as ordinary content, so a node
+# that produced nothing but exhausted itself could satisfy `spec non-empty` --
+# a gate passing on the literal text that says the work did not happen.
+#
+# It belongs with the provider-error case rather than the empty-output one: a
+# retry is right, and so is a reason that names the real cause. What it must
+# not be is content.
+fn is_step_budget_exhausted(output :: Str) -> Bool {
+  str.contains(str.trim(output), "[max_steps reached]")
+}
+
+fn is_infra_outcome(output :: Str) -> Bool {
+  if is_provider_error(output) {
+    true
+  } else {
+    is_step_budget_exhausted(output)
+  }
+}
+
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   match blocking_precheck(n, cfg) {
     Some(outcome) => outcome,
@@ -435,19 +455,27 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
           ()
         }
         let output := runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
-        let infra := is_provider_error(output)
+        let infra := is_infra_outcome(output)
         if str.is_empty(output) or infra {
           if attempt > max_node_retries() {
-            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: if infra {
-              str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200))
+            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: if is_step_budget_exhausted(output) {
+              str.concat("the agent ran out of step budget before answering, not a content problem: ", str.slice(str.trim(output), 0, 200))
             } else {
-              "empty output after retries (model cold-start?)"
+              if infra {
+                str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200))
+              } else {
+                "empty output after retries (model cold-start?)"
+              }
             } }
           } else {
-            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", if infra {
-              "provider error"
+            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", if is_step_budget_exhausted(output) {
+              "step budget exhausted"
             } else {
-              "empty output"
+              if infra {
+                "provider error"
+              } else {
+                "empty output"
+              }
             }, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
             invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial, parent)
           }

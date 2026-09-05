@@ -121,8 +121,66 @@ fn test_a_command_that_starts_nothing_is_refused() -> [env, net, io, proc, fs_wr
   }
 }
 
+# A port held by something loom did not start must be LEFT ALONE. run_server
+# used to `lsof -ti tcp:PORT | xargs kill -9` unconditionally, so a launch node
+# on the Lex convention port (8080) would have killed whatever else was there.
+# On the machine this was found on, that was Colima's ssh port-forward -- the
+# user's Docker VM. Refusing to attest to a stranger's server while still
+# killing it was the inconsistency.
+# A port held by something loom did not start must be LEFT ALONE. run_server
+# used to `lsof -ti tcp:PORT | xargs kill -9` unconditionally, so a launch node
+# on the Lex convention port (8080) would kill whatever else was there -- on the
+# machine this was found on, Colima's ssh port-forward, i.e. the developer's
+# Docker VM. Refusing to ATTEST to a stranger's server while still KILLING it
+# was the inconsistency.
+#
+# The server here is started through run_server rather than backgrounded by
+# hand: a plain `nohup ... &` inside proc.run never releases the captured stdout
+# pipe and hangs the test instead of failing it -- the very hazard run_server's
+# own detach-to-a-logfile exists to avoid. Wiping the registry afterwards puts
+# loom in the position of facing a listener it has no record of starting, which
+# is what a developer's own process looks like from the inside.
+#
+# The assertion that matters is the SURVIVAL, not the wording: a test that only
+# checked the message would pass while the process was still being killed. And
+# if the setup server never came up there is nothing to protect, so the test
+# reports that rather than claiming a pass it has not earned.
+fn test_a_foreign_process_on_the_port_is_not_killed() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-a")
+  let started := match tool.execute(JObj([("cmd", JStr("cd /tmp && python3 -m http.server 8795")), ("port", JInt(8795)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false))]),
+    Ok(r) => r,
+  }
+  let __forget := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids"])
+  let out := match tool.execute(JObj([("cmd", JStr("cd /tmp && python3 -m http.server 8795")), ("port", JInt(8795)), ("endpoint", JStr("/")), ("timeout_s", JInt(5))])) {
+    Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
+    Ok(r) => r,
+  }
+  let survived := match proc.run("bash", ["-c", "lsof -ti tcp:8795 >/dev/null 2>&1 && echo ALIVE || echo GONE"]) {
+    Err(_) => "GONE",
+    Ok(r) => str.trim(r.stdout),
+  }
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  match get_bool(started, "ok") {
+    Some(true) => if survived == "ALIVE" {
+      match get_bool(out, "ok") {
+        Some(false) => if str.contains(get_str(out, "error"), "loom did not start") {
+          Ok(())
+        } else {
+          Err(str.concat("the server survived, but the error does not explain why: ", get_str(out, "error")))
+        },
+        _ => Err("a port held by a process loom has no record of was reported as a successful launch"),
+      }
+    } else {
+      Err("run_server killed a process it has no record of starting -- on a developer machine that is whatever else happens to hold the port")
+    },
+    _ => Err("the test could not start a server to protect, so it proved nothing about run_server either way"),
+  }
+}
+
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

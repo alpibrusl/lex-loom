@@ -78,6 +78,14 @@ if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; t
   OC_FILE_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
   OC_FROM_FILE=1
 fi
+# LOOM_PROVIDER (roles.lex choose_provider) names the provider outright and
+# beats every key. A preflight that ignores it describes a provider the run
+# will not use -- the same defect as ignoring the credentials file did.
+case "$(printf '%s' "${LOOM_PROVIDER:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
+  ollama)   OC_FILE_KEY=""; OC_FROM_FILE=""; OPENCODE_API_KEY=""; LITELLM_BASE_URL="" ;;
+  opencode) LITELLM_BASE_URL=""; : "${OPENCODE_API_KEY:=${OC_FILE_KEY:-}}" ;;
+esac
+
 BASE="${LITELLM_BASE_URL:-}"
 if [ -n "$BASE" ]; then
   if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" >/dev/null 2>&1; then
@@ -89,7 +97,7 @@ if [ -n "$BASE" ]; then
   else
     bad "LITELLM_BASE_URL is set to $BASE but nothing answers there"
   fi
-elif [ -n "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" ]; then
+elif [ -n "$(printf '%s' "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" | tr -d ' \n')" ]; then
   # run-company.sh loads the key from ~/.credentials/opencode/key when it is
   # not already exported, so a preflight that only reads the environment
   # checks a DIFFERENT provider than the run will use. That is not academic:

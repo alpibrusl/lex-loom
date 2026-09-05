@@ -35,7 +35,7 @@ fn get_str(j :: jv.Json, key :: Str) -> Str {
 # tool must refuse cleanly and say exactly why, rather than attempt a deploy
 # against nothing or silently claim success.
 fn test_no_host_set_returns_clean_error() -> [env, net, io, proc] Result[Unit, Str] {
-  let tool := roles.make_deploy_hetzner_tool("/tmp/loom-deploy-evidence-test.json")
+  let tool := roles.make_deploy_hetzner_tool("/tmp/loom-deploy-evidence-test.json", "sprint-test")
   match tool.execute(JObj([("work_dir", JStr("/tmp/loom-py-work")), ("service_name", JStr("myapp")), ("port", JInt(8080))])) {
     Err(_) => Err("expected an Ok(JObj) result, not a tool-level Err"),
     Ok(result) => match get_bool(result, "ok") {
@@ -53,7 +53,7 @@ fn test_no_host_set_returns_clean_error() -> [env, net, io, proc] Result[Unit, S
 # rsync/ssh is attempted (this check runs before the host check would even
 # matter in a misconfigured call).
 fn test_missing_work_dir_returns_clean_error() -> [env, net, io, proc] Result[Unit, Str] {
-  let tool := roles.make_deploy_hetzner_tool("/tmp/loom-deploy-evidence-test.json")
+  let tool := roles.make_deploy_hetzner_tool("/tmp/loom-deploy-evidence-test.json", "sprint-test")
   match tool.execute(JObj([("work_dir", JStr("")), ("service_name", JStr("myapp")), ("port", JInt(8080))])) {
     Err(_) => Err("expected an Ok(JObj) result, not a tool-level Err"),
     Ok(result) => match get_bool(result, "ok") {

@@ -187,7 +187,24 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
 # exactly [net, io, proc] (no [env]). Reading once and closing over the
 # values is also more honest: the deploy target can't drift mid-sprint if
 # something re-exports the env var between tool calls.
-fn make_deploy_hetzner_tool(evidence_path :: Str) -> [env] t.Tool {
+# A sprint-specific path must never be baked into a system prompt: prompts are
+# persisted in agent_pool and replayed in LATER sprints, where that path is
+# wrong (#312). So the agent names a language and the tool, which knows its own
+# sprint, resolves it here. An explicit path is passed through unchanged, so
+# naming a real directory still works.
+fn resolve_work_dir(arg :: Str, sprint_id :: Str) -> Str {
+  match str.to_lower(str.trim(arg)) {
+    "lex" => lexskill.work_dir(sprint_id),
+    "python" => lexskill.py_work_dir(sprint_id),
+    "py" => lexskill.py_work_dir(sprint_id),
+    "node" => lexskill.ts_work_dir(sprint_id),
+    "ts" => lexskill.ts_work_dir(sprint_id),
+    "typescript" => lexskill.ts_work_dir(sprint_id),
+    _ => arg,
+  }
+}
+
+fn make_deploy_hetzner_tool(evidence_path :: Str, sprint_id :: Str) -> [env] t.Tool {
   let host := match env.get("HETZNER_HOST") {
     Some(v) => v,
     None => "",
@@ -210,10 +227,11 @@ fn make_deploy_hetzner_tool(evidence_path :: Str) -> [env] t.Tool {
   }
   let params := { title: "DeployHetzner", description: "rsync + build + run the project on a real Hetzner server, then health-check it", fields: [s.required_str("work_dir", []), s.required_str("service_name", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
   t.define("deploy_hetzner", "Deploy `work_dir` (an already-built project directory with a Dockerfile) to the Hetzner server named by HETZNER_HOST. Builds and runs the container for real, waits for it to respond, then fetches `endpoint`. When DEPLOY_DOMAIN is set the deploy runs docker compose behind Caddy with automatic HTTPS and the health check hits https://<domain><endpoint>. Returns {ok, url, response, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
-    let work_dir := match jv.get_field(args, "work_dir") {
+    let work_dir_arg := match jv.get_field(args, "work_dir") {
       Some(JStr(v)) => v,
       _ => "",
     }
+    let work_dir := resolve_work_dir(work_dir_arg, sprint_id)
     let service_name := match jv.get_field(args, "service_name") {
       Some(JStr(v)) => v,
       _ => "loom-app",
@@ -804,7 +822,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                   Some(make_run_server_tool(evidence_path, sprint_id))
                 } else {
                   if name == "deploy_hetzner" {
-                    Some(make_deploy_hetzner_tool(evidence_path))
+                    Some(make_deploy_hetzner_tool(evidence_path, sprint_id))
                   } else {
                     if name == "security_scan" {
                       Some(lexskill.make_security_scan_tool(sprint_id))
@@ -1157,10 +1175,7 @@ fn security_agent(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
 # py_work_dir) so the Launch agent's cd targets the exact directory Build
 # actually wrote to for THIS sprint, never a global shared path (#156).
 fn launch_system_prompt(sprint_id :: Str) -> Str {
-  let lex_dir := lexskill.work_dir(sprint_id)
-  let py_dir := lexskill.py_work_dir(sprint_id)
-  let ts_dir := lexskill.ts_work_dir(sprint_id)
-  str.join(["You are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081, Node/TS gets PORT=8082 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd and port ONCE (the tool frees the port automatically before starting — do NOT add fuser/kill yourself):\n   - For Lex servers in ", lex_dir, ": cmd=\"cd ", lex_dir, " && PORT=<port> lex run --allow-effects env,io,time,net,sql,fs_read,fs_write,proc,concurrent <filename> <fn_name>\", port=<port>, timeout_s=45\n   - For Python servers in ", py_dir, ": cmd=\"cd ", py_dir, " && PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n   - For Node/TS servers in ", ts_dir, ": cmd=\"cd ", ts_dir, " && PORT=<port> node --experimental-strip-types <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."], "")
+  str.join(["You are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081, Node/TS gets PORT=8082 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd and port ONCE. The tool already runs your command INSIDE the sprint work directory that holds the built files, and frees the port before starting — so give a bare command: no `cd`, no absolute paths, no fuser/kill. Name the file by its plain filename:\n   - For Lex server: cmd=\"PORT=<port> lex run --allow-effects env,io,time,net,sql,fs_read,fs_write,proc,concurrent <filename> <fn_name>\", port=<port>, timeout_s=45\n   - For Python server: cmd=\"PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n   - For Node/TS server: cmd=\"PORT=<port> node --experimental-strip-types <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."], "")
 }
 
 # evidence_path was hardcoded to "" here, so run_server's record_launch_evidence
@@ -1181,10 +1196,7 @@ fn launch(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.
 # work_dir argument to deploy_hetzner names the exact directory Build
 # actually wrote to for THIS sprint, never a global shared path (#156).
 fn deploy_system_prompt(sprint_id :: Str) -> Str {
-  let lex_dir := lexskill.work_dir(sprint_id)
-  let py_dir := lexskill.py_work_dir(sprint_id)
-  let ts_dir := lexskill.ts_work_dir(sprint_id)
-  str.join(["You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which work dir the build wrote to (Lex: ", lex_dir, ", Python: ", py_dir, ", Node/TS: ", ts_dir, "), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."], "")
+  str.join(["You are the Deploy agent for a software sprint. Your job is to actually deploy the built project to the real Hetzner server this company already has provisioned, and confirm it responds there — never a local/test deploy, never a claim you invent.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) which language the build wrote in, giving work_dir exactly one of \"lex\", \"python\" or \"node\" (the tool resolves it to the real directory), (b) the port the Dockerfile EXPOSEs, (c) at least one HTTP endpoint to health-check (prefer /health if the build has one).\n2. Pick a short service_name (lowercase, hyphens only) from the sprint's product name.\n3. Call deploy_hetzner with work_dir, service_name, port, and endpoint ONCE. It rsyncs the work dir to the server, builds and runs the container for real, and health-checks the real public host:port. Do NOT call it again for any reason.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://<host>:<port>\",\"response\":\"<first 300 chars of the live response>\"}\n\nIf the tool reports HETZNER_HOST is not set, or the deploy/health-check failed, output — do NOT retry, just report it:\n{\"ok\":false,\"error\":\"<what deploy_hetzner actually returned>\"}\n\nFORBIDDEN: Do not invent a URL or response. Only report what deploy_hetzner actually returned. Never call it more than once."], "")
 }
 
 fn deploy(model :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] runner.AgentDef {

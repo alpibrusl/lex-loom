@@ -75,6 +75,19 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
   }
 }
 
+# run_server attests that a server is live, so it must attest only to a server
+# it actually STARTED, serving the endpoint it was asked about. Two holes let
+# it do neither (#312): `ok` was "did anything answer", which made a 404 on the
+# endpoint under test read as live evidence that the product works; and nothing
+# checked the process we spawned was the one replying, so a leftover server
+# holding the port was accepted as ours. A launch node was accepted on exactly
+# that basis, in a work dir containing no server at all.
+#
+# Hence three distinct failures rather than one message: never came up, came up
+# but never served the endpoint, and someone else owns the port. They have
+# different fixes, and a gate that reports the wrong cause steers the repair
+# loop wrong -- which is how the four preceding launch fixes each verified fine
+# and changed nothing.
 fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
   t.define("run_server", "Start `cmd` as a background server on `port`, wait up to `timeout_s` seconds for it to respond, then fetch `endpoint` and return {ok, url, response, pid, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
@@ -105,7 +118,7 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       } else {
         str.join(["for D in ", lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then cd \"$D\"; break; fi\n", "done\n"], "")
       }
-      let script := str.join(["lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n", "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n", "sleep 1\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"PID:$PID\"\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
+      let script := str.join(["lsof -ti tcp:", port_str, " 2>/dev/null | xargs kill -9 2>/dev/null || true\n", "(command -v fuser >/dev/null && fuser -k ", port_str, "/tcp 2>/dev/null) || true\n", "sleep 1\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"PID:$PID\"\n", "OK=0\n", "LAST=\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {
@@ -138,10 +151,25 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
               None => "",
               Some(v) => str.trim(v),
             }
-            let why := if str.is_empty(log_part) {
-              str.join(["server did not respond within ", int.to_str(timeout_s), "s, and wrote nothing to its log — check that the command actually starts a server"], "")
+            let last_part := match list.head(list.tail(str.split(combined, "LASTRESPONSE:"))) {
+              None => "",
+              Some(v) => str.trim(match list.head(str.split(v, "SERVERLOG:")) {
+                None => v,
+                Some(h) => h,
+              }),
+            }
+            let why := if str.contains(combined, "FOREIGN") {
+              str.join(["a server answered on port ", port_str, ", but it is NOT the one this command started — that process had already exited. Something else is holding the port. It replied: ", str.slice(str.trim(resp_part), 0, 300)], "")
             } else {
-              str.join(["server did not respond within ", int.to_str(timeout_s), "s on port ", port_str, ". The server itself said:\n", str.slice(log_part, 0, 800)], "")
+              if str.is_empty(last_part) {
+                if str.is_empty(log_part) {
+                  str.join(["server did not respond within ", int.to_str(timeout_s), "s, and wrote nothing to its log — check that the command actually starts a server"], "")
+                } else {
+                  str.join(["server did not respond within ", int.to_str(timeout_s), "s on port ", port_str, ". The server itself said:\n", str.slice(log_part, 0, 800)], "")
+                }
+              } else {
+                str.join(["the server came up on port ", port_str, " but never served ", endpoint, " successfully within ", int.to_str(timeout_s), "s — its last reply was: ", str.slice(last_part, 0, 200), "\nThe server itself said:\n", str.slice(log_part, 0, 500)], "")
+              }
             }
             Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(pid_part)), ("error", JStr(why))]))
           }

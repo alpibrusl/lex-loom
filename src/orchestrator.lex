@@ -1016,12 +1016,25 @@ fn max_design_retries() -> Int {
 }
 
 # design_prompt: the Architect reads the PM's PRD (prd) plus the original request for context.
-fn design_prompt(prd :: Str, request :: Str) -> Str {
-  str.join(["PM PRD:\n", prd, "\n\nOriginal request (for context):\n", request, "\n\nOutput ONLY the JSON sprint graph — no prose, no markdown fences."], "")
+# The environment's real capabilities belong in the architect's per-sprint
+# INPUT, not in its system prompt: system prompts are persisted in agent_pool
+# and replayed in later sprints (#312), where a fact like "deploy is
+# unavailable" would be wrong the moment the operator arms an environment.
+#
+# Without this the architect proposed a deploy node in a local run three
+# times running, and metaspec rejected the whole graph three times -- the
+# constraint was only ever communicated as a rejection, after the fact.
+fn design_prompt(prd :: Str, request :: Str, deploy_allowed :: Bool) -> Str {
+  let env_note := if deploy_allowed {
+    ""
+  } else {
+    "\n\nENVIRONMENT: this run targets a local environment that deploys nowhere. Do NOT include a deploy node — its tool is not permitted by any local manifest, so such a node fails every attempt and the whole graph is rejected. End the pipeline at launch.\n"
+  }
+  str.join(["PM PRD:\n", prd, env_note, "\n\nOriginal request (for context):\n", request, "\n\nOutput ONLY the JSON sprint graph — no prose, no markdown fences."], "")
 }
 
-fn design_retry_prompt(prd :: Str, request :: Str, errors :: Str) -> Str {
-  str.join([design_prompt(prd, request), "\n\nYour previous graph was rejected with these errors:\n", errors, "\nFix all errors and output only the corrected JSON."], "")
+fn design_retry_prompt(prd :: Str, request :: Str, errors :: Str, deploy_allowed :: Bool) -> Str {
+  str.join([design_prompt(prd, request, deploy_allowed), "\n\nYour previous graph was rejected with these errors:\n", errors, "\nFix all errors and output only the corrected JSON."], "")
 }
 
 type DesignResult = DesignOk(graph.SprintGraph) | DesignFailed(Str)
@@ -1031,9 +1044,9 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
     DesignFailed(str.join(["Architect failed after ", int.to_str(max_design_retries()), " attempts. Last errors: ", errors], ""))
   } else {
     let prompt := if str.is_empty(errors) {
-      design_prompt(prd, request)
+      design_prompt(prd, request, deploy_target_allowed())
     } else {
-      design_retry_prompt(prd, request, errors)
+      design_retry_prompt(prd, request, errors, deploy_target_allowed())
     }
     let agent_cfg := roles.architect_agent(cfg.model)
     let direct := runner.step(cfg.db, agent_cfg, prompt, cfg.id, cfg.policy_isolation)

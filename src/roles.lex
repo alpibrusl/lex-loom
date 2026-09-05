@@ -619,7 +619,17 @@ fn annotate_missing_dependency(combined :: Str) -> Str {
 # validators.py and test_convert.py from a tzconvert company run sitting
 # untracked in the lex-loom working tree. Giving each run a fresh directory
 # keeps that spill contained and disposable. (Python)
-fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
+# QA must verify the files the build actually wrote. run_code used to execute
+# every snippet in a fresh mktemp dir with no access to them, so the QA prompt
+# told the agent to "extract every Python file from the Build output" and it
+# dutifully RE-TYPED the implementation from prose into a directory of its own
+# invention (/tmp/qa_sprint, in company tzc6) and tested that copy. Its PASS
+# therefore said nothing about the artifact that gets launched.
+#
+# The snippet still lives outside the work dir -- writing it inside would add a
+# file the test-author's own gate then counts as sprawl -- but it RUNS there,
+# with PYTHONPATH set, so `import app` and open("app.py") reach the real build.
+fn make_run_code_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let params := { title: "RunCode", description: "Execute Python code and assertions, return {passed, exit_code, output}", fields: [s.required_str("code", []), s.required_str("assertions", [])] }
   t.define("run_code", "Write `code` + `assertions` to a temp .py file, run it with python3, return {passed, exit_code, output}. ALWAYS call this before emitting your JSON verdict — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let code := match jv.get_field(args, "code") {
@@ -637,7 +647,9 @@ fn make_run_code_tool(evidence_path :: Str) -> t.Tool {
         let dir := str.trim(mk.stdout)
         let path := str.join([dir, "/qa_snippet.py"], "")
         let __w := io.write(path, full)
-        let cmd := str.join(["cd ", dir, " && perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
+        let work := lexskill.py_work_dir(sprint_id)
+        let run_in := str.join(["if [ -d '", work, "' ]; then cd '", work, "'; else cd '", dir, "'; fi"], "")
+        let cmd := str.join([run_in, " && PYTHONPATH=\"$PWD\" perl -e 'alarm shift; exec @ARGV' 30 python3 ", path, " 2>&1; echo '##EXIT:'$?"], "")
         match proc.run("bash", ["-c", cmd]) {
           Err(msg) => {
             let __ev := if str.is_empty(evidence_path) {
@@ -905,7 +917,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
               Some(make_run_node_code_tool(evidence_path))
             } else {
               if name == "run_code" {
-                Some(make_run_code_tool(evidence_path))
+                Some(make_run_code_tool(evidence_path, sprint_id))
               } else {
                 if name == "run_server" {
                   Some(make_run_server_tool(evidence_path, sprint_id))
@@ -1080,7 +1092,7 @@ fn qa_system_prompt() -> Str {
 }
 
 fn py_qa_system_prompt() -> Str {
-  "You are the QA agent for a Python sprint. Verify all implementation by running code — never guess.\n\nWORKFLOW (mandatory — do not skip):\n1. Extract every Python file from the Build output.\n2. Call run_code with the implementation + assertions that match the acceptance criteria.\n3. Output ONLY a JSON object — no prose, no markdown fences:\n{\"verdict\":\"PASS\",\"reason\":\"what passed\",\"exit_code\":0,\"output\":\"<first 200 chars>\"}\n\nVerdict is PASS only if exit_code=0 and all assertions pass. Otherwise FAIL with the error output.\n\nFORBIDDEN: Do not guess. Your verdict MUST be based on run_code output."
+  "You are the QA agent for a Python sprint. Verify all implementation by running code — never guess.\n\nThe build's files ALREADY EXIST on disk, and run_code executes in the directory holding them, with that directory importable. Test THOSE files.\n\nWORKFLOW (mandatory — do not skip):\n1. Call run_code with assertions that import or read the build's files by their real names — `import app`, `open(\"app.py\")`, `subprocess.run([\"pytest\", \"-q\"])`. The file list is in your input.\n2. Output ONLY a JSON object — no prose, no markdown fences:\n{\"verdict\":\"PASS\",\"reason\":\"what passed\",\"exit_code\":0,\"output\":\"<first 200 chars>\"}\n\nVerdict is PASS only if exit_code=0 and all assertions pass. Otherwise FAIL with the error output. There is no third verdict: if you could not run the code, that is FAIL, not SKIP.\n\nFORBIDDEN: Do NOT rewrite, re-type or reconstruct the implementation inside your snippet, and do not create a directory of your own to work in. A verdict about a copy you wrote yourself is not evidence about the product. Do not guess: your verdict MUST be based on run_code output."
 }
 
 fn py_build_system_prompt() -> Str {

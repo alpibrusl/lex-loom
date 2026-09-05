@@ -405,12 +405,12 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
               str.join([cfg.request, "\n\nThe response schema this product must return (from the spec — the implementation is being written separately against this same contract):\n", schema], "")
             }
           } else {
-            if is_launch_role(n.role) {
+            if needs_the_file_listing(n.role) {
               let files := launch_file_listing(cfg.id)
               if str.is_empty(files) {
                 str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
               } else {
-                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThese are the files the build actually wrote, and they are the ONLY files that exist. Start one of these — do not guess a conventional name like main.py or app.py, and do not name a file that is not on this list:\n", files, "\n"], "")
+                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThese are the files the build actually wrote, and they are the ONLY files that exist. Work with these — do not guess a conventional name like main.py or app.py, do not name a file that is not on this list, and do not re-create any of them:\n", files, "\n"], "")
               }
             } else {
               str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
@@ -1295,11 +1295,26 @@ fn launch_file_listing(sprint_id :: Str) -> [proc] Str {
   }
 }
 
-fn is_launch_role(role :: Str) -> Bool {
+# Roles that act on the files the build wrote, rather than on its prose: they
+# all need to be told which files those actually are. QA is here because it was
+# reconstructing the implementation from the build's text and testing the copy.
+fn needs_the_file_listing(role :: Str) -> Bool {
   if role == "launch" {
     true
   } else {
-    role == "deploy"
+    if role == "deploy" {
+      true
+    } else {
+      if role == "qa" {
+        true
+      } else {
+        if role == "py_qa" {
+          true
+        } else {
+          role == "ts_qa"
+        }
+      }
+    }
   }
 }
 

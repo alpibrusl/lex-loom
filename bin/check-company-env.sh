@@ -84,8 +84,19 @@ elif [ -n "${OPENCODE_API_KEY:-}" ]; then
   ok "OPENCODE_API_KEY is set (no local proxy configured)"
 elif [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
   ok "a provider API key is set"
+elif curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" >/dev/null 2>&1; then
+  # The native Ollama adapter is used automatically when no proxy or cloud key
+  # is set (README "Providers"), so a reachable Ollama IS a model endpoint.
+  # This check used to fail that configuration outright -- and it is the one
+  # every local run actually uses, which made the preflight refuse a working
+  # setup while claiming each failure "costs a full run to discover".
+  if curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" 2>/dev/null | grep -q "\"$CMODEL\""; then
+    ok "ollama serves '$CMODEL' (native adapter, no proxy needed)"
+  else
+    bad "ollama is up but does not have '$CMODEL' — pull it first, or the run fails on its first node"
+  fi
 else
-  bad "no model endpoint: set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
+  bad "no model endpoint: start ollama, or set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
 fi
 
 # --- the operator profile: which providers this machine can reach -----------

@@ -405,7 +405,16 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
               str.join([cfg.request, "\n\nThe response schema this product must return (from the spec — the implementation is being written separately against this same contract):\n", schema], "")
             }
           } else {
-            str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+            if is_launch_role(n.role) {
+              let files := launch_file_listing(cfg.id)
+              if str.is_empty(files) {
+                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+              } else {
+                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThese are the files the build actually wrote, and they are the ONLY files that exist. Start one of these — do not guess a conventional name like main.py or app.py, and do not name a file that is not on this list:\n", files, "\n"], "")
+              }
+            } else {
+              str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+            }
           }
         }
         let prompt := if str.is_empty(prior_denial) {
@@ -1269,6 +1278,31 @@ fn sanitize_id(s :: Str) -> Str {
 # This also happens to be what independence wants. A test author is supposed to
 # derive its tests from the requirements, and the PRD is a derived restatement
 # of them -- one more artifact between the spec and the oracle.
+# Launch must be TOLD what the build produced. In company tzc5 it ran eight
+# times and failed eight times, every one with `can't open file`: the build
+# wrote tzconvert.py, launch tried main.py and then app.py. The work dir was
+# correct by then -- #312 fixed that -- but the entry point was being guessed
+# from the build's prose, which does not reliably name it.
+#
+# The listing is per-sprint, so it belongs in the node's INPUT and never in a
+# system prompt: those are persisted in agent_pool and replayed in later
+# sprints, where a file list is not merely stale but actively misleading.
+fn launch_file_listing(sprint_id :: Str) -> [proc] Str {
+  let dirs := str.join([lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id)], "")
+  match proc.run("bash", ["-c", str.join(["for D in ", dirs, "; do [ -d \"$D\" ] && ls -1 \"$D\" 2>/dev/null | grep -v '^__pycache__$'; done"], "")]) {
+    Err(_) => "",
+    Ok(r) => str.trim(r.stdout),
+  }
+}
+
+fn is_launch_role(role :: Str) -> Bool {
+  if role == "launch" {
+    true
+  } else {
+    role == "deploy"
+  }
+}
+
 fn is_test_author_role(role :: Str) -> Bool {
   if role == "test_author" {
     true

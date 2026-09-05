@@ -120,6 +120,23 @@ fn clip(sx :: Str, n :: Int) -> Str {
   str.replace(str.replace(str.slice(sx, 0, n), "\n", " "), "\t", " ")
 }
 
+# A tool result is diagnostic at BOTH ends: the head says what was attempted,
+# the tail carries what actually went wrong. Clipping only the head threw the
+# second half away -- in company tzc5 every launch failure was recorded as
+#
+#   ... The server itself said: <python>: can't open file '
+#
+# with the path, the one fact that identified the bug, cut off. Recovering it
+# meant listing the directory by hand, which a trail exists to make unnecessary.
+fn clip_ends(sx :: Str, n :: Int) -> Str {
+  if str.len(sx) <= n {
+    clip(sx, n)
+  } else {
+    let half := n / 2
+    str.join([clip(str.slice(sx, 0, half), half), " …[", int.to_str(str.len(sx) - n), " chars omitted]… ", clip(str.slice(sx, str.len(sx) - half, str.len(sx)), half)], "")
+  }
+}
+
 fn note_op_call_full(path :: Str, tool_name :: Str, ok :: Bool, args :: Str, result :: Str) -> [io] Unit {
   let prior := match io.read(path) {
     Ok(sx) => sx,
@@ -129,7 +146,7 @@ fn note_op_call_full(path :: Str, tool_name :: Str, ok :: Bool, args :: Str, res
     "ok"
   } else {
     "err"
-  }, "\t", clip(args, 300), "\t", clip(result, 300), "\n"], ""))
+  }, "\t", clip_ends(args, 400), "\t", clip_ends(result, 700), "\n"], ""))
   ()
 }
 

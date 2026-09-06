@@ -1473,6 +1473,14 @@ fn affected_impl_subgraph(g :: graph.SprintGraph, node_id :: Str) -> graph.Sprin
 # contract violation turns an otherwise-passing gate into a denial that names
 # the missing artifact.
 #
+# For build roles the contract counts only files ON DISK in the work dir. The
+# gate scratch is seeded from the work dir and then unioned with every fenced
+# block in the output, so a build that wrote nothing and emitted its code as
+# markdown satisfied "a Python module exists": tzc9's iteration-2 re-run was
+# accepted on file2.py..file13.py extracted from prose while the real directory
+# held one test file. QA and launch verify disk (#323, #320); the node that
+# produces the disk is held to the same standard.
+#
 # The gate is per-GRAPH and an LLM picks it; this is per-ROLE and always runs.
 # tzlaunch iteration 3 is the case for the distinction: bin/check_imports.py
 # existed, worked, and would have caught the module that could not import --
@@ -1483,10 +1491,15 @@ fn and_contract(role :: Str, output :: Str, sprint_id :: Str, scratch :: Str, ga
     Err(e) => Err(e),
     Ok(_) => {
       let seed := runner.tool_work_dir_for_role(role, sprint_id)
+      let counted := if runner.is_build_kind(role) {
+        ""
+      } else {
+        output
+      }
       list.fold(contracts.deliverables_for(role), Ok(()), fn (acc :: Result[Unit, Str], d :: contracts.Deliverable) -> [io, proc] Result[Unit, Str] {
         match acc {
           Err(e) => Err(e),
-          Ok(_) => match runner.verify_shell_on_output_from(contracts.check_cmd(d), output, scratch, seed) {
+          Ok(_) => match runner.verify_shell_on_output_from(contracts.check_cmd(d), counted, scratch, seed) {
             Ok(_) => Ok(()),
             Err(_) => Err(contracts.missing_message(role, d)),
           },

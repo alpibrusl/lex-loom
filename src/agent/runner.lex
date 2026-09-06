@@ -447,10 +447,20 @@ fn has_fence(s :: Str) -> Bool {
   str.contains(s, "```")
 }
 
-# Start each build attempt from a clean work_dir so stale files don't leak in.
+# Clean SCRATCH from the work dir before a build attempt -- never the build.
+#
+# This used to `rm -rf` the whole directory "so stale files don't leak in".
+# Work dirs are per-sprint, so the only thing that ever wiped in practice was
+# this sprint's own previous build, on a bounce re-run: company tzc9 wrote
+# server.py at 16:44, QA denied it at 16:54 with a specific bug to fix, the
+# re-run started by deleting server.py, produced only prose, and QA and launch
+# then honestly found an empty directory. A repair target is not stale.
+#
+# What IS worth clearing is the model's own scratch (_probe.py, _check.py) and
+# caches, which four consecutive runs showed accumulating.
 fn clear_work_dir(kind :: Str, sprint_id :: Str) -> [proc] Unit {
   let d := work_dir_for(kind, sprint_id)
-  let __ := proc.run("bash", ["-c", str.join(["rm -rf ", d, "/* 2>/dev/null; mkdir -p ", d], "")])
+  let __ := proc.run("bash", ["-c", str.join(["mkdir -p ", d, "; find ", d, " -maxdepth 1 \\( -name '_*' -o -name '__pycache__' -o -name '.pytest_cache' \\) -exec rm -rf {} + 2>/dev/null; true"], "")])
   ()
 }
 

@@ -217,8 +217,36 @@ fn test_loom_can_restart_on_a_port_it_started() -> [env, net, io, proc, fs_write
   }
 }
 
+# A launch that comes up but never serves its endpoint must not leave its
+# server holding the port. #321 registered the listener only on the READY
+# path, so a server that answered 404 was left running AND unregistered, and
+# every later launch in the company was refused with "held by another process
+# that loom did not start" -- eleven of fifteen attempts in tzc9, all on loom's
+# own earlier server.
+fn test_a_failed_launch_frees_its_port() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-fail-frees")
+  let out := match tool.execute(JObj([("cmd", JStr(serve_cmd(8797))), ("port", JInt(8797)), ("endpoint", JStr("/does-not-exist")), ("timeout_s", JInt(4))])) {
+    Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
+    Ok(r) => r,
+  }
+  let held := match proc.run("bash", ["-c", "lsof -ti tcp:8797 >/dev/null 2>&1 && echo HELD || echo FREE"]) {
+    Err(_) => "HELD",
+    Ok(r) => str.trim(r.stdout),
+  }
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  match get_bool(out, "ok") {
+    Some(true) => Err("a 404 on the endpoint was accepted as a launch"),
+    _ => if held == "FREE" {
+      Ok(())
+    } else {
+      Err("the failed launch left its server holding the port, so every later launch on it would be refused as foreign")
+    },
+  }
+}
+
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

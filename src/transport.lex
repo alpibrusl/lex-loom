@@ -256,6 +256,100 @@ fn await_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: Lis
   }
 }
 
+# What an await actually found, rather than a whole-layer Err that discards
+# it. Company tzc8, iteration 3: the Implementation layer was enqueued at
+# 11:58:55; py-build was ACCEPTED at 12:00:28; the test author was still
+# running; at 12:08:58 — ten minutes and three seconds later — the await
+# timed out, returned Err for the layer, and every node in it was marked
+# unattested, the finished build included. QA then truthfully reported no
+# attested producer, the sprint bounced, and the next iteration started while
+# this one's jobs were still executing. Nothing was trailed. Five company runs
+# failed this way before the timeline was read.
+type AwaitOutcome = { rows :: List[NodeResultRow], timed_out :: Bool, missing :: List[Str], in_flight :: List[Str], waited_ms :: Int }
+
+type JobIdRow = { id :: Int }
+
+fn has(ids :: List[Str], id :: Str) -> Bool {
+  list.fold(ids, false, fn (found :: Bool, x :: Str) -> Bool {
+    if found {
+      true
+    } else {
+      x == id
+    }
+  })
+}
+
+# Node ids among `node_ids` whose job for this sprint is still pending or
+# running. The queue is the source of truth on whether work is in flight; the
+# payload is matched by LIKE so it works on SQLite and Postgres alike.
+fn jobs_in_flight(db :: conn.ConnDb, sprint_id :: Str, node_ids :: List[Str]) -> [sql, fs_read] List[Str] {
+  list.filter(node_ids, fn (nid :: Str) -> [sql, fs_read] Bool {
+    let q := str.join(["SELECT id FROM lex_jobs WHERE status IN ('pending','running') AND payload LIKE '%\"sprint_id\":\"", sq(sprint_id), "\"%' AND payload LIKE '%\"node_id\":\"", sq(nid), "\"%'"], "")
+    let rows :: Result[List[JobIdRow], SqlError] := sql.query(db.handle, q, [])
+    match rows {
+      Err(_) => false,
+      Ok(rs) => not list.is_empty(rs),
+    }
+  })
+}
+
+# Wait for results, keeping whatever arrives. `idle_ms` bounds how long to
+# wait while NOTHING is in flight for the missing nodes (a lost job); `cap_ms`
+# bounds the total regardless (a worker that died mid-run keeps its job in
+# `running` forever, and only a cap catches that). A node whose job is running
+# is never abandoned before the cap: a 25-minute build is the node doing its
+# job, not a fault.
+fn await_node_results_partial(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, cap_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
+  await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, cap_ms, poll_ms, 0, 0)
+}
+
+fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, cap_ms :: Int, poll_ms :: Int, elapsed_ms :: Int, idle_so_far :: Int) -> [sql, fs_read, time] AwaitOutcome {
+  let results := read_node_results(db, sprint_id, phase)
+  let done_ids := list.map(results, fn (r :: NodeResultRow) -> Str {
+    r.node_id
+  })
+  let missing := list.filter(node_ids, fn (id :: Str) -> Bool {
+    not has(done_ids, id)
+  })
+  if list.is_empty(missing) {
+    { rows: results, timed_out: false, missing: [], in_flight: [], waited_ms: elapsed_ms }
+  } else {
+    let in_flight := jobs_in_flight(db, sprint_id, missing)
+    if elapsed_ms >= cap_ms {
+      { rows: results, timed_out: true, missing: missing, in_flight: in_flight, waited_ms: elapsed_ms }
+    } else {
+      if list.is_empty(in_flight) and idle_so_far >= idle_ms {
+        { rows: results, timed_out: true, missing: missing, in_flight: [], waited_ms: elapsed_ms }
+      } else {
+        let __s := time.sleep_ms(poll_ms)
+        await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, cap_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
+          idle_so_far + poll_ms
+        } else {
+          0
+        })
+      }
+    }
+  }
+}
+
+# A sprint that has ended must not leave work in the queue: whatever is still
+# pending or running for it would execute during the NEXT iteration, on the
+# same worker and the same GPU, which is exactly what tzc8 did. Returns how
+# many jobs were failed.
+fn drain_sprint_jobs(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read, time] Int {
+  let q := str.join(["SELECT id FROM lex_jobs WHERE status IN ('pending','running') AND payload LIKE '%\"sprint_id\":\"", sq(sprint_id), "\"%'"], "")
+  let rows :: Result[List[JobIdRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => list.fold(rs, 0, fn (n :: Int, r :: JobIdRow) -> [sql, time] Int {
+      match jobs.fail(db.handle, r.id, "sprint ended before this job finished") {
+        Err(_) => n,
+        Ok(_) => n + 1,
+      }
+    }),
+  }
+}
+
 fn make_worker_dispatch(db :: conn.ConnDb, invoke_fn :: (Str, Str, Str, Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] { accepted :: Bool, artifact :: Str, reason :: Str }) -> (Str, Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] jobs.WorkOutcome {
   fn (handler :: Str, payload :: Str) -> [io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, approval] jobs.WorkOutcome {
     match handler {

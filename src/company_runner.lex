@@ -238,6 +238,13 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
   let exec_mode := defaults.resolved_exec_mode()
   let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx), exec_mode: exec_mode, policy_isolation: ccfg.policy_isolation }
   let result := orch.run_sprint(scfg)
+  let drained := tr.drain_sprint_jobs(db, sprint_id)
+  let __pd := if drained > 0 {
+    let __t := tr.trail(db, sprint_id, "sprint_drained", str.join(["{\"failed_jobs\":", int.to_str(drained), "}"], ""))
+    io.print(str.join(["[company] drained ", int.to_str(drained), " unfinished job(s) left by ", sprint_id], ""))
+  } else {
+    ()
+  }
   let mem_n := company.persist_iteration_memory(db, sprint_id)
   let __pm := if mem_n > 0 {
     io.print(str.join(["[company] persisted lessons to ", int.to_str(mem_n), " agent(s) for next iteration"], ""))

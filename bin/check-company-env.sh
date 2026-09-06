@@ -97,12 +97,26 @@ BASE="${LITELLM_BASE_URL:-}"
 if [ -n "$BASE" ]; then
   if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" >/dev/null 2>&1; then
     if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" 2>/dev/null | grep -q "\"$CMODEL\""; then
-      ok "proxy at $BASE serves '$CMODEL'"
+      # Serving the model is not the same as being usable. A proxy routing
+      # ollama through the legacy `ollama/` prefix answers completions
+      # perfectly and returns NO tool calls at all — and every build, QA and
+      # launch node in loom is a tool-calling agent, so the run dies on step
+      # limits with no hint of why. Measured: `ollama/` 0 tool calls,
+      # `ollama_chat/` 1, same model, same request.
+      TOOL_PROBE=$(curl -s -m 120 "$BASE/v1/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" \
+        -d "{\"model\":\"$CMODEL\",\"max_tokens\":600,\"messages\":[{\"role\":\"user\",\"content\":\"Call the ping tool.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"ping\",\"description\":\"ping\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}" 2>/dev/null || true)
+      if printf '%s' "$TOOL_PROBE" | grep -q '"tool_calls"'; then
+        ok "proxy at $BASE serves '$CMODEL' and returns tool calls"
+      else
+        bad "proxy at $BASE serves '$CMODEL' but returned NO tool call — every build/QA/launch node is a tool-calling agent, so the run would burn its step budget and fail with no explanation. If this is an ollama route, use the ollama_chat/ prefix, not ollama/"
+      fi
     else
       bad "proxy at $BASE is up but does not list '$CMODEL' — the run will fail on its first node"
     fi
   else
-    bad "no LiteLLM at $BASE — this is the default provider and there is no silent fallback. Start it with:  (cd litellm && docker compose up -d)   …or pick another with LOOM_PROVIDER=ollama|opencode"
+    bad "no LiteLLM at $BASE — this is the default provider and there is no silent fallback. Start it with:  bin/litellm-up.sh   …or pick another with LOOM_PROVIDER=ollama|opencode"
   fi
 elif [ -n "$(printf '%s' "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" | tr -d ' \n')" ]; then
   # run-company.sh loads the key from ~/.credentials/opencode/key when it is

@@ -104,8 +104,8 @@ LiteLLM gives cleaner OpenAI-compatible tool calling over Ollama than the native
 # 1. Pull the recommended local model
 ollama pull qwen3.8:27b-mlx
 
-# 2. Start the LiteLLM proxy (includes qwen3.8:27b-mlx and others)
-cd litellm && docker compose up -d && cd ..
+# 2. Start the LiteLLM proxy — a plain process, no Docker needed
+bin/litellm-up.sh
 
 # 3. Build and run lex-loom
 touch .env
@@ -115,6 +115,30 @@ GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -
 LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3.8:27b-mlx \
   docker compose up -d
 ```
+
+`bin/litellm-up.sh` runs LiteLLM from its Python package (`uv tool install
+'litellm[proxy]'`), serving `litellm/config.local.yaml` — the local routes only.
+The full roster in `config.yaml` needs an interactive ChatGPT device-code
+sign-in that blocks startup, so it is opt-in:
+`LITELLM_CONFIG=litellm/config.yaml bin/litellm-up.sh`.
+
+Docker is still available (`litellm/docker-compose.yml`) but is not the
+default, and it has two traps worth knowing. Compose names a project after its
+containing directory, and `lex-code` also has a `litellm/` directory — so
+`docker compose up -d` in this repo would silently adopt *that* project's
+running container and serve its config, which is how a whole afternoon of
+measurements ended up describing another repo's setup. The compose file now
+declares its own `name:`. It also reaches ollama over `host.docker.internal`,
+which must be passed in as `OLLAMA_BASE_URL`; as a host process, plain
+`localhost:11434` is simply correct.
+
+**Ollama routes must use the `ollama_chat/` prefix, not `ollama/`.** The legacy
+`ollama/` path answers ordinary completions perfectly and returns *no tool
+calls at all* — measured, same model and request: `ollama/` 0, `ollama_chat/`
+1. Every build, QA and launch node in loom is a tool-calling agent, so such a
+proxy fails every one of them on step limits with no hint of the cause.
+`bin/check-company-env.sh` now probes for a real tool call rather than mere
+reachability, and refuses to start the run when it does not get one.
 
 The LiteLLM proxy config (`litellm/config.yaml`) includes:
 

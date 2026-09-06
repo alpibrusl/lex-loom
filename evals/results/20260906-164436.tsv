@@ -1,0 +1,6 @@
+# model	qwen3.8:27b-mlx
+# provider	default
+# commit	765db86
+# date	2026-09-06T14:44:36Z
+py_qa	0	5
+launch	4	4

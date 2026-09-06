@@ -70,7 +70,7 @@ fn save_improved_agent(db :: conn.ConnDb, new_id :: Str, role :: Str, prompt :: 
 
 # ── Prompt engineering ────────────────────────────────────────────────────────
 fn improver_system_prompt() -> Str {
-  "You are an expert LLM agent prompt engineer. You rewrite agent system prompts to be more precise and effective based on sprint feedback. Output only the improved system prompt text — no labels, no commentary, no markdown fences."
+  "You are an expert LLM agent prompt engineer. You rewrite agent system prompts to be more precise and effective based on sprint feedback. Output only the improved system prompt text — no labels, no commentary, no markdown fences.\n\nNEVER add a precondition that makes the role refuse, stop, or fail on the presence or absence of a file, marker, or artifact. The role's gate decides pass and fail; a prompt must not install its own gate, and must not name files that no role in the sprint produces."
 }
 
 # Found live (pdfx2 company run): the improver rewrote the `qa` role's
@@ -89,6 +89,103 @@ fn tool_capability_note(role :: Str) -> Str {
     "This role has NO tools at all -- it can only reason over the text it's given. Do not instruct it to run commands, call any tool, start a server, or verify anything beyond its own reasoning over the input text."
   } else {
     str.join(["This role's ONLY available tools are: ", str.join(tools, ", "), ". Do not instruct it to do anything beyond what these specific tools can do -- for example, do not ask it to start a server, make an HTTP request, persist files outside what these tools write, or verify runtime behavior no available tool can produce. If the lesson learned seems to call for a capability outside this list, the fix belongs in a DIFFERENT role (e.g. `launch` starts servers, `run_code`/`py_qa` execute Python) -- do not paper over a missing capability by demanding this role pretend to have it."], "")
+  }
+}
+
+# An improved prompt may not install its own gate on an artifact it invented.
+#
+# Company tzc10: the improver rewrote py_qa's prompt to begin with a
+# PRECONDITION that globs for .launch_attested, launch_ok.json and
+# *.launch_status and, finding none, emits FAIL "refusing to QA a dead binary"
+# before running a single test. No role produces those files -- the base prompt
+# mentions none of them. Launch had returned HTTP 200 and been accepted; QA then
+# refused on a marker it had made up, and the sprint failed. That is #113 again
+# (the improver demanding what the role cannot have), for files instead of
+# tools, and the tool guard could not see it.
+#
+# The detector needs BOTH halves: a refusal instruction, and a filename-like
+# token that the base prompt never mentioned. Either alone is ordinary -- an
+# improvement may cite main.py as an example, or say "do not proceed" about a
+# gate that already exists.
+fn installs_a_gate_on_an_invented_artifact(base :: Str, improved :: Str) -> Option[Str] {
+  let refusal_words := ["PRECONDITION", "Refusing to", "refuse to", "FAIL immediately", "Do NOT proceed", "before any other test", "stop and emit"]
+  let refuses := list.fold(refusal_words, false, fn (acc :: Bool, w :: Str) -> Bool {
+    acc or str.contains(improved, w)
+  })
+  if not refuses {
+    None
+  } else {
+    let invented := list.filter(filename_like_tokens(improved), fn (t :: Str) -> Bool {
+      not str.contains(base, t)
+    })
+    if list.is_empty(invented) {
+      None
+    } else {
+      Some(str.join(["the improved prompt tells the role to refuse or fail based on files no role produces: ", str.join(invented, ", ")], ""))
+    }
+  }
+}
+
+# Tokens shaped like a file: a dotfile (.launch_attested) or name.ext where ext
+# is 2-6 lowercase letters. URLs and sentence-ending dots are excluded.
+fn filename_like_tokens(text :: Str) -> List[Str] {
+  let cleaned := str.replace(str.replace(str.replace(str.replace(str.replace(str.replace(text, "\"", " "), "'", " "), "(", " "), ")", " "), ",", " "), "\n", " ")
+  let raw := list.filter(str.split(cleaned, " "), fn (t :: Str) -> Bool {
+    not str.is_empty(t)
+  })
+  list.fold(raw, [], fn (acc :: List[Str], t :: Str) -> List[Str] {
+    let tok := str.trim(t)
+    if str.contains(tok, "://") or str.contains(tok, "..") or has(acc, tok) {
+      acc
+    } else {
+      if looks_like_a_file(tok) {
+        list.concat(acc, [tok])
+      } else {
+        acc
+      }
+    }
+  })
+}
+
+fn has(xs :: List[Str], x :: Str) -> Bool {
+  list.fold(xs, false, fn (a :: Bool, y :: Str) -> Bool {
+    a or y == x
+  })
+}
+
+fn looks_like_a_file(tok :: Str) -> Bool {
+  if str.starts_with(tok, ".") {
+    str.len(tok) > 3 and is_ident(str.slice(tok, 1, str.len(tok)))
+  } else {
+    let parts := str.split(tok, ".")
+    if list.len(parts) < 2 {
+      false
+    } else {
+      let ext := list.fold(parts, "", fn (__lex_discard_1 :: Str, part :: Str) -> Str {
+        part
+      })
+      let stem := match list.head(parts) {
+        Some(h) => h,
+        None => "",
+      }
+      str.len(ext) >= 2 and str.len(ext) <= 6 and is_lower_alpha(ext) and not str.is_empty(stem) and is_ident(str.replace(stem, "*", "x"))
+    }
+  }
+}
+
+fn is_lower_alpha(sx :: Str) -> Bool {
+  str.len(sx) > 0 and every_char_in(sx, "abcdefghijklmnopqrstuvwxyz", 0)
+}
+
+fn is_ident(sx :: Str) -> Bool {
+  str.len(sx) > 0 and every_char_in(sx, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", 0)
+}
+
+fn every_char_in(sx :: Str, alphabet :: Str, i :: Int) -> Bool {
+  if i >= str.len(sx) {
+    true
+  } else {
+    str.contains(alphabet, str.slice(sx, i, i + 1)) and every_char_in(sx, alphabet, i + 1)
   }
 }
 
@@ -157,10 +254,18 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
     let __log2 := io.print(str.join(["[loom/improver] empty output for role=", role, " — skipping"], ""))
     None
   } else {
-    let new_id := new_agent_id(role, sprint_id)
-    let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name, parent_count + 2)
-    let __log3 := io.print(str.join(["[loom/improver] saved agent ", new_id], ""))
-    Some(new_id)
+    match installs_a_gate_on_an_invented_artifact(current_prompt, improved_prompt) {
+      Some(why) => {
+        let __rej := io.print(str.join(["[loom/improver] REJECTED improvement for role=", role, ": ", why], ""))
+        None
+      },
+      None => {
+        let new_id := new_agent_id(role, sprint_id)
+        let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name, parent_count + 2)
+        let __log3 := io.print(str.join(["[loom/improver] saved agent ", new_id], ""))
+        Some(new_id)
+      },
+    }
   }
 }
 

@@ -57,26 +57,174 @@ OUT="evals/results/$STAMP.tsv"
 stage_fixture() {
   case "$1" in
     py_qa|qa)
-      # QA verifies the build's files on disk (#323). With no build staged it
-      # honestly reports FAIL on an empty directory — the first baseline
-      # recorded 0/5 for exactly that reason, which measured the fixture's
-      # absence rather than the role.
+      # QA verifies the build's files on disk (#323) against the probe's
+      # TASK, so the fixture has to actually satisfy that task. The first
+      # version was a bare convert() with one test, and QA correctly refused
+      # it: "no POST /convert endpoint, no rfc2822 or unix_epoch, no HTTP 400"
+      # — every word true. A fixture that fails the spec measures the
+      # fixture. Stdlib only, so it needs nothing installed.
       for i in $(seq 1 "$2"); do
         d="/tmp/loom-py-work-probe-$1-$i"
         mkdir -p "$d"
         cat > "$d/app.py" <<'PY'
+"""POST /convert: convert a timestamp between IANA timezones and render it as
+iso8601, rfc2822 or unix_epoch. Unknown timezone or format -> HTTP 400."""
+import json
+import os
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from email.utils import format_datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-def convert(timestamp: str, from_tz: str, to_tz: str) -> str:
-    dt = datetime.fromisoformat(timestamp).replace(tzinfo=ZoneInfo(from_tz))
-    return dt.astimezone(ZoneInfo(to_tz)).isoformat()
+FORMATS = ("iso8601", "rfc2822", "unix_epoch")
+
+
+def convert(timestamp: str, from_tz: str, to_tz: str, output_format: str) -> str:
+    if output_format not in FORMATS:
+        raise ValueError(f"unknown output_format: {output_format}")
+    try:
+        src = ZoneInfo(from_tz)
+        dst = ZoneInfo(to_tz)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        raise ValueError("unknown timezone")
+    dt = datetime.fromisoformat(timestamp).replace(tzinfo=src).astimezone(dst)
+    if output_format == "iso8601":
+        return dt.isoformat()
+    if output_format == "rfc2822":
+        return format_datetime(dt)
+    return str(int(dt.timestamp()))
+
+
+def handle(body: dict) -> tuple[int, dict]:
+    """The endpoint's logic, callable without a socket."""
+    try:
+        result = convert(
+            body["timestamp"], body["from_tz"], body["to_tz"],
+            body.get("output_format", "iso8601"),
+        )
+    except (KeyError, ValueError) as e:
+        return 400, {"error": str(e) or "bad request"}
+    return 200, {
+        "result": result,
+        "from_tz": body["from_tz"],
+        "to_tz": body["to_tz"],
+        "output_format": body.get("output_format", "iso8601"),
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != "/convert":
+            return self._send(404, {"error": "not found"})
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._send(400, {"error": "invalid json"})
+        status, payload = handle(body)
+        self._send(status, payload)
+
+    def _send(self, status, payload):
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+
+def serve(port: int) -> HTTPServer:
+    return HTTPServer(("", port), Handler)
+
+
+if __name__ == "__main__":
+    serve(int(os.environ.get("PORT", "8081"))).serve_forever()
 PY
         cat > "$d/test_app.py" <<'PY'
-from app import convert
+import json
+import threading
+import urllib.error
+import urllib.request
+from datetime import datetime
+from email.utils import format_datetime
+from zoneinfo import ZoneInfo
 
-def test_utc_to_new_york():
-    assert convert("2025-07-11T08:00:00", "UTC", "America/New_York") == "2025-07-11T04:00:00-04:00"
+import pytest
+
+from app import handle, serve
+
+# One instant, expressed in UTC, converted to New York. Expected values are
+# DERIVED from the same instant, never pasted.
+INSTANT = datetime(2025, 7, 11, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
+BODY = {"timestamp": "2025-07-11T08:00:00", "from_tz": "UTC", "to_tz": "America/New_York"}
+NY = INSTANT.astimezone(ZoneInfo("America/New_York"))
+
+
+def test_iso8601():
+    status, out = handle(dict(BODY, output_format="iso8601"))
+    assert status == 200
+    assert out["result"] == NY.isoformat()
+
+
+def test_rfc2822():
+    status, out = handle(dict(BODY, output_format="rfc2822"))
+    assert status == 200
+    assert out["result"] == format_datetime(NY)
+
+
+def test_unix_epoch():
+    status, out = handle(dict(BODY, output_format="unix_epoch"))
+    assert status == 200
+    assert out["result"] == str(int(INSTANT.timestamp()))
+
+
+def test_unknown_timezone_is_400():
+    status, out = handle(dict(BODY, to_tz="Mars/Olympus_Mons"))
+    assert status == 400
+    assert "error" in out
+
+
+def test_unknown_format_is_400():
+    status, out = handle(dict(BODY, output_format="roman_numerals"))
+    assert status == 400
+    assert "error" in out
+
+
+@pytest.fixture(scope="module")
+def server():
+    srv = serve(0)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    yield srv.server_address[1]
+    srv.shutdown()
+
+
+def _post(port, body):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/convert",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_http_post_convert(server):
+    status, out = _post(server, dict(BODY, output_format="iso8601"))
+    assert status == 200
+    assert out["result"] == NY.isoformat()
+
+
+def test_http_bad_timezone_is_400(server):
+    status, _ = _post(server, dict(BODY, from_tz="Nowhere/Land"))
+    assert status == 400
 PY
       done ;;
     launch|deploy)

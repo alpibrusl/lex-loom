@@ -94,6 +94,8 @@ jobs:
         run: bash demo/prof1-operator-profile-roundtrip.sh
       - name: "Demo: prompt sprint-independence (#312)"
         run: bash demo/pi1-prompt-independence-roundtrip.sh
+      - name: "Demo: eval suite logic (baselines, #327)"
+        run: bash demo/ev1-eval-suite-roundtrip.sh
       - name: "Demo: GP1 Node/TS golden path (#92)"
         run: bash demo/gp1-ts-path-roundtrip.sh
       - name: "Demo: GP2 web-pwa golden path (#92)"

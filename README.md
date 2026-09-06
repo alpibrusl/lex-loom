@@ -901,3 +901,26 @@ EUPL-1.2 — matches the rest of the lex ecosystem.
 ---
 
 Built under the principles of [Trust Without Comprehension](https://lexlang.org/manifesto).
+
+## Measuring (evals)
+
+    bin/eval-suite.sh              # node-level accept rates vs the baseline
+    bin/eval-suite.sh --update     # accept the current numbers as the baseline
+
+Whole-company runs are 1.5–2.5 hours and mix dozens of nodes together, so a
+narrow question comes back confounded with everything else that went wrong on
+the way. Across tzc4–tzc8 the company-level accept rate read 24/24 → 20/15 →
+18/2 → 13/4 → 10/4 while real defects were being fixed, with a different
+confound in each comparison — a single run of a stochastic pipeline cannot
+separate a regression from variance.
+
+`bin/probe-node.sh` measures ONE role N times in minutes; `bin/eval-suite.sh`
+runs a fixed set of them and compares against `evals/baseline.tsv`. Results
+record the model, provider and commit, because a rate without those is
+comparable to nothing.
+
+The suite refuses to run while a company run is in progress: a provider
+comparison in this repo once reported 1/4 versus 4/4 purely because other work
+was loading the GPU alongside it. Re-run clean, it was 5/5 versus 5/5.
+
+See `evals/README.md`.

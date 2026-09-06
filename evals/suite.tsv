@@ -1,0 +1,5 @@
+# role	samples	why this role is in the suite
+py_test_author	5	the derived-values gate; the most frequently denied node across tzc4-tzc8
+py_build	5	spec compiles; where real code defects surface
+py_qa	5	json-verdict-pass; verifies the build's own files since #323
+launch	4	json-ok-true; the whole #312/#316/#320/#321 chain lands here

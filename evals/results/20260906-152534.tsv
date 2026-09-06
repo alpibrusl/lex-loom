@@ -1,0 +1,8 @@
+# model	qwen3.8:27b-mlx
+# provider	default
+# commit	191580a
+# date	2026-09-06T13:25:34Z
+py_test_author	5	5
+py_build	5	5
+py_qa	0	5
+launch	2	4

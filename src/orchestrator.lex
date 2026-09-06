@@ -563,7 +563,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                       if runner.is_build_kind(n.role) {
                         runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
                       } else {
-                        runner.verify_shell_on_output_from(gates.shell_command(n.gate), output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id))
+                        runner.verify_shell_for_role(gates.shell_command(n.gate), n.role, output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id))
                       }
                     } else {
                       if str.trim(n.gate) == "spec json-ok-true" {
@@ -1491,15 +1491,10 @@ fn and_contract(role :: Str, output :: Str, sprint_id :: Str, scratch :: Str, ga
     Err(e) => Err(e),
     Ok(_) => {
       let seed := runner.tool_work_dir_for_role(role, sprint_id)
-      let counted := if runner.is_build_kind(role) {
-        ""
-      } else {
-        output
-      }
       list.fold(contracts.deliverables_for(role), Ok(()), fn (acc :: Result[Unit, Str], d :: contracts.Deliverable) -> [io, proc] Result[Unit, Str] {
         match acc {
           Err(e) => Err(e),
-          Ok(_) => match runner.verify_shell_on_output_from(contracts.check_cmd(d), counted, scratch, seed) {
+          Ok(_) => match runner.verify_shell_for_role(contracts.check_cmd(d), role, output, scratch, seed) {
             Ok(_) => Ok(()),
             Err(_) => Err(contracts.missing_message(role, d)),
           },

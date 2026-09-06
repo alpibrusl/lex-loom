@@ -677,6 +677,23 @@ fn cap_listing(sx :: Str, n :: Int) -> Str {
   }
 }
 
+# What a gate may count depends on the role. The scratch is seeded from the
+# work dir and then unioned with every fenced block in the output, which is
+# right for a role whose deliverable IS prose (a Dockerfile in a docs answer)
+# and wrong for a role whose deliverable is the disk: a build that emitted its
+# code as markdown passed `ls *.py` on file2.py..file13.py extracted from prose
+# (tzc9), and tzc11's build was denied for `setup` and `verify` modules that
+# existed only in its prose -- they reached disk twenty minutes later, in the
+# retry. #329 closed this for the role CONTRACT; the Architect-chosen gate took
+# the same path and was missed. One choke point now, for both.
+fn verify_shell_for_role(cmd :: Str, role :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
+  verify_shell_on_output_from(cmd, if is_build_kind(role) {
+    ""
+  } else {
+    output
+  }, scratch, seed_dir)
+}
+
 fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")

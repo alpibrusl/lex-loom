@@ -95,8 +95,49 @@ fn test_a_non_build_role_still_counts_fenced_output() -> [io, proc, random] Resu
   }
 }
 
+# --- the GATE path: same rule as the contract, one choke point (#332) --------
+# #329 closed the fence hole for the role contract and missed the Architect's
+# gate, which took the same path. tzc11's build was denied for `setup` and
+# `verify` modules that existed only in its prose; they reached disk twenty
+# minutes later, in the retry.
+fn test_a_build_gate_ignores_fenced_prose() -> [io, proc, random] Result[Unit, Str] {
+  let sprint := str.concat("t-gate-prose/", crypto.random_str_hex(4))
+  let __s := seed_dir(sprint, "")
+  let r := runner.verify_shell_for_role("python3 $LOOM_ROOT/bin/check_imports.py .", "py_build", "```python\nimport definitely_not_a_module\n```\n", str.concat("t-gate-prose-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
+  match r {
+    Ok(_) => Err("with nothing on disk a build gate passed — it can only have judged the fenced prose, or nothing"),
+    Err(e) => if str.contains(e, "definitely_not_a_module") {
+      Err("the build gate judged a module that exists only in prose — the tzc11 denial")
+    } else {
+      Ok(())
+    },
+  }
+}
+
+fn test_a_build_gate_judges_the_disk() -> [io, proc, random] Result[Unit, Str] {
+  let sprint := str.concat("t-gate-disk/", crypto.random_str_hex(4))
+  let __s := seed_dir(sprint, "server.py")
+  let r := runner.verify_shell_for_role("python3 $LOOM_ROOT/bin/check_imports.py .", "py_build", "", str.concat("t-gate-disk-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
+  match r {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a build that IS on disk failed its gate with no prose at all: ", e)),
+  }
+}
+
+# A prose role's gate must still see its fences: a docs node's Dockerfile
+# exists nowhere but in its answer.
+fn test_a_prose_role_gate_still_sees_fences() -> [io, proc, random] Result[Unit, Str] {
+  let r := runner.verify_shell_for_role("test -f Dockerfile", "docs", "```Dockerfile\nFROM python:3.12\n```\n", str.concat("t-gate-fence-", crypto.random_str_hex(4)), "")
+  match r {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a docs node's fenced Dockerfile stopped satisfying its gate: ", e)),
+  }
+}
+
 fn suite() -> [io, proc, random] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences()]
 }
 
 fn run_all() -> [io, proc, random] Unit {

@@ -56,6 +56,29 @@ OUT="evals/results/$STAMP.tsv"
 # from a previous attempt answering on the port.
 stage_fixture() {
   case "$1" in
+    py_qa|qa)
+      # QA verifies the build's files on disk (#323). With no build staged it
+      # honestly reports FAIL on an empty directory — the first baseline
+      # recorded 0/5 for exactly that reason, which measured the fixture's
+      # absence rather than the role.
+      for i in $(seq 1 "$2"); do
+        d="/tmp/loom-py-work-probe-$1-$i"
+        mkdir -p "$d"
+        cat > "$d/app.py" <<'PY'
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+def convert(timestamp: str, from_tz: str, to_tz: str) -> str:
+    dt = datetime.fromisoformat(timestamp).replace(tzinfo=ZoneInfo(from_tz))
+    return dt.astimezone(ZoneInfo(to_tz)).isoformat()
+PY
+        cat > "$d/test_app.py" <<'PY'
+from app import convert
+
+def test_utc_to_new_york():
+    assert convert("2025-07-11T08:00:00", "UTC", "America/New_York") == "2025-07-11T04:00:00-04:00"
+PY
+      done ;;
     launch|deploy)
       for i in $(seq 1 "$2"); do
         d="/tmp/loom-py-work-probe-$1-$i"
@@ -80,6 +103,8 @@ PY
 
 clean_fixture() {
   case "$1" in
+    py_qa|qa)
+      rm -rf /tmp/loom-py-work-probe-"$1"-* ;;
     launch|deploy)
       rm -rf /tmp/loom-py-work-probe-"$1"-* 
       pkill -9 -f 'tzconvert.py' 2>/dev/null || true
@@ -87,9 +112,29 @@ clean_fixture() {
   esac
 }
 
+# launch runs on the convention ports. A leftover listener there is not
+# loom's to kill (#316) and turns every attempt into a refusal — the first
+# baseline read 2/4 because a server leaked from the previous day's testing
+# still held 8081. Refuse to measure rather than measure the leak.
+# Only the port the staged fixture binds (8081, the Python convention), and
+# only when launch is in this run: 8080 is permanently held by a Docker
+# port-forward on the machine this was written on, and checking it blocked
+# the entire suite over a port nothing here uses.
+if [ -z "${ROLES:-}" ] || printf ',%s,' "$ROLES" | grep -qE ',(launch|deploy),'; then
+  holder=$(lsof -ti "tcp:8081" 2>/dev/null | head -1 || true)
+  if [ -n "$holder" ]; then
+    echo "port 8081 is held by pid $holder ($(ps -o comm= -p "$holder" 2>/dev/null | tr -d ' '))." >&2
+    echo "launch would be refused on every attempt (loom does not kill what it did not start, #316)." >&2
+    echo "Free the port — or confirm it is yours and kill it — then re-run." >&2
+    exit 1
+  fi
+fi
+
 echo "== eval suite: model=$MODEL provider=$PROVIDER commit=$COMMIT"
 while IFS=$'\t' read -r role samples _; do
   case "$role" in ''|\#*) continue ;; esac
+  # ROLES=py_qa,launch re-measures a subset; the baseline keeps the rest.
+  if [ -n "${ROLES:-}" ] && ! printf ',%s,' "$ROLES" | grep -q ",$role,"; then continue; fi
   stage_fixture "$role" "$samples"
   line=$(N="$samples" ROLE="$role" bash bin/probe-node.sh "$samples" "$role" "$MODEL" 2>&1 | grep 'accept rate' || true)
   clean_fixture "$role"
@@ -100,7 +145,16 @@ while IFS=$'\t' read -r role samples _; do
 done < "$SUITE"
 
 if [ "$UPDATE" = "1" ]; then
-  grep -v '^#' "$OUT" > "$BASELINE"
+  if [ -n "${ROLES:-}" ] && [ -f "$BASELINE" ]; then
+    # keep every baseline row for a role this run did not measure
+    { grep -v '^#' "$BASELINE" | while IFS=$'\t' read -r r g n; do
+        printf ',%s,' "$ROLES" | grep -q ",$r," || printf '%s\t%s\t%s\n' "$r" "$g" "$n"
+      done
+      grep -v '^#' "$OUT"
+    } > "$BASELINE.merged" && mv "$BASELINE.merged" "$BASELINE"
+  else
+    grep -v '^#' "$OUT" > "$BASELINE"
+  fi
   { echo "# baseline recorded $(date -u +%Y-%m-%dT%H:%M:%SZ) — model $MODEL, provider $PROVIDER, commit $COMMIT"
     cat "$BASELINE"
   } > "$BASELINE.tmp" && mv "$BASELINE.tmp" "$BASELINE"

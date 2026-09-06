@@ -613,7 +613,7 @@ fn check(g :: graph.SprintGraph) -> MetaspecResult
     check({ id: "g9", phase: graph.Intake, nodes: [{ id: "n1", role: "build", gate: "spec sh \"npm ci && npm run build\"", expand: None, activate_when: "" }], edges: [] }) => Invalid([{ rule: "build-role-requires-compiles-gate", message: "node n1 (role 'build') uses gate 'spec sh \"npm ci && npm run build\"', but build/py_build/ts_build MUST use 'spec compiles' — these roles only have a tool (lex_check/py_check/ts_check) that persists files a real compiler can check; any other gate has no real verifier behind it and can hallucinate an entirely different tech stack (e.g. npm/Node) with no actual project ever written. A 'spec sh' gate IS allowed when it runs one of loom's own verifiers under $LOOM_ROOT/bin/ (e.g. check_imports.py) -- reviewed code in this repository, not a command the model invented." }])
   }
 {
-  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g), rule_consumers_need_a_build(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
+  let violations := list.fold([rule_non_empty(g), rule_all_nodes_have_role(g), rule_all_nodes_gated(g), rule_all_edges_have_handoff(g), rule_dag(g), rule_qa_dominates_demo(g), rule_roles_resolve(g), rule_gates_well_formed(g), rule_expand_gates(g), rule_compiles_gate_matches_role(g), rule_build_role_requires_compiles_gate(g), rule_monetization_handoff_is_human_gated(g), rule_qa_matches_build_language(g), rule_tests_authored_independently(g), rule_test_author_matches_build_language(g), rule_tests_have_an_independent_author(g), rule_consumers_need_a_build(g), rule_sh_gates_run_verifiers_not_scripts(g)], [], fn (acc :: List[Violation], vs :: List[Violation]) -> List[Violation] {
     list.concat(acc, vs)
   })
   if list.is_empty(violations) {
@@ -685,6 +685,56 @@ fn check_for_target(g :: graph.SprintGraph, deploy_allowed :: Bool) -> MetaspecR
 # graph with no build node too, deliberately, because a docs-only sprint has no
 # producer to wait for. That exemption is right there and wrong here: the
 # distinction is whether anything in the graph CONSUMES an implementation.
+# -- Rule: a shell gate may not execute a bare script ------------------------
+# `spec sh "python3 smoke_check.py"`: the Architect invented a smoke-gate node
+# whose gate runs a file no role was told to write. The build mentioned
+# smoke_check.py in prose, so to the Architect it existed; on disk it never
+# did, and the gate failed four times on "can't open file". A gate that runs a
+# script the graph does not produce is an assertion about a file, not a check.
+# Loom's own verifiers ($LOOM_ROOT/bin/...) and the standard runners (pytest,
+# npm test, lex test, docker build) are fine: they exist independently of what
+# the model wrote.
+fn rule_sh_gates_run_verifiers_not_scripts(g :: graph.SprintGraph) -> List[Violation] {
+  list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+    if gates.is_shell_gate(n.gate) and runs_a_bare_script(gates.shell_command(n.gate)) {
+      list.concat(acc, [{ rule: "sh-gate-runs-a-script-nobody-produces", message: str.join(["node ", n.id, " gate runs a script file (", str.slice(gates.shell_command(n.gate), 0, 60), ") that no role in this graph is contracted to write; use a loom verifier ($LOOM_ROOT/bin/...), pytest, npm test, lex test or docker build"], "") }])
+    } else {
+      acc
+    }
+  })
+}
+
+# `python3 x.py`, `python x.py`, `node x.js`, `bash x.sh`, `sh x.sh`, `./x`
+# where x is a plain file rather than a loom verifier or a `-m` module run.
+fn runs_a_bare_script(cmd :: Str) -> Bool {
+  let c := str.trim(cmd)
+  if str.contains(c, "$LOOM_ROOT/bin/") {
+    false
+  } else {
+    let toks := list.filter(str.split(c, " "), fn (t :: Str) -> Bool {
+      not str.is_empty(t)
+    })
+    let interp := match list.head(toks) {
+      Some(t) => t,
+      None => "",
+    }
+    let target := match list.head(list.tail(toks)) {
+      Some(t) => t,
+      None => "",
+    }
+    let is_interp := interp == "python3" or interp == "python" or interp == "node" or interp == "bash" or interp == "sh"
+    if is_interp {
+      if target == "-m" {
+        false
+      } else {
+        str.ends_with(target, ".py") or str.ends_with(target, ".js") or str.ends_with(target, ".ts") or str.ends_with(target, ".sh")
+      }
+    } else {
+      str.starts_with(interp, "./")
+    }
+  }
+}
+
 fn rule_consumers_need_a_build(g :: graph.SprintGraph) -> List[Violation] {
   if not list.is_empty(build_roles_in(g)) {
     []

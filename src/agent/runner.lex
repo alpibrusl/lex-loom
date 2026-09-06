@@ -628,6 +628,45 @@ fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, pro
   verify_shell_on_output_from(cmd, output, scratch, "")
 }
 
+# The failure comes FIRST, and the file listing is capped and last.
+#
+# The listing was added (#291) to diagnose a gate that reported NO TEST FILE
+# while a test file sat right there. It then defeated its own purpose: a work
+# dir of 24 files put ~400 characters of filenames in the header AND again at
+# the head of the gate output, so the 1200-character budget was spent before
+# reaching the reason. A tzc8 denial recorded nothing but the listing, twice,
+# and the actual cause was clipped away entirely -- the same shape as the
+# op_call truncation fixed in #320, on a different path.
+fn without_saw(sx :: Str, saw :: Str) -> Str {
+  if str.is_empty(saw) {
+    sx
+  } else {
+    str.trim(str.replace(sx, str.concat("##GATE_SAW:", saw), ""))
+  }
+}
+
+# A long listing is noise: the question it answers is only ever "was the file
+# there", and 24 names answer it no better than 12.
+fn cap_listing(sx :: Str, n :: Int) -> Str {
+  let names := str.split(str.trim(sx), " ")
+  if list.len(names) <= n {
+    sx
+  } else {
+    let kept := list.fold(names, { out: "", i: 0 }, fn (acc :: { out :: Str, i :: Int }, name :: Str) -> { out :: Str, i :: Int } {
+      if acc.i < n {
+        { out: if str.is_empty(acc.out) {
+          name
+        } else {
+          str.join([acc.out, " ", name], "")
+        }, i: acc.i + 1 }
+      } else {
+        acc
+      }
+    })
+    str.join([kept.out, " … and ", int.to_str(list.len(names) - n), " more"], "")
+  }
+}
+
 fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
@@ -655,11 +694,11 @@ fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_d
         if str.contains(combined, "NO_FILES") {
           Err("gate: node produced no fenced files to check (write your output as fenced code blocks, e.g. ```Dockerfile)")
         } else {
-          Err(str.join(["gate command failed (the gate saw these files: ", if str.is_empty(saw) {
+          Err(str.join(["gate command failed:\n", str.slice(without_saw(combined, saw), 0, 1200), "\n(the gate saw these files: ", if str.is_empty(saw) {
             "none"
           } else {
-            saw
-          }, ")\n", str.slice(combined, 0, 1200)], ""))
+            cap_listing(saw, 12)
+          }, ")"], ""))
         }
       }
     },

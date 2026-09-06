@@ -880,8 +880,60 @@ fn run_layer(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str, cache
 # worker.lex::run_worker process (or several) must be draining the "loom:node"
 # queue against the same DB — this function only produces and waits, it never
 # executes a node itself.
-fn queue_await_timeout_ms() -> Int {
-  600000
+# 600000 was a fixed wall-clock timeout on the whole layer, and real nodes on
+# the local model take 12-25 minutes (tzc8: py-build 25 min, py-test-author
+# 20 min). It is now the IDLE bound -- how long to wait while nothing is in
+# flight for the missing nodes -- and the cap below bounds the total, for a
+# worker that died mid-run. Both are env-configurable because the right value
+# depends on the model behind the proxy.
+fn queue_await_idle_ms() -> [env] Int {
+  env_int("QUEUE_AWAIT_IDLE_MS", 600000)
+}
+
+fn queue_await_cap_ms() -> [env] Int {
+  env_int("QUEUE_AWAIT_CAP_MS", 5400000)
+}
+
+fn env_int(key :: Str, default :: Int) -> [env] Int {
+  match env.get(key) {
+    None => default,
+    Some(v) => match str.to_int(str.trim(v)) {
+      Some(n) => if n > 0 {
+        n
+      } else {
+        default
+      },
+      None => default,
+    },
+  }
+}
+
+# The outcome for one node given what the await found. Pure, so the one rule
+# that matters -- a result that ARRIVED is attested whatever happened to its
+# neighbours -- can be tested without a queue.
+fn outcome_from_await(node_id :: Str, aw :: tr.AwaitOutcome) -> NodeOutcome {
+  let found := list.fold(aw.rows, None, fn (acc :: Option[tr.NodeResultRow], r :: tr.NodeResultRow) -> Option[tr.NodeResultRow] {
+    match acc {
+      Some(_) => acc,
+      None => if r.node_id == node_id {
+        Some(r)
+      } else {
+        None
+      },
+    }
+  })
+  match found {
+    Some(r) => { node_id: node_id, attested: r.accepted == 1, sealed: r.accepted == 1, artifact: r.artifact, reason: r.reason },
+    None => if aw.timed_out {
+      if tr.has(aw.in_flight, node_id) {
+        { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.join(["await gave up after ", int.to_str(aw.waited_ms), "ms while this node's job was STILL RUNNING -- raise QUEUE_AWAIT_CAP_MS, or the worker is dead"], "") }
+      } else {
+        { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.join(["no job in flight and no result after ", int.to_str(aw.waited_ms), "ms (job lost?)"], "") }
+      }
+    } else {
+      { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "no result recorded for this node (job lost?)" }
+    },
+  }
 }
 
 fn queue_await_poll_ms() -> Int {
@@ -934,20 +986,19 @@ fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str
     }
   })
   let awaited := if list.is_empty(to_enqueue) {
-    Ok([])
+    { rows: [], timed_out: false, missing: [], in_flight: [], waited_ms: 0 }
   } else {
-    tr.await_node_results(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_timeout_ms(), queue_await_poll_ms())
+    tr.await_node_results_partial(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_idle_ms(), queue_await_cap_ms(), queue_await_poll_ms())
+  }
+  let __tt := if awaited.timed_out {
+    tr.trail(cfg.db, cfg.id, "queue_await_timed_out", str.join(["{\"phase\":\"", phase_name, "\",\"waited_ms\":", int.to_str(awaited.waited_ms), ",\"missing\":", jv.stringify(JStr(str.join(awaited.missing, ","))), ",\"still_running\":", jv.stringify(JStr(str.join(awaited.in_flight, ","))), ",\"arrived\":", int.to_str(list.len(awaited.rows)), "}"], ""))
+  } else {
+    ()
   }
   let outcomes := list.map(layer, fn (node_id :: Str) -> NodeOutcome {
     match cache_get(cache, node_id) {
       Some(hash) => { node_id: node_id, attested: true, sealed: true, artifact: hash, reason: "" },
-      None => match awaited {
-        Err(m) => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.concat("queue await failed: ", m) },
-        Ok(rows) => match node_result_for(rows, node_id) {
-          None => { node_id: node_id, attested: false, sealed: false, artifact: "", reason: "no result recorded for this node (job lost?)" },
-          Some(r) => { node_id: node_id, attested: r.accepted == 1, sealed: r.accepted == 1, artifact: r.artifact, reason: r.reason },
-        },
-      },
+      None => outcome_from_await(node_id, awaited),
     }
   })
   let new_cache := list.fold(outcomes, cache, fn (acc :: ArtifactCache, o :: NodeOutcome) -> ArtifactCache {

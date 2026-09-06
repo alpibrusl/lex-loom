@@ -1,9 +1,11 @@
+name: lex-loom-litellm
+
 services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "${LITELLM_PORT:-4000}:4000"
     volumes:
       - ${LITELLM_CONFIG:-./config.local.yaml}:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]

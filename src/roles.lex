@@ -88,6 +88,24 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
 # loom's own process. A test can only ever clear the file for its own sprint
 # now. The kill decision still consults every loom registry (the glob in the
 # script), so a leftover from a previous company remains loom's to reclaim.
+# Company end (#338): every server this company launched through run_server
+# is loom's to stop, and nothing stopped them -- tzc13's app held 8081 for an
+# hour after its verdict. Each registry entry is PORT:PID; a PID is killed
+# only while it still holds that port, since a stale PID may by now belong to
+# a stranger. The registry file goes afterwards. Returns how many were
+# stopped.
+fn reap_company_servers(company_id :: Str) -> [proc] Int {
+  let reg := servers_registry_for(company_id)
+  let script := str.join(["REG='", reg, "'\n", "N=0\n", "if [ -f \"$REG\" ]; then\n", "  for L in $(sort -u \"$REG\"); do\n", "    PORT=${L%%:*}; PID=${L##*:}\n", "    [ -n \"$PID\" ] || continue\n", "    if lsof -ti tcp:\"$PORT\" 2>/dev/null | grep -qx \"$PID\"; then kill -9 \"$PID\" 2>/dev/null && N=$((N+1)); fi\n", "  done\n", "  rm -f \"$REG\"\n", "fi\n", "echo $N"], "")
+  match proc.run("bash", ["-c", script]) {
+    Ok(res) => match str.to_int(str.trim(res.stdout)) {
+      Some(n) => n,
+      None => 0,
+    },
+    Err(_) => 0,
+  }
+}
+
 fn servers_registry_for(sprint_id :: Str) -> Str {
   let company := match list.head(str.split(sprint_id, "/")) {
     Some(c) => c,

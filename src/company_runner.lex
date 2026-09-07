@@ -399,6 +399,20 @@ fn proceed(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve
 # "this goal is done", not "the company is done"; a pending feature reactivates
 # it (reverting the stage to Growth, since PMF was already established).
 fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  let result := run_company_loop(db, ccfg, api_max, evolve)
+  let reaped := roles.reap_company_servers(ccfg.id)
+  let __rp := if reaped > 0 {
+    io.print(str.join(["[company] end id=", ccfg.id, " stopped ", int.to_str(reaped), " server(s) this company launched"], ""))
+  } else {
+    ()
+  }
+  result
+}
+
+# The company loop proper; run_company wraps it so that whatever the exit
+# (sunset, dormant, stop_when, max_iterations) the company's launched servers
+# are stopped afterwards (#338).
+fn run_company_loop(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let __save := company.save_company(db, ccfg)
   let stage0 := company.load_stage(db, ccfg.id)
   let resume := company.resume_point(db, ccfg.id)

@@ -46,6 +46,18 @@ def modules(root: Path):
         if stem.startswith("_") or ("test" in stem.lower() and stem != "conftest"):
             continue
         yield stem
+    # Packages too (#351). Since py_check can write into a folder (#341) a
+    # build writes tzconvert/__init__.py + tzconvert/app.py, and tzc15's
+    # iteration 1 sealed one whose __init__ imported a name app.py never
+    # defined: this check never imported the package, the build was
+    # accepted, and QA found the ImportError a phase later.
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        name = d.name
+        if not (d / "__init__.py").is_file():
+            continue
+        if name.startswith("_") or name.startswith(".") or "test" in name.lower():
+            continue
+        yield name
 
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")

@@ -46,5 +46,12 @@ echo "== 5. a Lex suite is not pytest's to collect"
 mkdir -p "$W/lexsuite"; printf 'fn test_shift() -> Result[Unit, Str] {\n  match shift(1700000000, "Asia/Kolkata") {\n    Ok(v) => if v == 1700000000 + 330 * 60 { Ok(()) } else { Err("shift") },\n    Err(e) => Err(e),\n  }\n}\n' > "$W/lexsuite/tzoffset_test.lex"
 if (cd "$W/lexsuite" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a derived Lex suite passes without pytest ever running"; else bad "a Lex-only suite was denied -- the 0/5 Lex test_author baseline"; fi
 
+echo "== 6. a package whose __init__ cannot import is denied at the build, not found by QA"
+mkdir -p "$W/pkgbad/tzconvert" "$W/pkgok/tzconvert"
+printf 'from .app import app, VALID_FORMATS\n' > "$W/pkgbad/tzconvert/__init__.py"; printf 'app = 1\n' > "$W/pkgbad/tzconvert/app.py"
+printf 'from .app import app\n' > "$W/pkgok/tzconvert/__init__.py"; printf 'app = 1\n' > "$W/pkgok/tzconvert/app.py"
+if (cd "$W/pkgbad" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then bad "a package importing a name its module never defines was accepted -- tzc15 iter 1 sealed exactly this"; else ok "a package that cannot be imported is denied where it was written"; fi
+if (cd "$W/pkgok" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then ok "a healthy package imports cleanly"; else bad "a healthy package was denied"; fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

@@ -197,8 +197,53 @@ fn test_py_check_writes_into_a_subdirectory() -> [env, io, net, proc, random, fs
   }
 }
 
+# #345: the Lex build eval lost 2/5 to probe.lex/probe1.lex -- scratch files
+# that never compiled, left in a work dir whose compiles gate checks every
+# file. lex_check can now remove a file, and the denial says so.
+fn test_lex_check_can_delete_a_file_it_wrote() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-ldel/", crypto.random_str_hex(4))
+  let tool := lexskill.make_lex_check_tool("/tmp/loom-lexcheck-evidence-test.json", sprint)
+  let __w := tool.execute(JObj([("filename", JStr("probe.lex")), ("code", JStr("fn p() -> Int {\n  1\n}\n"))]))
+  let d := lexskill.work_dir(sprint)
+  let before := match proc.run("bash", ["-c", str.join(["ls -A '", d, "' 2>/dev/null | tr '\\n' ' '"], "")]) {
+    Ok(r) => r.stdout,
+    Err(_) => "",
+  }
+  let __d := tool.execute(JObj([("filename", JStr("probe.lex")), ("code", JStr("")), ("delete", JBool(true))]))
+  let after := match proc.run("bash", ["-c", str.join(["ls -A '", d, "' 2>/dev/null | tr '\\n' ' '"], "")]) {
+    Ok(r) => r.stdout,
+    Err(_) => "",
+  }
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", d, "'"], "")])
+  if not str.contains(before, "probe.lex") {
+    Err("setup failed: the lex_check write did not land, so the delete proved nothing")
+  } else {
+    if str.contains(after, "probe.lex") {
+      Err("lex_check delete:true left the file on disk -- the Lex build still cannot recover from a bad probe")
+    } else {
+      Ok(())
+    }
+  }
+}
+
+fn test_compile_denial_names_the_way_out() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-lprobe/", crypto.random_str_hex(4))
+  let d := lexskill.work_dir(sprint)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "' && printf 'fn main() -> Int {\\n  1\\n}\\n' > '", d, "/main.lex' && printf 'fn broken( {\\n' > '", d, "/probe.lex'"], "")])
+  let r := runner.verify_compiles_at("", "build", sprint)
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", d, "'"], "")])
+  match r {
+    Ok(_) => Err("a work dir holding a broken probe.lex passed the compiles gate"),
+    Err(msg) => if str.contains(msg, "delete:true") {
+      Ok(())
+    } else {
+      Err(str.concat("the compile denial does not tell the builder it may delete the probe: ", str.slice(msg, 0, 200)))
+    },
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

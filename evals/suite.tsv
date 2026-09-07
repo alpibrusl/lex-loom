@@ -3,3 +3,6 @@ py_test_author	5	the derived-values gate; the most frequently denied node across
 py_build	5	spec compiles; where real code defects surface
 py_qa	5	json-verdict-pass; verifies the build's own files since #323
 launch	4	json-ok-true; the whole #312/#316/#320/#321 chain lands here
+build	5	spec compiles via lex_check; the Lex half of the pipeline had no baseline
+test_author	5	the derived-values gate on .lex tests
+qa	5	json-verdict-pass on a Lex module; lex_check + run_all on disk

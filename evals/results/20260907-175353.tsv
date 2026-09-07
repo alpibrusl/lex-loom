@@ -1,0 +1,7 @@
+# model	qwen3.8:27b-mlx
+# provider	default
+# commit	7979ffd
+# date	2026-09-07T15:53:53Z
+build	3	5
+test_author	0	5
+qa	4	5

@@ -54,9 +54,126 @@ OUT="evals/results/$STAMP.tsv"
 # measures the fixture's absence rather than the role: an earlier launch probe
 # scored 2/4 in an empty work dir, and the two "accepts" were a stale server
 # from a previous attempt answering on the port.
+# The Lex roles get a Lex-sized task: a pure module with a fixed offset
+# table. Small enough for a 27B model to finish inside the step budget, and
+# every expected value in a test is DERIVED from the table (shift(0,
+# "Asia/Kolkata") = 19800), so the derived-values gate has teeth here too.
+LEX_TASK='Write a Lex module tzoffset.lex exposing `fn offset_minutes(tz :: Str) -> Result[Int, Str]` that returns the fixed UTC offset in minutes for exactly these zones: "UTC" -> 0, "Asia/Kolkata" -> 330, "Asia/Kathmandu" -> 345, "America/New_York" -> -300 (standard time), and Err("unknown timezone") for anything else; and `fn shift(epoch :: Int, tz :: Str) -> Result[Int, Str]` that adds the zone offset in SECONDS to a unix epoch (Err propagates). Tests must cover every zone, an unknown zone, and shift on a non-zero epoch.'
+task_for() {
+  case "$1" in
+    build|test_author|qa) printf '%s' "$LEX_TASK" ;;
+    *) printf '' ;;
+  esac
+}
+
 stage_fixture() {
   case "$1" in
-    py_qa|qa)
+    qa)
+      # Lex QA runs lex_check over the work dir and run_all on the test
+      # file, so the fixture must be a real module that satisfies LEX_TASK.
+      for i in $(seq 1 "$2"); do
+        d="/tmp/loom-lex-work-probe-$1-$i"
+        mkdir -p "$d"
+        cat > "$d/tzoffset.lex" <<'LEX'
+# tzoffset: fixed UTC offsets for a small table of IANA zones.
+fn offset_minutes(tz :: Str) -> Result[Int, Str] {
+  if tz == "UTC" {
+    Ok(0)
+  } else {
+    if tz == "Asia/Kolkata" {
+      Ok(330)
+    } else {
+      if tz == "Asia/Kathmandu" {
+        Ok(345)
+      } else {
+        if tz == "America/New_York" {
+          Ok(-300)
+        } else {
+          Err("unknown timezone")
+        }
+      }
+    }
+  }
+}
+
+fn shift(epoch :: Int, tz :: Str) -> Result[Int, Str] {
+  match offset_minutes(tz) {
+    Ok(m) => Ok(epoch + m * 60),
+    Err(e) => Err(e),
+  }
+}
+LEX
+        cat > "$d/tzoffset_test.lex" <<'LEX'
+import "./tzoffset" as tz
+
+import "std.list" as list
+
+fn expect_offset(zone :: Str, want :: Int) -> Result[Unit, Str] {
+  match tz.offset_minutes(zone) {
+    Ok(m) => if m == want {
+      Ok(())
+    } else {
+      Err(zone)
+    },
+    Err(e) => Err(e),
+  }
+}
+
+fn test_utc() -> Result[Unit, Str] {
+  expect_offset("UTC", 0)
+}
+
+fn test_kolkata() -> Result[Unit, Str] {
+  expect_offset("Asia/Kolkata", 330)
+}
+
+fn test_kathmandu() -> Result[Unit, Str] {
+  expect_offset("Asia/Kathmandu", 345)
+}
+
+fn test_new_york() -> Result[Unit, Str] {
+  expect_offset("America/New_York", -300)
+}
+
+fn test_unknown_is_err() -> Result[Unit, Str] {
+  match tz.offset_minutes("Nowhere/Land") {
+    Ok(_) => Err("unknown zone accepted"),
+    Err(_) => Ok(()),
+  }
+}
+
+fn test_shift_kolkata() -> Result[Unit, Str] {
+  match tz.shift(1700000000, "Asia/Kolkata") {
+    Ok(v) => if v == 1700000000 + 330 * 60 {
+      Ok(())
+    } else {
+      Err("shift wrong")
+    },
+    Err(e) => Err(e),
+  }
+}
+
+fn suite() -> List[Result[Unit, Str]] {
+  [test_utc(), test_kolkata(), test_kathmandu(), test_new_york(), test_unknown_is_err(), test_shift_kolkata()]
+}
+
+fn run_all() -> Unit {
+  let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
+    match r {
+      Ok(_) => n,
+      Err(_) => n + 1,
+    }
+  })
+  if failures == 0 {
+    ()
+  } else {
+    let __force_fail := 1 / 0
+    ()
+  }
+}
+LEX
+      done ;;
+    py_qa)
       # QA verifies the build's files on disk (#323) against the probe's
       # TASK, so the fixture has to actually satisfy that task. The first
       # version was a bare convert() with one test, and QA correctly refused
@@ -251,7 +368,9 @@ PY
 
 clean_fixture() {
   case "$1" in
-    py_qa|qa)
+    qa)
+      rm -rf /tmp/loom-lex-work-probe-"$1"-* ;;
+    py_qa)
       rm -rf /tmp/loom-py-work-probe-"$1"-* ;;
     launch|deploy)
       rm -rf /tmp/loom-py-work-probe-"$1"-* 
@@ -284,7 +403,12 @@ while IFS=$'\t' read -r role samples _; do
   # ROLES=py_qa,launch re-measures a subset; the baseline keeps the rest.
   if [ -n "${ROLES:-}" ] && ! printf ',%s,' "$ROLES" | grep -q ",$role,"; then continue; fi
   stage_fixture "$role" "$samples"
-  line=$(N="$samples" ROLE="$role" bash bin/probe-node.sh "$samples" "$role" "$MODEL" 2>&1 | grep 'accept rate' || true)
+  task=$(task_for "$role")
+  if [ -n "$task" ]; then
+    line=$(N="$samples" ROLE="$role" TASK="$task" bash bin/probe-node.sh "$samples" "$role" "$MODEL" 2>&1 | grep 'accept rate' || true)
+  else
+    line=$(N="$samples" ROLE="$role" bash bin/probe-node.sh "$samples" "$role" "$MODEL" 2>&1 | grep 'accept rate' || true)
+  fi
   clean_fixture "$role"
   got=$(printf '%s' "$line" | sed -n 's/.*accept rate: \([0-9]*\)\/\([0-9]*\).*/\1/p')
   got="${got:-0}"

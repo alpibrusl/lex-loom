@@ -149,6 +149,12 @@ def collection_failure(root: Path) -> str:
     collection, 7 tests never ran, and QA discovered it a phase later. The
     author's own gate can say so first."""
     import subprocess
+    # pytest's ABSENCE is the preflight's finding, not this check's: on a CI
+    # runner without it, `python -m pytest` exits non-zero for every suite
+    # and this check denied all of them while the same suites passed locally.
+    probe = subprocess.run([sys.executable, "-c", "import pytest"], capture_output=True)
+    if probe.returncode != 0:
+        return ""
     try:
         r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "."],
                            cwd=str(root), capture_output=True, text=True, timeout=120)

@@ -366,10 +366,16 @@ fn py_name_error(filename :: Str) -> [proc] Str {
 # accumulate so multi-file projects build, and the runner recovers them as the
 # node artifact. Without this gate a build agent can emit a prose plan that the
 # build node accepts; py_compile forces real, parseable Python.
+#
+# The file's parent directory is created too, and a failed write is reported
+# as such (#340). tzc14's build wrote tests/test_convert.py, the write failed
+# silently on the missing folder, py_compile then said "No such file", and the
+# builder concluded "directory creation doesn't persist" -- and spent the rest
+# of its 124 calls on bootstrap/probe/setup scripts it had no way to run.
 fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := py_work_dir(sprint_id)
   let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", []), s.optional(s.required_bool("delete"))] }
-  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. To REMOVE a file you wrote (a probe, a scratch script, a module that will not import), call with delete:true and no code. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. To REMOVE a file you wrote (a probe, a scratch script, a module that will not import), call with delete:true and no code. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Files PERSIST in one shared work directory across all your calls (write each file once; a path like tests/test_x.py creates its folder). Nothing in this role can RUN a script: do not write bootstrap, probe, setup or runner scripts — the test-author and QA run pytest against this directory later. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "app.py",
@@ -393,24 +399,26 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       if not str.is_empty(name_err) {
         Ok(JObj([("ok", JStr("false")), ("output", JStr(name_err))]))
       } else {
-        match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+        match proc.run("bash", ["-c", str.join(["mkdir -p '", dir, "' \"$(dirname '", path, "')\""], "")]) {
           Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-          Ok(_) => {
-            let __w := io.write(path, code)
-            let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-            match proc.run("bash", ["-c", cmd]) {
-              Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-              Ok(r) => {
-                let combined := str.concat(r.stdout, r.stderr)
-                let ok := str.contains(combined, "##EXIT:0")
-                let __ev := record_lex_check_evidence(evidence_path, filename, ok)
-                Ok(JObj([("ok", JStr(if ok {
-                  "true"
-                } else {
-                  "false"
-                })), ("output", JStr(combined))]))
-              },
-            }
+          Ok(_) => match io.write(path, code) {
+            Err(werr) => Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["could not write ", filename, ": ", werr], "")))])),
+            Ok(_) => {
+              let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+              match proc.run("bash", ["-c", cmd]) {
+                Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+                Ok(r) => {
+                  let combined := str.concat(r.stdout, r.stderr)
+                  let ok := str.contains(combined, "##EXIT:0")
+                  let __ev := record_lex_check_evidence(evidence_path, filename, ok)
+                  Ok(JObj([("ok", JStr(if ok {
+                    "true"
+                  } else {
+                    "false"
+                  })), ("output", JStr(combined))]))
+                },
+              }
+            },
           },
         }
       }

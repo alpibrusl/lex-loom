@@ -43,7 +43,7 @@ fn deliverables_for(role :: Str) -> List[Deliverable] {
       [{ patterns: ["*_test.lex"], exclude: [], what: "a Lex test file (*_test.lex)" }]
     } else {
       if role == "py_build" {
-        [{ patterns: ["*.py"], exclude: ["test_*.py", "*_test.py", "conftest.py", "_*.py"], what: "a Python module (not a test, not a scratch _*.py)" }]
+        [{ patterns: ["*.py"], exclude: ["test_*.py", "*_test.py", "conftest.py", "_*.py", "__init__.py"], what: "a Python module (not a test, not a scratch _*.py, not a bare __init__.py)" }]
       } else {
         if role == "py_test_author" {
           [{ patterns: ["test_*.py", "*_test.py"], exclude: [], what: "a pytest file (test_*.py or *_test.py)" }]
@@ -67,15 +67,22 @@ fn has_contract(role :: Str) -> Bool {
   not list.is_empty(deliverables_for(role))
 }
 
-# `ls` over the patterns, minus the exclusions, must find something. Deliberately
-# the dullest check that can express the contract: no language runtime, no
-# parsing, nothing that can itself fail for an interesting reason.
+# A walk over the patterns, minus the exclusions, must find something.
+# Deliberately the dullest check that can express the contract: no language
+# runtime, no parsing, nothing that can itself fail for an interesting reason.
+# The walk is RECURSIVE by basename (#348): once py_check could write into a
+# folder (#341) the builder wrote a real package, tzconvert/app.py and
+# tests/test_convert.py, and the top-level `ls *.py` this used to be found
+# "no Python module" three attempts running. __pycache__ is skipped so a
+# stale .pyc tree never satisfies a contract.
 fn check_cmd(d :: Deliverable) -> Str {
-  let pats := str.join(d.patterns, " ")
+  let names := str.join(list.map(d.patterns, fn (pat :: Str) -> Str {
+    str.join(["-name '", pat, "'"], "")
+  }), " -o ")
   let filters := list.fold(d.exclude, "", fn (acc :: Str, e :: Str) -> Str {
     str.join([acc, " | grep -v -e ", shell_glob_to_grep(e)], "")
   })
-  str.join(["n=$(ls -1 ", pats, " 2>/dev/null", filters, " | wc -l); [ \"$n\" -gt 0 ]"], "")
+  str.join(["n=$(find . -type f -not -path '*/__pycache__/*' -not -path '*/node_modules/*' \\( ", names, " \\) 2>/dev/null | sed 's#.*/##'", filters, " | wc -l); [ \"$n\" -gt 0 ]"], "")
 }
 
 # `test_*.py` -> `'^test_.*\.py$'`. Only `*` is meaningful in these patterns.

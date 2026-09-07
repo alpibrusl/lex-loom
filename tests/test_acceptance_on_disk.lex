@@ -55,7 +55,27 @@ fn cleanup(sprint :: Str) -> [proc] Unit {
 }
 
 # The tzc13 shape exactly: files on disk, NO fenced prose, tests that pass.
+# The real command runs pytest, so this case is only meaningful where pytest
+# exists; the CI runner has none (#335 defers that to the preflight). Skip
+# honestly there rather than fail on a missing tool -- the two other cases
+# and the sabotages hold without it.
+fn host_has_pytest() -> [proc] Bool {
+  match proc.run("python3", ["-c", "import pytest"]) {
+    Ok(r) => r.code == 0,
+    Err(_) => false,
+  }
+}
+
 fn test_a_passing_build_on_disk_passes_acceptance_with_no_prose() -> [io, proc, random] Result[Unit, Str] {
+  if not host_has_pytest() {
+    io.println("skip acceptance-on-disk pass case: no pytest on this host (the preflight reports that)")
+    Ok(())
+  } else {
+    passing_build_passes_acceptance()
+  }
+}
+
+fn passing_build_passes_acceptance() -> [io, proc, random] Result[Unit, Str] {
   let sprint := str.concat("t-acc-pass/", crypto.random_str_hex(4))
   let __s := seed(sprint, "def add(a, b):\n    return a + b\n", "from app import add\ndef test_add():\n    assert add(2, 2) == 4\n")
   let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-pass-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))

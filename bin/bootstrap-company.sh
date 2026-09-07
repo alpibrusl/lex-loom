@@ -262,8 +262,14 @@ if [ "${GITHUB_PUBLISH:-}" = "1" ] && [ -n "$CREPO" ]; then
 fi
 
 # ── Map [policy] → run-company.sh env vars.
-STOP_WHEN=""
-[ -n "$CBUDGET" ] && STOP_WHEN="spend ge ${CBUDGET}.00"   # rough guard (cost is an estimate; EUR≈USD)
+# An explicit STOP_WHEN in the environment wins over the budget-derived
+# default: STOP_WHEN='verdict-passed' makes a passing verdict END the
+# company instead of feeding the strategist another revision (tzc14/tzc15
+# both passed an iteration and then failed the hardening goals it invented).
+if [ -z "${STOP_WHEN:-}" ]; then
+  STOP_WHEN=""
+  [ -n "$CBUDGET" ] && STOP_WHEN="spend ge ${CBUDGET}.00"   # rough guard (cost is an estimate; EUR≈USD)
+fi
 
 echo "[bootstrap] company='$CID' path='$CPATH' workspace='$DIR' (${copied} skeleton files laid down)"
 echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<none>}' MODEL=$CMODEL"

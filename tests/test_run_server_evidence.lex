@@ -310,6 +310,53 @@ fn test_wiping_another_registry_does_not_orphan_a_companys_server() -> [env, net
   }
 }
 
+# #338: tzc13's app held 8081 an hour after the verdict. Company end stops
+# what the company launched, and only that: a registered PID that no longer
+# holds its port is somebody else's now and is left alone.
+fn test_company_end_stops_the_servers_it_launched() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-tzcr.pids; lsof -ti tcp:8791 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "tzcr/iter-1")
+  let first := match tool.execute(JObj([("cmd", JStr(serve_cmd(8791))), ("port", JInt(8791)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false))]),
+    Ok(r) => r,
+  }
+  let reaped := roles.reap_company_servers("tzcr")
+  let after := match proc.run("bash", ["-c", "sleep 1; H=$(lsof -ti tcp:8791 2>/dev/null | head -1); [ -f /tmp/loom-servers-tzcr.pids ] && R=present || R=gone; echo \"holder=$H registry=$R\""]) {
+    Ok(r) => str.trim(r.stdout),
+    Err(e) => e,
+  }
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8791 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers-tzcr.pids"])
+  match get_bool(first, "ok") {
+    Some(true) => if after == "holder= registry=gone" and reaped > 0 {
+      Ok(())
+    } else {
+      Err(str.join(["company end left its server running -- the tzc13 leftover: ", after, " reaped=", int.to_str(reaped)], ""))
+    },
+    _ => Err("the launch did not come up, so this proves nothing"),
+  }
+}
+
+fn test_company_end_leaves_a_pid_that_no_longer_holds_its_port() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let started := match proc.run("bash", ["-c", "rm -f /tmp/loom-servers-tzcs.pids; nohup sleep 60 >/dev/null 2>&1 & echo \"8792:$!\" > /tmp/loom-servers-tzcs.pids; echo $!"]) {
+    Ok(r) => str.trim(r.stdout),
+    Err(_) => "",
+  }
+  let reaped := roles.reap_company_servers("tzcs")
+  let alive := match proc.run("bash", ["-c", str.join(["kill -0 ", started, " 2>/dev/null && echo yes || echo no; kill -9 ", started, " 2>/dev/null; true"], "")]) {
+    Ok(r) => str.trim(r.stdout),
+    Err(_) => "?",
+  }
+  if str.is_empty(started) {
+    Err("could not start the bystander process, so this proves nothing")
+  } else {
+    if alive == "yes" and reaped == 0 {
+      Ok(())
+    } else {
+      Err(str.join(["company end killed a process that no longer held its registered port (PID reuse would hit a stranger): alive=", alive, " reaped=", int.to_str(reaped)], ""))
+    }
+  }
+}
+
 fn test_each_company_has_its_own_registry_file() -> Result[Unit, Str] {
   let a := roles.servers_registry_for("tzc12/iter-2")
   let b := roles.servers_registry_for("sprint-runserver-test")
@@ -325,7 +372,7 @@ fn test_each_company_has_its_own_registry_file() -> Result[Unit, Str] {
 }
 
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_each_company_has_its_own_registry_file()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_company_end_stops_the_servers_it_launched(), test_company_end_leaves_a_pid_that_no_longer_holds_its_port(), test_each_company_has_its_own_registry_file()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

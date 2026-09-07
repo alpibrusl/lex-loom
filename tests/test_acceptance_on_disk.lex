@@ -61,14 +61,14 @@ fn cleanup(sprint :: Str) -> [proc] Unit {
 # and the sabotages hold without it.
 fn host_has_pytest() -> [proc] Bool {
   match proc.run("python3", ["-c", "import pytest"]) {
-    Ok(r) => r.code == 0,
+    Ok(r) => r.exit_code == 0,
     Err(_) => false,
   }
 }
 
 fn test_a_passing_build_on_disk_passes_acceptance_with_no_prose() -> [io, proc, random] Result[Unit, Str] {
   if not host_has_pytest() {
-    io.println("skip acceptance-on-disk pass case: no pytest on this host (the preflight reports that)")
+    io.print("skip acceptance-on-disk pass case: no pytest on this host (the preflight reports that)\n")
     Ok(())
   } else {
     passing_build_passes_acceptance()

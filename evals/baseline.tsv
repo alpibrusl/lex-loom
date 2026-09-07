@@ -1,8 +1,8 @@
-# baseline recorded 2026-09-07T18:30:13Z — model qwen3.8:27b-mlx, provider default, commit 7979ffd
+# baseline recorded 2026-09-07T19:19:25Z — model qwen3.8:27b-mlx, provider default, commit 752e10d
 py_test_author	5	5
 py_build	5	5
 launch	4	4
 py_qa	5	5
-build	3	5
-test_author	0	5
 qa	4	5
+build	4	5
+test_author	5	5

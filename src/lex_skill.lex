@@ -287,10 +287,14 @@ fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
 
 # Writes `code` to work_dir/<filename> and type-checks it. Returns structured
 # errors so the model can repair. Files accumulate so imports resolve.
+# `delete:true` removes a file (#345): the Lex build eval lost 2/5 to
+# probe.lex/probe1.lex -- scratch experiments that never compiled, left in a
+# work dir whose `spec compiles` gate compiles every file. py_check has had
+# this since #333; the Lex builder had no way out at all.
 fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := work_dir(sprint_id)
-  let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
-  t.define("lex_check", "Write `code` to <filename> and run `lex check` on it, in one step. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", []), s.optional(s.required_bool("delete"))] }
+  t.define("lex_check", "Write `code` to <filename> and run `lex check` on it, in one step. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Returns {ok:'true'|'false', output:<json errors or 'ok'>}. To REMOVE a file you wrote (a probe, a scratch experiment), call with delete:true and no code — every .lex file left in the work dir must compile or the build is denied. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "main.lex",
@@ -300,34 +304,45 @@ fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       _ => "",
     }
     let path := str.join([dir, "/", filename], "")
-    match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
-      Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-      Ok(_) => {
-        let __w := io.write(path, code)
-        let cmd := str.join(["${LEX:-lex} check ", path, " 2>&1; echo '##EXIT:'$?"], "")
-        match proc.run("bash", ["-c", cmd]) {
-          Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-          Ok(r) => {
-            let combined := str.concat(r.stdout, r.stderr)
-            let ok := str.contains(combined, "##EXIT:0")
-            let out_with_hints := if ok {
-              combined
-            } else {
-              str.concat(combined, lex_error_hints(combined))
-            }
-            let __ev := if str.is_empty(evidence_path) {
-              ()
-            } else {
-              record_lex_check_evidence(evidence_path, filename, ok)
-            }
-            Ok(JObj([("ok", JStr(if ok {
-              "true"
-            } else {
-              "false"
-            })), ("output", JStr(out_with_hints))]))
-          },
-        }
-      },
+    let wants_delete := match jv.get_field(args, "delete") {
+      Some(JBool(b)) => b,
+      _ => false,
+    }
+    if wants_delete {
+      match proc.run("bash", ["-c", str.join(["rm -f '", path, "'"], "")]) {
+        Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+        Ok(_) => Ok(JObj([("ok", JStr("true")), ("output", JStr(str.concat("deleted ", filename)))])),
+      }
+    } else {
+      match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+        Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+        Ok(_) => {
+          let __w := io.write(path, code)
+          let cmd := str.join(["${LEX:-lex} check ", path, " 2>&1; echo '##EXIT:'$?"], "")
+          match proc.run("bash", ["-c", cmd]) {
+            Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+            Ok(r) => {
+              let combined := str.concat(r.stdout, r.stderr)
+              let ok := str.contains(combined, "##EXIT:0")
+              let out_with_hints := if ok {
+                combined
+              } else {
+                str.concat(combined, lex_error_hints(combined))
+              }
+              let __ev := if str.is_empty(evidence_path) {
+                ()
+              } else {
+                record_lex_check_evidence(evidence_path, filename, ok)
+              }
+              Ok(JObj([("ok", JStr(if ok {
+                "true"
+              } else {
+                "false"
+              })), ("output", JStr(out_with_hints))]))
+            },
+          }
+        },
+      }
     }
   })
 }

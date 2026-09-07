@@ -149,6 +149,14 @@ def collection_failure(root: Path) -> str:
     collection, 7 tests never ran, and QA discovered it a phase later. The
     author's own gate can say so first."""
     import subprocess
+    # A Lex suite is collected by `lex run <file> run_all`, not by pytest.
+    # The Lex test_author eval baseline read 0/5 because every attempt was
+    # denied "no tests collected" by a pytest run over a directory holding
+    # only .lex files (#344). Only a suite with Python test files is pytest's.
+    py_tests = [p for p in root.rglob("*.py")
+                if "test" in p.name.lower() and not p.name.startswith("_")]
+    if not py_tests:
+        return ""
     # pytest's ABSENCE is the preflight's finding, not this check's: on a CI
     # runner without it, `python -m pytest` exits non-zero for every suite
     # and this check denied all of them while the same suites passed locally.
@@ -202,16 +210,27 @@ def main() -> int:
     print("loop will change working code to satisfy it. Two ways to fix this —")
     print("either is accepted:")
     print("")
-    print("  1. COMPUTE the expected value where you assert it:")
-    print("       assert body[\"result\"] == datetime(")
-    print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
-    print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
-    print("")
-    print("  2. PIN the literal to a derivation ONCE, then reuse it freely:")
-    print("       assert \"2025-07-11T08:00:00-04:00\" == datetime(")
-    print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
-    print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
-    print("")
+    # The hint has to be in the author's language: a .lex author shown a
+    # Python datetime derivation has nothing to copy (#344).
+    if any(str(f).endswith(".lex") for f, *_ in findings):
+        print("  1. COMPUTE the expected value where you assert it:")
+        print("       if v == 1700000000 + 330 * 60 { Ok(()) } else { Err(\"shift\") }")
+        print("")
+        print("  2. PIN the literal to a derivation ONCE, then reuse it freely:")
+        print("       let expected := 1700000000 + 330 * 60")
+        print("       if expected == 1700019800 { ... }   # the pin; reuse `expected` below")
+        print("")
+    else:
+        print("  1. COMPUTE the expected value where you assert it:")
+        print("       assert body[\"result\"] == datetime(")
+        print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
+        print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
+        print("")
+        print("  2. PIN the literal to a derivation ONCE, then reuse it freely:")
+        print("       assert \"2025-07-11T08:00:00-04:00\" == datetime(")
+        print("           2025, 7, 11, 12, tzinfo=ZoneInfo(\"UTC\")")
+        print("       ).astimezone(ZoneInfo(\"America/New_York\")).isoformat()")
+        print("")
     print("Both make a wrong paste fail at the ORACLE, naming your expected value,")
     print("instead of the implementation being blamed for your typo.")
     return 1

@@ -833,7 +833,7 @@ fn verify_compiles_at(ws_root :: Str, kind :: Str, sprint_id :: Str) -> [proc] R
               if str.contains(combined, "NO_WORKDIR") {
                 Err("build produced no files (work dir missing)")
               } else {
-                Err(str.concat("a source file failed to compile:\n", combined))
+                Err(str.join(["a source file failed to compile:\n", combined, "\nEvery source file in the work dir must compile. If a failing file is a scratch probe you no longer need, REMOVE it: call the check tool with that filename and delete:true."], ""))
               }
             }
           }

@@ -148,13 +148,13 @@ fn test_a_command_that_starts_nothing_is_refused() -> [env, net, io, proc, fs_wr
 # if the setup server never came up there is nothing to protect, so the test
 # reports that rather than claiming a pass it has not earned.
 fn test_a_foreign_process_on_the_port_is_not_killed() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
-  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-sprint-a.pids; lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true"])
   let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-a")
   let started := match tool.execute(JObj([("cmd", JStr("cd /tmp && python3 -m http.server 8795")), ("port", JInt(8795)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
     Err(_) => JObj([("ok", JBool(false))]),
     Ok(r) => r,
   }
-  let __forget := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids"])
+  let __forget := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-sprint-a.pids"])
   let out := match tool.execute(JObj([("cmd", JStr("cd /tmp && python3 -m http.server 8795")), ("port", JInt(8795)), ("endpoint", JStr("/")), ("timeout_s", JInt(5))])) {
     Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
     Ok(r) => r,
@@ -163,7 +163,7 @@ fn test_a_foreign_process_on_the_port_is_not_killed() -> [env, net, io, proc, fs
     Err(_) => "GONE",
     Ok(r) => str.trim(r.stdout),
   }
-  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8795 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers-sprint-a.pids"])
   match get_bool(started, "ok") {
     Some(true) => if survived == "ALIVE" {
       match get_bool(out, "ok") {
@@ -199,7 +199,7 @@ fn test_a_foreign_process_on_the_port_is_not_killed() -> [env, net, io, proc, fs
 # So the two calls below deliberately share a port with no cleanup between
 # them, which is exactly the state a retrying launch node is in.
 fn test_loom_can_restart_on_a_port_it_started() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
-  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-sprint-restart.pids; lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true"])
   let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-restart")
   let first := match tool.execute(JObj([("cmd", JStr(serve_cmd(8796))), ("port", JInt(8796)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
     Err(_) => JObj([("ok", JBool(false))]),
@@ -209,7 +209,7 @@ fn test_loom_can_restart_on_a_port_it_started() -> [env, net, io, proc, fs_write
     Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
     Ok(r) => r,
   }
-  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8796 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers-sprint-restart.pids"])
   match get_bool(first, "ok") {
     Some(true) => match get_bool(second, "ok") {
       Some(true) => Ok(()),
@@ -226,7 +226,7 @@ fn test_loom_can_restart_on_a_port_it_started() -> [env, net, io, proc, fs_write
 # that loom did not start" -- eleven of fifteen attempts in tzc9, all on loom's
 # own earlier server.
 fn test_a_failed_launch_frees_its_port() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
-  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers.pids; lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-sprint-fail-frees.pids; lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true"])
   let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-fail-frees")
   let out := match tool.execute(JObj([("cmd", JStr(serve_cmd(8797))), ("port", JInt(8797)), ("endpoint", JStr("/does-not-exist")), ("timeout_s", JInt(4))])) {
     Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
@@ -236,7 +236,7 @@ fn test_a_failed_launch_frees_its_port() -> [env, net, io, proc, fs_write] Resul
     Err(_) => "HELD",
     Ok(r) => str.trim(r.stdout),
   }
-  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers.pids"])
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8797 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers-sprint-fail-frees.pids"])
   match get_bool(out, "ok") {
     Some(true) => Err("a 404 on the endpoint was accepted as a launch"),
     _ => if held == "FREE" {
@@ -285,8 +285,47 @@ fn run_with(port :: Int, cmd :: Str, endpoint :: Str, method :: Str, body :: Str
   out
 }
 
+# The tzc12 failure, exactly: a company's server is registered; SOMEONE ELSE'S
+# registry file is wiped (a test suite, another company); the company's next
+# launch must still reclaim its own port.
+fn test_wiping_another_registry_does_not_orphan_a_companys_server() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __clear := proc.run("bash", ["-c", "rm -f /tmp/loom-servers-tzcx.pids /tmp/loom-servers-other.pids; lsof -ti tcp:8790 2>/dev/null | xargs kill -9 2>/dev/null || true"])
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "tzcx/iter-1")
+  let first := match tool.execute(JObj([("cmd", JStr(serve_cmd(8790))), ("port", JInt(8790)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false))]),
+    Ok(r) => r,
+  }
+  let __other := proc.run("bash", ["-c", "echo '8790:1' > /tmp/loom-servers-other.pids; rm -f /tmp/loom-servers-other.pids"])
+  let second := match tool.execute(JObj([("cmd", JStr(serve_cmd(8790))), ("port", JInt(8790)), ("endpoint", JStr("/")), ("timeout_s", JInt(8))])) {
+    Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
+    Ok(r) => r,
+  }
+  let __cleanup := proc.run("bash", ["-c", "lsof -ti tcp:8790 2>/dev/null | xargs kill -9 2>/dev/null || true; rm -f /tmp/loom-servers-tzcx.pids"])
+  match get_bool(first, "ok") {
+    Some(true) => match get_bool(second, "ok") {
+      Some(true) => Ok(()),
+      _ => Err(str.concat("the company could not reclaim its own port after another registry was wiped: ", get_str(second, "error"))),
+    },
+    _ => Err("the first launch did not come up, so this proves nothing"),
+  }
+}
+
+fn test_each_company_has_its_own_registry_file() -> Result[Unit, Str] {
+  let a := roles.servers_registry_for("tzc12/iter-2")
+  let b := roles.servers_registry_for("sprint-runserver-test")
+  if a == b {
+    Err("two different companies share a registry file, so one's tests can erase the other's servers")
+  } else {
+    if str.contains(a, "tzc12") and not str.contains(a, "iter-2") {
+      Ok(())
+    } else {
+      Err(str.concat("the registry is not keyed by company: ", a))
+    }
+  }
+}
+
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_each_company_has_its_own_registry_file()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

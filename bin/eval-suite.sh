@@ -256,7 +256,7 @@ clean_fixture() {
     launch|deploy)
       rm -rf /tmp/loom-py-work-probe-"$1"-* 
       pkill -9 -f 'tzconvert.py' 2>/dev/null || true
-      rm -f /tmp/loom-servers.pids ;;
+      rm -f /tmp/loom-servers-probe-*.pids ;;
   esac
 }
 

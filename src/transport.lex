@@ -269,6 +269,22 @@ type AwaitOutcome = { rows :: List[NodeResultRow], timed_out :: Bool, missing ::
 
 type JobIdRow = { id :: Int }
 
+type MaxIdRow = { n :: Int }
+
+# The newest trace row in this company's DB. One worker serves one company,
+# and a worker doing anything -- an llm_start, a tool call, a gate -- writes a
+# row, so a trail that has not moved is a worker that is not working.
+fn latest_trace_id(db :: conn.ConnDb) -> [sql, fs_read] Int {
+  let rows :: Result[List[MaxIdRow], SqlError] := sql.query(db.handle, "SELECT COALESCE(MAX(id), 0) AS n FROM traces", [])
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => match list.head(rs) {
+      None => 0,
+      Some(r) => r.n,
+    },
+  }
+}
+
 fn has(ids :: List[Str], id :: Str) -> Bool {
   list.fold(ids, false, fn (found :: Bool, x :: Str) -> Bool {
     if found {
@@ -299,11 +315,20 @@ fn jobs_in_flight(db :: conn.ConnDb, sprint_id :: Str, node_ids :: List[Str]) ->
 # `running` forever, and only a cap catches that). A node whose job is running
 # is never abandoned before the cap: a 25-minute build is the node doing its
 # job, not a fault.
-fn await_node_results_partial(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, cap_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
-  await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, cap_ms, poll_ms, 0, 0)
+# `stall_ms` bounds how long the trail may stay SILENT while jobs are in
+# flight. It replaced a wall-clock cap: tzc11 hit a 90-minute cap on a build
+# whose fourth attempt was legitimately running, and the whole layer was
+# abandoned. Progress, not elapsed time, is what a dead worker lacks.
+#
+# A hard ceiling at ten times the stall bound remains, found by sabotage: with
+# the stall branch disabled and a job in flight this loop had no other exit
+# and ran forever -- as production would if the detector ever broke. Five
+# hours at the default 30-minute stall; three seconds in a test at 300 ms.
+fn await_node_results_partial(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
+  await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, poll_ms, 0, 0, latest_trace_id(db), 0)
 }
 
-fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, cap_ms :: Int, poll_ms :: Int, elapsed_ms :: Int, idle_so_far :: Int) -> [sql, fs_read, time] AwaitOutcome {
+fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, poll_ms :: Int, elapsed_ms :: Int, idle_so_far :: Int, last_seen :: Int, silent_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
   let results := read_node_results(db, sprint_id, phase)
   let done_ids := list.map(results, fn (r :: NodeResultRow) -> Str {
     r.node_id
@@ -315,17 +340,23 @@ fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id
     { rows: results, timed_out: false, missing: [], in_flight: [], waited_ms: elapsed_ms }
   } else {
     let in_flight := jobs_in_flight(db, sprint_id, missing)
-    if elapsed_ms >= cap_ms {
+    let now_seen := latest_trace_id(db)
+    let moved := now_seen != last_seen
+    if not list.is_empty(in_flight) and (silent_ms >= stall_ms or elapsed_ms >= stall_ms * 10) {
       { rows: results, timed_out: true, missing: missing, in_flight: in_flight, waited_ms: elapsed_ms }
     } else {
       if list.is_empty(in_flight) and idle_so_far >= idle_ms {
         { rows: results, timed_out: true, missing: missing, in_flight: [], waited_ms: elapsed_ms }
       } else {
         let __s := time.sleep_ms(poll_ms)
-        await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, cap_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
+        await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
           idle_so_far + poll_ms
         } else {
           0
+        }, now_seen, if moved {
+          0
+        } else {
+          silent_ms + poll_ms
         })
       }
     }

@@ -196,8 +196,51 @@ fn test_drain_fails_only_this_sprints_unfinished_jobs() -> [random, sql, fs_read
   }
 }
 
+# The stall bound is on trail SILENCE, not elapsed time. A dead worker writes
+# nothing; a live one writes a row for every step, tool call and gate.
+fn test_writing_to_the_trail_moves_the_liveness_signal() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let before := tr.latest_trace_id(db)
+      let __t := tr.trail(db, uniq("s"), "llm_start", "{}")
+      if tr.latest_trace_id(db) > before {
+        Ok(())
+      } else {
+        Err("a trail write did not advance the liveness signal, so a working worker would look dead")
+      }
+    },
+  }
+}
+
+fn test_a_silent_trail_with_a_running_job_names_the_stall() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+  match fresh_db() {
+    Err(m) => Err(m),
+    Ok(db) => {
+      let sprint := uniq("s")
+      let __e := enqueue(db, sprint, "py-build")
+      match claim_one(db) {
+        None => Err("could not claim"),
+        Some(_) => {
+          let aw := tr.await_node_results_partial(db, sprint, "Implementation", ["py-build"], 100, 300, 20)
+          let o := orch.outcome_from_await("py-build", aw)
+          if aw.timed_out and str.contains(o.reason, "trail silent") {
+            if aw.waited_ms < 1500 {
+              Ok(())
+            } else {
+              Err(str.join(["gave up only at the hard ceiling (", int.to_str(aw.waited_ms), "ms), not at the 300ms stall bound — the stall detector is not working"], ""))
+            }
+          } else {
+            Err(str.concat("a stalled worker was not reported as such: ", o.reason))
+          }
+        },
+      }
+    },
+  }
+}
+
 fn suite() -> [random, sql, fs_read, fs_write, time, crypto] List[Result[Unit, Str]] {
-  [test_arrived_result_survives_a_timeout(), test_await_waits_while_a_job_is_running(), test_a_lost_job_gives_up_at_the_idle_bound(), test_complete_layer_returns_at_once(), test_drain_fails_only_this_sprints_unfinished_jobs()]
+  [test_arrived_result_survives_a_timeout(), test_await_waits_while_a_job_is_running(), test_a_lost_job_gives_up_at_the_idle_bound(), test_complete_layer_returns_at_once(), test_drain_fails_only_this_sprints_unfinished_jobs(), test_writing_to_the_trail_moves_the_liveness_signal(), test_a_silent_trail_with_a_running_job_names_the_stall()]
 }
 
 fn run_all() -> [random, sql, fs_read, fs_write, time, crypto] Unit {

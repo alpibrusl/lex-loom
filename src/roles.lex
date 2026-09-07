@@ -75,6 +75,12 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
   }
 }
 
+# `method` and `body`: a POST-only route answers GET with 405. Eight of tzc11's
+# launch attempts failed on exactly that -- the server was up, /convert was
+# mounted, and the probe used the wrong verb. They let launch exercise the
+# route as the product does; a 405 on GET is also accepted as proof the route
+# exists, since FastAPI only returns it for a matched path.
+#
 # run_server attests that a server is live, so it must attest only to a server
 # it actually STARTED, serving the endpoint it was asked about. Two holes let
 # it do neither (#312): `ok` was "did anything answer", which made a 404 on the
@@ -89,7 +95,7 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
 # loop wrong -- which is how the four preceding launch fixes each verified fine
 # and changed nothing.
 fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
-  let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
+  let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", [])), s.optional(s.required_str("method", [])), s.optional(s.required_str("body", []))] }
   t.define("run_server", "Start `cmd` as a background server on `port`, wait up to `timeout_s` seconds for it to respond, then fetch `endpoint` and return {ok, url, response, pid, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let cmd := match jv.get_field(args, "cmd") {
       Some(JStr(v)) => v,
@@ -98,6 +104,14 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
     let port := match jv.get_field(args, "port") {
       Some(JInt(v)) => v,
       _ => 8080,
+    }
+    let method := match jv.get_field(args, "method") {
+      Some(JStr(v)) => str.to_upper(str.trim(v)),
+      _ => "GET",
+    }
+    let body := match jv.get_field(args, "body") {
+      Some(JStr(v)) => v,
+      _ => "",
     }
     let endpoint := match jv.get_field(args, "endpoint") {
       Some(JStr(v)) => v,
@@ -119,7 +133,11 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
         str.join(["for D in ", lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then cd \"$D\"; break; fi\n", "done\n"], "")
       }
       let pid_registry := "/tmp/loom-servers.pids"
-      let script := str.join(["REG='", pid_registry, "'\n", "HOLDER=$(lsof -ti tcp:", port_str, " 2>/dev/null | head -1)\n", "if [ -n \"$HOLDER\" ]; then\n", "  if grep -qx \"", port_str, ":$HOLDER\" \"$REG\" 2>/dev/null; then\n", "    kill -9 \"$HOLDER\" 2>/dev/null || true\n", "    sleep 1\n", "  else\n", "    echo \"PORTBUSY:$(ps -o comm= -p \"$HOLDER\" 2>/dev/null | tr -d ' ')\"\n", "    exit 3\n", "  fi\n", "fi\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"", port_str, ":$PID\" >> \"$REG\" 2>/dev/null || true\n", "echo \"PID:$PID\"\n", "OK=0\n", "LAST=\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
+      let script := str.join(["REG='", pid_registry, "'\n", "HOLDER=$(lsof -ti tcp:", port_str, " 2>/dev/null | head -1)\n", "if [ -n \"$HOLDER\" ]; then\n", "  if grep -qx \"", port_str, ":$HOLDER\" \"$REG\" 2>/dev/null; then\n", "    kill -9 \"$HOLDER\" 2>/dev/null || true\n", "    sleep 1\n", "  else\n", "    echo \"PORTBUSY:$(ps -o comm= -p \"$HOLDER\" 2>/dev/null | tr -d ' ')\"\n", "    exit 3\n", "  fi\n", "fi\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"", port_str, ":$PID\" >> \"$REG\" 2>/dev/null || true\n", "echo \"PID:$PID\"\n", "OK=0\n", "LAST=\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -X '", method, "' ", if str.is_empty(body) {
+        ""
+      } else {
+        str.join(["-H 'Content-Type: application/json' --data '", str.replace(body, "'", "'\\''"), "' "], "")
+      }, "-w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??|405) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {

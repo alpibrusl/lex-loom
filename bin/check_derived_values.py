@@ -120,6 +120,12 @@ def scan(path: Path):
     out = []
     lines = path.read_text(errors="replace").splitlines()
     pins = pinned_literals(lines)
+    # A literal that appears more than once in the file is an INPUT being
+    # echoed, not a hand-written oracle: `json={"timestamp": "2025-07-11T12:00:00"}`
+    # posted, then `assert data["timestamp_in"] == "2025-07-11T12:00:00"`. That
+    # round-trip is a real test of the API. tzc11 denied one such assertion ten
+    # times across three iterations -- the single largest denial source in the run.
+    text = "\n".join(lines)
     for i, line in enumerate(lines, 1):
         s = line.strip()
         if s.startswith("#") or not ASSERTISH.search(s):
@@ -130,7 +136,7 @@ def scan(path: Path):
         for pat, what in LITERALS:
             m = pat.search(rhs)
             if m:
-                if m.group(0) not in pins:
+                if m.group(0) not in pins and text.count(m.group(0)) < 2:
                     out.append((i, what, m.group(0), s[:100]))
                 break
     return out

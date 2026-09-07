@@ -368,8 +368,8 @@ fn py_name_error(filename :: Str) -> [proc] Str {
 # build node accepts; py_compile forces real, parseable Python.
 fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := py_work_dir(sprint_id)
-  let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", [])] }
-  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", []), s.optional(s.required_bool("delete"))] }
+  t.define("py_check", "Write `code` to <filename> and run `python3 -m py_compile`. Returns {ok:'true'|'false', output:<compiler errors or 'ok'>}. To REMOVE a file you wrote (a probe, a scratch script, a module that will not import), call with delete:true and no code. THIS IS HOW YOU WRITE A FILE — there is no separate write tool, and nothing you put only in your reply reaches disk. Repair and call again until ok='true' before finishing.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "app.py",
@@ -379,29 +379,40 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       _ => "",
     }
     let path := str.join([dir, "/", filename], "")
+    let wants_delete := match jv.get_field(args, "delete") {
+      Some(JBool(b)) => b,
+      _ => false,
+    }
     let name_err := py_name_error(filename)
-    if not str.is_empty(name_err) {
-      Ok(JObj([("ok", JStr("false")), ("output", JStr(name_err))]))
+    if wants_delete {
+      match proc.run("bash", ["-c", str.join(["rm -f '", path, "'"], "")]) {
+        Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+        Ok(_) => Ok(JObj([("ok", JStr("true")), ("output", JStr(str.concat("deleted ", filename)))])),
+      }
     } else {
-      match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
-        Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-        Ok(_) => {
-          let __w := io.write(path, code)
-          let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-          match proc.run("bash", ["-c", cmd]) {
-            Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-            Ok(r) => {
-              let combined := str.concat(r.stdout, r.stderr)
-              let ok := str.contains(combined, "##EXIT:0")
-              let __ev := record_lex_check_evidence(evidence_path, filename, ok)
-              Ok(JObj([("ok", JStr(if ok {
-                "true"
-              } else {
-                "false"
-              })), ("output", JStr(combined))]))
-            },
-          }
-        },
+      if not str.is_empty(name_err) {
+        Ok(JObj([("ok", JStr("false")), ("output", JStr(name_err))]))
+      } else {
+        match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+          Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+          Ok(_) => {
+            let __w := io.write(path, code)
+            let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+            match proc.run("bash", ["-c", cmd]) {
+              Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+              Ok(r) => {
+                let combined := str.concat(r.stdout, r.stderr)
+                let ok := str.contains(combined, "##EXIT:0")
+                let __ev := record_lex_check_evidence(evidence_path, filename, ok)
+                Ok(JObj([("ok", JStr(if ok {
+                  "true"
+                } else {
+                  "false"
+                })), ("output", JStr(combined))]))
+              },
+            }
+          },
+        }
       }
     }
   })

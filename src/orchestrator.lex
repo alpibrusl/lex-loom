@@ -890,8 +890,19 @@ fn queue_await_idle_ms() -> [env] Int {
   env_int("QUEUE_AWAIT_IDLE_MS", 600000)
 }
 
-fn queue_await_cap_ms() -> [env] Int {
-  env_int("QUEUE_AWAIT_CAP_MS", 5400000)
+# How long the trail may stay silent while a job is in flight before the
+# worker is presumed dead. 30 minutes: the longest gap between trace rows in
+# any run to date was a single 20-minute model call. QUEUE_AWAIT_CAP_MS is
+# still honoured as the old name.
+fn queue_await_stall_ms() -> [env] Int {
+  match env.get("QUEUE_AWAIT_CAP_MS") {
+    Some(v) => if str.is_empty(str.trim(v)) {
+      env_int("QUEUE_AWAIT_STALL_MS", 1800000)
+    } else {
+      env_int("QUEUE_AWAIT_CAP_MS", 1800000)
+    },
+    None => env_int("QUEUE_AWAIT_STALL_MS", 1800000),
+  }
 }
 
 fn env_int(key :: Str, default :: Int) -> [env] Int {
@@ -926,7 +937,7 @@ fn outcome_from_await(node_id :: Str, aw :: tr.AwaitOutcome) -> NodeOutcome {
     Some(r) => { node_id: node_id, attested: r.accepted == 1, sealed: r.accepted == 1, artifact: r.artifact, reason: r.reason },
     None => if aw.timed_out {
       if tr.has(aw.in_flight, node_id) {
-        { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.join(["await gave up after ", int.to_str(aw.waited_ms), "ms while this node's job was STILL RUNNING -- raise QUEUE_AWAIT_CAP_MS, or the worker is dead"], "") }
+        { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.join(["await gave up after ", int.to_str(aw.waited_ms), "ms with the trail silent while this node's job was STILL RUNNING -- the worker is stuck or dead (QUEUE_AWAIT_STALL_MS)"], "") }
       } else {
         { node_id: node_id, attested: false, sealed: false, artifact: "", reason: str.join(["no job in flight and no result after ", int.to_str(aw.waited_ms), "ms (job lost?)"], "") }
       }
@@ -988,7 +999,7 @@ fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str
   let awaited := if list.is_empty(to_enqueue) {
     { rows: [], timed_out: false, missing: [], in_flight: [], waited_ms: 0 }
   } else {
-    tr.await_node_results_partial(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_idle_ms(), queue_await_cap_ms(), queue_await_poll_ms())
+    tr.await_node_results_partial(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_idle_ms(), queue_await_stall_ms(), queue_await_poll_ms())
   }
   let __tt := if awaited.timed_out {
     tr.trail(cfg.db, cfg.id, "queue_await_timed_out", str.join(["{\"phase\":\"", phase_name, "\",\"waited_ms\":", int.to_str(awaited.waited_ms), ",\"missing\":", jv.stringify(JStr(str.join(awaited.missing, ","))), ",\"still_running\":", jv.stringify(JStr(str.join(awaited.in_flight, ","))), ",\"arrived\":", int.to_str(list.len(awaited.rows)), "}"], ""))

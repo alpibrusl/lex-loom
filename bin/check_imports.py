@@ -74,7 +74,7 @@ def main() -> int:
         print(f"  {name}: {why}")
     print("\nThis compiles but cannot run: py_compile only parses. Fix the import")
     print("itself — use a package that exists (stdlib, flask, fastapi, jinja2,")
-    print("markdown, pytest), or correct the module/symbol name.")
+    print("markdown, pytest), or correct the module/symbol name. If the module is a\nscratch file you no longer need, DELETE it: py_check with delete:true.")
     return 1
 
 if __name__ == "__main__":

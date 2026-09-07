@@ -17,6 +17,8 @@ import "std.proc" as proc
 
 import "std.crypto" as crypto
 
+import "lex-schema/json_value" as jv
+
 import "../src/agent/runner" as runner
 
 import "../src/orchestrator" as orch
@@ -136,11 +138,44 @@ fn test_a_prose_role_gate_still_sees_fences() -> [io, proc, random] Result[Unit,
   }
 }
 
-fn suite() -> [io, proc, random] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences()]
+# --- `python` means python3 inside a gate (#333) --------------------------
+# tzc11's Architect wrote a devops gate as `python -c '...'`; this host has no
+# `python`, only `python3`, and the gate failed eight times on exit 127.
+fn test_a_gate_may_say_python() -> [io, proc, random] Result[Unit, Str] {
+  match runner.verify_shell_for_role("python -c 'print(1)'", "devops", "```notes.md\nhello\n```\n", str.concat("t-py-", crypto.random_str_hex(4)), "") {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a gate that says `python` fails on a host with only python3: ", e)),
+  }
 }
 
-fn run_all() -> [io, proc, random] Unit {
+# --- the build can remove a file it wrote (#333) ----------------------------
+# check_imports holds the build to every module in the directory, and the
+# build had no way to remove one: tzc10's force42.py and tzc11's setup.py /
+# probe.py cost six and four denials respectively, with no move available.
+fn test_py_check_can_delete_a_file_it_wrote() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-del/", crypto.random_str_hex(4))
+  let tool := lexskill.make_py_check_tool("/tmp/loom-lexcheck-evidence-test.json", sprint)
+  let __w := tool.execute(JObj([("filename", JStr("probe.py")), ("code", JStr("print(1)\n"))]))
+  let before := listing(sprint)
+  let __d := tool.execute(JObj([("filename", JStr("probe.py")), ("code", JStr("")), ("delete", JBool(true))]))
+  let after := listing(sprint)
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
+  if not str.contains(before, "probe.py") {
+    Err("setup failed: the write did not land, so the delete proved nothing")
+  } else {
+    if str.contains(after, "probe.py") {
+      Err("delete:true left the file on disk — the build still has no way to recover from a bad scratch file")
+    } else {
+      Ok(())
+    }
+  }
+}
+
+fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote()]
+}
+
+fn run_all() -> [env, io, net, proc, random, fs_write] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
     match r {
       Ok(_) => n,

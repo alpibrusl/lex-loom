@@ -28,6 +28,8 @@ import "std.list" as list
 
 import "std.proc" as proc
 
+import "std.int" as int
+
 import "std.io" as io
 
 import "lex-schema/json_value" as jv
@@ -245,8 +247,46 @@ fn test_a_failed_launch_frees_its_port() -> [env, net, io, proc, fs_write] Resul
   }
 }
 
+# A POST-only route answers GET with 405. Eight of tzc11's launch attempts
+# failed on exactly that: the server was up, /convert was mounted, the probe
+# used the wrong verb. With `method`/`body` launch can exercise the route as
+# the product does; and a 405 on GET is accepted as proof the route exists,
+# because the framework only returns it for a matched path.
+fn post_only_cmd(port :: Int) -> [proc] Str {
+  let src := "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nclass H(BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.send_response(405); self.end_headers()\n    def do_POST(self):\n        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(b'{\"ok\": true}')\n    def log_message(self, *a):\n        pass\nHTTPServer(('', int(os.environ.get('PORT', '8081'))), H).serve_forever()\n"
+  let __w := proc.run("bash", ["-c", str.join(["cat > /tmp/loom_post_only.py <<'PY'\n", src, "\nPY"], "")])
+  str.join(["cd /tmp && PORT=", int.to_str(port), " python3 loom_post_only.py"], "")
+}
+
+fn test_a_post_route_can_be_probed_with_post() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let r := run_with(8798, post_only_cmd(8798), "/convert", "POST", "{\"timestamp\":\"2025-07-11T08:00:00\"}")
+  match get_bool(r, "ok") {
+    Some(true) => Ok(()),
+    _ => Err(str.concat("a POST probe of a POST route was rejected: ", get_str(r, "error"))),
+  }
+}
+
+fn test_a_405_on_get_proves_the_route_exists() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let r := run_with(8799, post_only_cmd(8799), "/convert", "GET", "")
+  match get_bool(r, "ok") {
+    Some(true) => Ok(()),
+    _ => Err(str.concat("405 on GET was treated as the server being down — the tzc11 launch failure: ", get_str(r, "error"))),
+  }
+}
+
+fn run_with(port :: Int, cmd :: Str, endpoint :: Str, method :: Str, body :: Str) -> [env, net, io, proc, fs_write] jv.Json {
+  let __free := free_port(port)
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-runserver-test")
+  let out := match tool.execute(JObj([("cmd", JStr(cmd)), ("port", JInt(port)), ("endpoint", JStr(endpoint)), ("timeout_s", JInt(8)), ("method", JStr(method)), ("body", JStr(body))])) {
+    Err(_) => JObj([("ok", JBool(false)), ("error", JStr("tool-level Err"))]),
+    Ok(r) => r,
+  }
+  let __cleanup := free_port(port)
+  out
+}
+
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

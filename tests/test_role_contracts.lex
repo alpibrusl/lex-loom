@@ -77,6 +77,51 @@ fn test_py_build_accepts_a_module() -> [io, proc] Result[Unit, Str] {
   }
 }
 
+fn seed_nested(dir :: Str, rel :: Str, body :: Str) -> [io, proc] Unit {
+  let __mk := proc.run("bash", ["-c", str.join(["mkdir -p \"$(dirname '", dir, "/", rel, "')\""], "")])
+  let __w := io.write(str.join([dir, "/", rel], ""), body)
+  ()
+}
+
+# #348: since py_check writes into folders (#341) a builder writes a package.
+# tzc15 iter 1 produced tzconvert/app.py + tests/test_convert.py and was
+# denied "no Python module" three times by a top-level ls.
+fn test_py_build_accepts_a_package() -> [io, proc] Result[Unit, Str] {
+  let d := runner.tool_work_dir_for_role("py_build", "rc-pyb-pkg")
+  let __s := seed(d, "requirements.txt", "fastapi\n")
+  let __p := seed_nested(d, "tzconvert/__init__.py", "")
+  let __a := seed_nested(d, "tzconvert/app.py", "def convert():\n    return 1\n")
+  let __t := seed_nested(d, "tests/test_convert.py", "def test_x():\n    assert 1\n")
+  if contract_holds("py_build", "rc-pyb-pkg") {
+    Ok(())
+  } else {
+    Err("a package (tzconvert/app.py) does not satisfy the py_build contract -- tzc15's three denials")
+  }
+}
+
+fn test_py_build_rejects_a_tests_only_tree() -> [io, proc] Result[Unit, Str] {
+  let d := runner.tool_work_dir_for_role("py_build", "rc-pyb-tests")
+  let __s := seed(d, "README.md", "# nothing built\n")
+  let __i := seed_nested(d, "tests/__init__.py", "")
+  let __t := seed_nested(d, "tests/test_convert.py", "def test_x():\n    assert 1\n")
+  if contract_holds("py_build", "rc-pyb-tests") {
+    Err("a tree holding only tests/__init__.py and a test satisfied the py_build contract -- a bare __init__.py is not a module")
+  } else {
+    Ok(())
+  }
+}
+
+fn test_py_test_author_accepts_tests_in_a_folder() -> [io, proc] Result[Unit, Str] {
+  let d := runner.tool_work_dir_for_role("py_test_author", "rc-pyta-dir")
+  let __s := seed(d, "app.py", "def f():\n    return 1\n")
+  let __t := seed_nested(d, "tests/test_app.py", "def test_f():\n    assert 1\n")
+  if contract_holds("py_test_author", "rc-pyta-dir") {
+    Ok(())
+  } else {
+    Err("tests/test_app.py does not satisfy the py_test_author contract, so a tests/ folder is denied")
+  }
+}
+
 fn test_py_test_author_needs_a_test() -> [io, proc] Result[Unit, Str] {
   let __s := seed(lexskill.py_work_dir("rc-pyt-bad"), "server.py", "def convert(x):\n    return x\n")
   if contract_holds("py_test_author", "rc-pyt-bad") {
@@ -300,7 +345,7 @@ fn test_no_role_loses_its_own_tools() -> [env, fs_read] Result[Unit, Str] {
 }
 
 fn run_all() -> [env, fs_read, io, proc] Int {
-  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique()), ("no role loses its own tools", test_no_role_loses_its_own_tools())]
+  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py_build accepts a package", test_py_build_accepts_a_package()), ("py_build rejects a tests-only tree", test_py_build_rejects_a_tests_only_tree()), ("py test author accepts tests in a folder", test_py_test_author_accepts_tests_in_a_folder()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique()), ("no role loses its own tools", test_no_role_loses_its_own_tools())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

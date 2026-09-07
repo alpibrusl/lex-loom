@@ -75,6 +75,12 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
   }
 }
 
+# `method` and `body`: a POST-only route answers GET with 405. Eight of tzc11's
+# launch attempts failed on exactly that -- the server was up, /convert was
+# mounted, and the probe used the wrong verb. They let launch exercise the
+# route as the product does; a 405 on GET is also accepted as proof the route
+# exists, since FastAPI only returns it for a matched path.
+#
 # run_server attests that a server is live, so it must attest only to a server
 # it actually STARTED, serving the endpoint it was asked about. Two holes let
 # it do neither (#312): `ok` was "did anything answer", which made a 404 on the
@@ -99,11 +105,6 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       Some(JInt(v)) => v,
       _ => 8080,
     }
-    # A POST-only route answers GET with 405. Eight of tzc11's launch attempts
-    # failed on exactly that: the server was up, /convert was mounted, and the
-    # probe used the wrong verb. `method` and `body` let launch exercise the
-    # route as the product does; 405 is also accepted below as proof the route
-    # exists, since FastAPI only returns it for a matched path.
     let method := match jv.get_field(args, "method") {
       Some(JStr(v)) => str.to_upper(str.trim(v)),
       _ => "GET",

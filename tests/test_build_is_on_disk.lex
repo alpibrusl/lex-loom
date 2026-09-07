@@ -171,8 +171,34 @@ fn test_py_check_can_delete_a_file_it_wrote() -> [env, io, net, proc, random, fs
   }
 }
 
+# #340: a filename with a folder in it must land. tzc14's build wrote
+# tests/test_convert.py, the write failed silently, py_compile reported "No
+# such file", and the builder spent its remaining budget on bootstrap scripts.
+fn test_py_check_writes_into_a_subdirectory() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-sub/", crypto.random_str_hex(4))
+  let tool := lexskill.make_py_check_tool("/tmp/loom-lexcheck-evidence-test.json", sprint)
+  let r := tool.execute(JObj([("filename", JStr("tests/test_x.py")), ("code", JStr("def test_x():\n    assert 1 == 1\n"))]))
+  let on_disk := match proc.run("bash", ["-c", str.join(["test -f '", lexskill.py_work_dir(sprint), "/tests/test_x.py' && echo yes || echo no"], "")]) {
+    Ok(o) => str.trim(o.stdout),
+    Err(_) => "?",
+  }
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
+  let ok := match r {
+    Ok(res) => match jv.get_field(res, "ok") {
+      Some(JStr(v)) => v,
+      _ => "missing",
+    },
+    Err(_) => "err",
+  }
+  if on_disk == "yes" and ok == "true" {
+    Ok(())
+  } else {
+    Err(str.join(["py_check could not write into a subdirectory (on_disk=", on_disk, " ok=", ok, ") -- the tzc14 builder's 'directory creation doesn't persist'"], ""))
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

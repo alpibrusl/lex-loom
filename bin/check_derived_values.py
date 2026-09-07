@@ -141,6 +141,27 @@ def scan(path: Path):
                 break
     return out
 
+def collection_failure(root: Path) -> str:
+    """A test file that cannot be COLLECTED takes the whole suite down before
+    a single test runs. tzc13, iteration 1: test_tzconvert.py pinned a derived
+    value to a hand-written literal at module level -- and the literal was
+    wrong (Kolkata is +05:30, the pin said +05:00) -- so pytest failed at
+    collection, 7 tests never ran, and QA discovered it a phase later. The
+    author's own gate can say so first."""
+    import subprocess
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", "."],
+                           cwd=str(root), capture_output=True, text=True, timeout=120)
+    except Exception:
+        return ""  # pytest missing or hung: not this check's verdict to give
+    if r.returncode == 0:
+        return ""
+    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-12:])
+    return ("check_derived_values: the test suite cannot be COLLECTED, so no test can run.\n"
+            "A module-level assertion or import in a test file fails before pytest starts;\n"
+            "fix the file so `pytest --collect-only` passes:\n\n" + tail + "\n")
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     files = [p for p in root.rglob("*") if p.is_file()

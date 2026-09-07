@@ -159,6 +159,10 @@ def main() -> int:
         return 1
     bad = [(p, hits) for p in files for hits in [scan(p)] if hits]
     if not bad:
+        coll = collection_failure(root)
+        if coll:
+            print(coll)
+            return 1
         print(f"check_derived_values: {len(files)} test file(s), expected values are derived")
         return 0
     print("check_derived_values: expected values were PASTED, not derived.\n")

@@ -29,5 +29,9 @@ mkdir -p "$W/imp"; printf 'import definitely_not_a_module\n' > "$W/imp/probe.py"
 out=$(cd "$W/imp" && python3 "$OLDPWD/bin/check_imports.py" . 2>&1 || true)
 case "$out" in *"delete:true"*) ok "the denial tells the build it may delete the file" ;; *) bad "the denial only says fix the import, which a scratch file cannot" ;; esac
 
+echo "== 4. a suite that cannot be collected is denied at the author, not discovered by QA"
+mkdir -p "$W/coll"; printf 'from datetime import datetime\nEXPECTED = datetime(2025,7,10,12,0).isoformat()\nassert EXPECTED == "2025-07-10T12:00:00+05:00"\ndef test_x():\n    assert EXPECTED\n' > "$W/coll/test_pin.py"
+if (cd "$W/coll" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then bad "a wrong module-level pin that kills collection was accepted -- tzc13's 7 tests never ran"; else ok "an uncollectable suite is denied where it was written"; fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

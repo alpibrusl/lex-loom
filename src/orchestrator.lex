@@ -1306,12 +1306,36 @@ fn impl_phase_of(outcomes :: List[NodeOutcome]) -> PhaseResult {
 fn acceptance_command(g :: graph.SprintGraph) -> Str {
   let qa_kind := graph.qa_role_for_graph(g)
   if qa_kind == "py_qa" {
-    "if ls test_*.py *_test.py >/dev/null 2>&1; then python3 -m pytest -q; else echo 'ACCEPTANCE: no test file in the sealed artifact'; false; fi"
+    "n=$(ls -1 test_*.py *_test.py 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'ACCEPTANCE: no test file in the sealed artifact'; false; fi"
   } else {
     if qa_kind == "qa" {
       "rc=0; found=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; found=1; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; if [ \"$found\" -eq 0 ]; then echo 'ACCEPTANCE: no test file in the sealed artifact'; rc=1; fi; [ \"$rc\" -eq 0 ]"
     } else {
       ""
+    }
+  }
+}
+
+# Acceptance re-executes the WORK DIR -- the files the build wrote -- copied
+# into a clean scratch, never the sealed artifact's prose. It used to extract
+# fenced blocks from the artifact text: once #329/#332 made builds write to
+# disk instead of fencing their whole tree, that text had no fenced files, and
+# company tzc13 failed its verdict twice on "no fenced files to check" after
+# QA had passed with {"ran":true,"passed":true} and launch had answered 200.
+# The gate that made the build honest had left the last gate assuming prose.
+fn acceptance_build_role(g :: graph.SprintGraph) -> Str {
+  let qa_kind := graph.qa_role_for_graph(g)
+  if qa_kind == "py_qa" {
+    "py_build"
+  } else {
+    if qa_kind == "qa" {
+      "build"
+    } else {
+      if qa_kind == "ts_qa" {
+        "ts_build"
+      } else {
+        "py_build"
+      }
     }
   }
 }
@@ -1326,12 +1350,13 @@ fn run_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, artifact_ref :: Str)
     let __ts := tr.trail(cfg.db, cfg.id, "acceptance_skipped", "{\"reason\":\"no acceptance runner for this stack\"}")
     Ok(())
   } else {
-    let content := resolve_input(cfg.db, artifact_ref)
-    if str.is_empty(str.trim(content)) {
-      let __te := tr.trail(cfg.db, cfg.id, "acceptance_failed", "{\"reason\":\"sealed artifact is empty\"}")
-      Err("acceptance: the sprint sealed an empty artifact")
+    let build_role := acceptance_build_role(g)
+    let seed := runner.tool_work_dir_for_role(build_role, cfg.id)
+    if str.is_empty(seed) {
+      let __te := tr.trail(cfg.db, cfg.id, "acceptance_failed", "{\"reason\":\"no work dir for this stack\"}")
+      Err("acceptance: no work dir to re-execute for this stack")
     } else {
-      match runner.verify_shell_on_output(cmd, content, str.join([sanitize_id(cfg.id), "-acceptance"], "")) {
+      match runner.verify_shell_for_role(cmd, build_role, "", str.join([sanitize_id(cfg.id), "-acceptance"], ""), seed) {
         Ok(_) => {
           let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed artifact re-executed in a clean dir\"}")
           Ok(())

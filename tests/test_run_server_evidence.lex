@@ -266,6 +266,35 @@ fn test_a_post_route_can_be_probed_with_post() -> [env, net, io, proc, fs_write]
   }
 }
 
+# tzc14 iter-3: a Flask route with methods GET+POST that calls get_json()
+# answers a bodiless GET with 415. The handler ran, so the route is live.
+fn json_only_cmd(port :: Int) -> [proc] Str {
+  let src := "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nclass H(BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.send_response(415); self.end_headers()\n    def do_POST(self):\n        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(b'{}')\n    def log_message(self, *a):\n        pass\nHTTPServer(('0.0.0.0', int(os.environ['PORT'])), H).serve_forever()\n"
+  let __w := proc.run("bash", ["-c", str.join(["cat > /tmp/loom_json_only.py <<'PY'\n", src, "\nPY"], "")])
+  str.join(["cd /tmp && PORT=", int.to_str(port), " python3 loom_json_only.py"], "")
+}
+
+fn test_a_415_on_get_proves_the_route_exists() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let r := run_with(8793, json_only_cmd(8793), "/convert", "GET", "")
+  match get_bool(r, "ok") {
+    Some(true) => Ok(()),
+    _ => Err(str.concat("415 on GET was treated as the server being down -- the tzc14 iter-3 launch failure (8 attempts on a live server): ", get_str(r, "error"))),
+  }
+}
+
+# The agent can only use a parameter it has been told about. tzc14's launch
+# never passed method/body because neither the tool description nor its
+# prompt named them.
+fn test_launch_is_told_run_server_can_post() -> Result[Unit, Str] {
+  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-runserver-test")
+  let prompt := roles.launch_system_prompt("sprint-runserver-test")
+  if str.contains(tool.description, "method") and str.contains(tool.description, "body") and str.contains(prompt, "method:") {
+    Ok(())
+  } else {
+    Err("run_server's description or the launch prompt no longer names method/body -- the launch agent will GET a POST route again")
+  }
+}
+
 fn test_a_405_on_get_proves_the_route_exists() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
   let r := run_with(8799, post_only_cmd(8799), "/convert", "GET", "")
   match get_bool(r, "ok") {
@@ -372,7 +401,7 @@ fn test_each_company_has_its_own_registry_file() -> Result[Unit, Str] {
 }
 
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_company_end_stops_the_servers_it_launched(), test_company_end_leaves_a_pid_that_no_longer_holds_its_port(), test_each_company_has_its_own_registry_file()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_a_415_on_get_proves_the_route_exists(), test_launch_is_told_run_server_can_post(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_company_end_stops_the_servers_it_launched(), test_company_end_leaves_a_pid_that_no_longer_holds_its_port(), test_each_company_has_its_own_registry_file()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

@@ -324,8 +324,31 @@ fn test_read_file_reads_the_work_dir_and_refuses_escapes() -> [env, io, net, pro
   }
 }
 
+# #375: a file whose whole content is one bare word is refused, with the
+# way to delete named. tzc21's author wrote "delete" as a file's content.
+fn test_py_check_refuses_a_bare_word_as_a_module() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-bare/", crypto.random_str_hex(4))
+  let tool := lexskill.make_py_check_tool("/tmp/loom-lexcheck-evidence-test.json", sprint)
+  let r := tool.execute(JObj([("filename", JStr("tests/convert_tests.py")), ("code", JStr("delete\n"))]))
+  let on_disk := match proc.run("bash", ["-c", str.join(["test -f '", lexskill.py_work_dir(sprint), "/tests/convert_tests.py' && echo yes || echo no"], "")]) {
+    Ok(o) => str.trim(o.stdout),
+    Err(_) => "?",
+  }
+  let real := tool.execute(JObj([("filename", JStr("mod.py")), ("code", JStr("x = 1\n"))]))
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
+  if read_field(r, "ok") == "false" and str.contains(read_field(r, "output"), "delete:true") and on_disk == "no" {
+    if read_field(real, "ok") == "true" {
+      Ok(())
+    } else {
+      Err("a one-line real module was refused as a bare word")
+    }
+  } else {
+    Err(str.join(["a file containing only the word 'delete' was written as a module (on_disk=", on_disk, ", ok=", read_field(r, "ok"), ")"], ""))
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes(), test_py_check_refuses_a_bare_word_as_a_module()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

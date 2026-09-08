@@ -51,8 +51,35 @@ fn test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product() -> Result[Unit,
   }
 }
 
+# #382: tzc21 iter 3 -- QA failed 8 passing tests because a criterion said
+# `pytest tests/` and the suite sat at the root; launch used PORT=8000
+# because the goal said "binds to 0.0.0.0:8000". Paths and ports are the
+# pipeline's, not the spec's.
+fn test_prompts_keep_paths_and_ports_out_of_the_spec() -> Result[Unit, Str] {
+  let qa_ok := str.contains(roles.py_qa_system_prompt(), "JUDGE BEHAVIOUR, NOT LAYOUT") and str.contains(roles.qa_system_prompt(), "JUDGE BEHAVIOUR, NOT LAYOUT")
+  let pm_ok := str.contains(roles.pm_system_prompt(), "no port numbers")
+  let launch_ok := str.contains(roles.launch_system_prompt("t/iter-1"), "NOT FROM THE GOAL")
+  if qa_ok and pm_ok and launch_ok {
+    Ok(())
+  } else {
+    Err(str.join(["a prompt no longer keeps layout out of the spec: qa=", if qa_ok {
+      "ok"
+    } else {
+      "MISSING"
+    }, " pm=", if pm_ok {
+      "ok"
+    } else {
+      "MISSING"
+    }, " launch=", if launch_ok {
+      "ok"
+    } else {
+      "MISSING"
+    }], ""))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_a_fail_citing_the_pipeline_is_not_final(), test_a_fail_about_the_product_is_still_final(), test_the_infra_reason_names_the_cause(), test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product()]
+  [test_a_fail_citing_the_pipeline_is_not_final(), test_a_fail_about_the_product_is_still_final(), test_the_infra_reason_names_the_cause(), test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product(), test_prompts_keep_paths_and_ports_out_of_the_spec()]
 }
 
 fn run_all() -> Unit {

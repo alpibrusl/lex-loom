@@ -59,7 +59,7 @@ echo "== 7. a pin is executed at the author, not discovered by QA"
 mkdir -p "$W/pinbad" "$W/pinok"
 printf 'from datetime import datetime, timezone\nEXPECTED_EPOCH = int(datetime(2025, 7, 10, 9, 0, tzinfo=timezone.utc).timestamp())\n\ndef test_pin_unix_epoch_literal():\n    assert EXPECTED_EPOCH == 1752181800\n' > "$W/pinbad/test_pin.py"
 printf 'from datetime import datetime, timezone\nEXPECTED_EPOCH = int(datetime(2025, 7, 10, 9, 0, tzinfo=timezone.utc).timestamp())\n\ndef test_pin_unix_epoch_literal():\n    assert EXPECTED_EPOCH == 1752138000\n' > "$W/pinok/test_pin.py"
-out=$(cd "$W/pinbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1); rc=$?
+rc=0; out=$(cd "$W/pinbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1) || rc=$?
 case "$rc:$out" in 1:*"1752138000"*) ok "a wrong pin is denied where it was written, with the value the derivation gives" ;; 0:*) bad "a wrong pin (1752181800 for 09:00 UTC) was accepted -- tzc16's three bounces" ;; *) bad "the wrong pin was denied without naming the true value" ;; esac
 if (cd "$W/pinok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a correct pin passes"; else bad "a correct pin was denied"; fi
 

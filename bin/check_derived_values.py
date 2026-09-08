@@ -219,17 +219,25 @@ def pin_failure(root: Path, files) -> str:
             pins.append((node.lineno, ast.unparse(expr), repr(lit.value)))
         if not pins:
             continue
-        script = "\n".join(prelude) + "\n"
-        for lineno, expr, lit in pins:
-            script += (f"_v = ({expr})\n"
-                       f"if _v != {lit}: print('PIN_FAIL\\t{lineno}\\t' + repr(_v) + '\\t' + {lit!r}); \n")
+        # Each prelude statement runs on its own with failures tolerated -- a
+        # module-level `app = importlib.import_module("main")` that needs the
+        # build must not stop the datetime pins from being evaluated -- and
+        # each pin is evaluated on its own; a pin whose expression cannot be
+        # evaluated here (a name the prelude never bound) is skipped, not
+        # judged.
+        import json
+        script = ("import sys\n_ns = {}\n"
+                  f"for _stmt in {json.dumps(prelude)}:\n"
+                  "    try:\n        exec(_stmt, _ns)\n    except Exception:\n        pass\n"
+                  f"for _lineno, _expr, _lit in {json.dumps(pins)}:\n"
+                  "    try:\n        _v = eval(_expr, _ns)\n    except Exception:\n        continue\n"
+                  "    if _v != eval(_lit):\n"
+                  "        print('PIN_FAIL\\t' + str(_lineno) + '\\t' + repr(_v) + '\\t' + _lit)\n")
         try:
             r = subprocess.run([sys.executable, "-c", script], cwd=str(root),
                                capture_output=True, text=True, timeout=60)
         except Exception:
             continue
-        if r.returncode != 0:
-            continue  # the prelude needs something this scratch run lacks: not our verdict
         for line in r.stdout.splitlines():
             if line.startswith("PIN_FAIL\t"):
                 _, lineno, got, lit = line.split("\t", 3)

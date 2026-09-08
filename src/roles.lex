@@ -961,46 +961,50 @@ fn make_provider_no_mistral() -> [env] prov.Provider {
 # security_scan's shared work dir (see lex_skill.work_dir) so a build node's
 # files can never be clobbered by an unrelated sprint (#156).
 fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Option[t.Tool] {
-  if name == "lex_guidelines" {
-    Some(lexskill.make_lex_guidelines_tool())
+  if name == "read_file" {
+    Some(lexskill.make_read_file_tool(sprint_id))
   } else {
-    if name == "lex_check" {
-      Some(lexskill.make_lex_check_tool(evidence_path, sprint_id))
+    if name == "lex_guidelines" {
+      Some(lexskill.make_lex_guidelines_tool())
     } else {
-      if name == "lex_run" {
-        Some(lexskill.make_lex_run_tool(evidence_path, sprint_id))
+      if name == "lex_check" {
+        Some(lexskill.make_lex_check_tool(evidence_path, sprint_id))
       } else {
-        if name == "py_check" {
-          Some(lexskill.make_py_check_tool(evidence_path, sprint_id))
+        if name == "lex_run" {
+          Some(lexskill.make_lex_run_tool(evidence_path, sprint_id))
         } else {
-          if name == "ts_check" {
-            Some(lexskill.make_ts_check_tool(evidence_path, sprint_id))
+          if name == "py_check" {
+            Some(lexskill.make_py_check_tool(evidence_path, sprint_id))
           } else {
-            if name == "run_node_code" {
-              Some(make_run_node_code_tool(evidence_path))
+            if name == "ts_check" {
+              Some(lexskill.make_ts_check_tool(evidence_path, sprint_id))
             } else {
-              if name == "run_code" {
-                Some(make_run_code_tool(evidence_path, sprint_id))
+              if name == "run_node_code" {
+                Some(make_run_node_code_tool(evidence_path))
               } else {
-                if name == "run_server" {
-                  Some(make_run_server_tool(evidence_path, sprint_id))
+                if name == "run_code" {
+                  Some(make_run_code_tool(evidence_path, sprint_id))
                 } else {
-                  if name == "deploy_hetzner" {
-                    Some(make_deploy_hetzner_tool(evidence_path, sprint_id))
+                  if name == "run_server" {
+                    Some(make_run_server_tool(evidence_path, sprint_id))
                   } else {
-                    if name == "security_scan" {
-                      Some(lexskill.make_security_scan_tool(sprint_id))
+                    if name == "deploy_hetzner" {
+                      Some(make_deploy_hetzner_tool(evidence_path, sprint_id))
                     } else {
-                      if name == "publish_content" {
-                        Some(make_publish_content_tool())
+                      if name == "security_scan" {
+                        Some(lexskill.make_security_scan_tool(sprint_id))
                       } else {
-                        if name == "fetch_support_items" {
-                          Some(make_fetch_support_tool())
+                        if name == "publish_content" {
+                          Some(make_publish_content_tool())
                         } else {
-                          if name == "web_search" {
-                            Some(make_web_search_tool())
+                          if name == "fetch_support_items" {
+                            Some(make_fetch_support_tool())
                           } else {
-                            None
+                            if name == "web_search" {
+                              Some(make_web_search_tool())
+                            } else {
+                              None
+                            }
                           }
                         }
                       }
@@ -1159,11 +1163,11 @@ fn py_qa_system_prompt() -> Str {
 }
 
 fn py_build_system_prompt() -> Str {
-  "You are the Python Build agent for a software sprint. Write clean, idiomatic Python that satisfies the Architect's design and the PM's acceptance criteria.\n\nLOOP: write a file, call py_check, read errors, repair, repeat until ok='true'. NEVER finish, and never claim a file is done, until py_check returns ok='true' for every file. Writing a design plan or prose instead of real code is a failure — output actual Python.\n\nWORKFLOW:\n1. Read the Architect's design carefully — note file names, function signatures, HTTP routes, data models.\n2. Write each Python file via py_check (it saves the file AND compiles it). Use only stdlib unless the design specifies a package (flask, fastapi, jinja2, markdown, pytest).\n3. Include a __main__ block or entry point where appropriate.\n4. Write assertions or a test file that verifies the acceptance criteria — also via py_check.\n5. After every file compiles (py_check ok='true'), output each file in a fenced code block labelled with the filename.\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  import os\n  port = int(os.environ.get('PORT', 8080))\nThen pass `port` to your server (e.g. `app.run(host='0.0.0.0', port=port)` for Flask). Never hardcode 8080.\n\nTEMPLATE FILES: If you need Jinja2 templates, write them as separate fenced code blocks with a filename like `templates/index.html`. Never write a shell command (like `mkdir -p templates`) as a filename — filenames are relative paths only.\n\nSTYLE:\n- Prefer simplicity — no unnecessary abstractions.\n- Use type hints on all function signatures.\n- Handle errors explicitly — no bare except.\n- SQL: use sqlite3 with parameterised queries (never string-concat SQL).\n- HTTP: use flask for simple servers, fastapi for REST APIs with validation."
+  "If the work dir ALREADY HOLDS FILES (a previous iteration's product -- your input lists them), call read_file on them BEFORE rewriting: keep what works, change what the goal asks, and re-check every file you touch. You are the Python Build agent for a software sprint. Write clean, idiomatic Python that satisfies the Architect's design and the PM's acceptance criteria.\n\nLOOP: write a file, call py_check, read errors, repair, repeat until ok='true'. NEVER finish, and never claim a file is done, until py_check returns ok='true' for every file. Writing a design plan or prose instead of real code is a failure — output actual Python.\n\nWORKFLOW:\n1. Read the Architect's design carefully — note file names, function signatures, HTTP routes, data models.\n2. Write each Python file via py_check (it saves the file AND compiles it). Use only stdlib unless the design specifies a package (flask, fastapi, jinja2, markdown, pytest).\n3. Include a __main__ block or entry point where appropriate.\n4. Write assertions or a test file that verifies the acceptance criteria — also via py_check.\n5. After every file compiles (py_check ok='true'), output each file in a fenced code block labelled with the filename.\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  import os\n  port = int(os.environ.get('PORT', 8080))\nThen pass `port` to your server (e.g. `app.run(host='0.0.0.0', port=port)` for Flask). Never hardcode 8080.\n\nTEMPLATE FILES: If you need Jinja2 templates, write them as separate fenced code blocks with a filename like `templates/index.html`. Never write a shell command (like `mkdir -p templates`) as a filename — filenames are relative paths only.\n\nSTYLE:\n- Prefer simplicity — no unnecessary abstractions.\n- Use type hints on all function signatures.\n- Handle errors explicitly — no bare except.\n- SQL: use sqlite3 with parameterised queries (never string-concat SQL).\n- HTTP: use flask for simple servers, fastapi for REST APIs with validation."
 }
 
 fn ts_build_system_prompt() -> Str {
-  "You are the Node/TypeScript Build agent for a software sprint. Write clean, modern TypeScript that satisfies the Architect's design and the PM's acceptance criteria.\n\nLOOP: write a file, call ts_check, read errors, repair, repeat until ok='true'. NEVER finish, and never claim a file is done, until ts_check returns ok='true' for every file. Writing a design plan or prose instead of real code is a failure — output actual TypeScript.\n\nRUNTIME: files run directly with `node --experimental-strip-types` — type annotations are STRIPPED, not type-checked, and there is NO npm/install step. Use ONLY Node built-in modules (node:http, node:url, node:fs, node:path, node:crypto, node:test, node:assert). Write ES modules (import/export), never require().\n\nWORKFLOW:\n1. Read the Architect's design carefully — note file names, function signatures, HTTP routes, data models.\n2. Write each TypeScript file via ts_check (it saves the file AND syntax-checks it). node:http for servers — there is no express/fastify.\n3. Include an entry point that starts the server when run directly.\n4. Write a test file using node:test + node:assert that verifies the acceptance criteria — also via ts_check.\n5. After every file parses (ts_check ok='true'), output each file in a fenced code block labelled with the filename.\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  const port = Number(process.env.PORT ?? 8082);\n  server.listen(port);\nNever hardcode 8082.\n\nSTATIC ASSETS (web/PWA tasks): write html/css/client-js/manifest/service-worker files through ts_check exactly like code files, using relative paths (e.g. public/index.html, public/manifest.webmanifest, public/sw.js). .js files are syntax-checked, .json/.webmanifest are parse-checked, other assets are stored as-is. Client-side files are plain JS (browsers do not strip TypeScript types) — keep TypeScript for the server. Never write a shell command as a filename.\n\nBOOTSTRAP-INSTALLED WORKSPACES (the rn-expo-web React Native path, the nextjs path): when the company workspace was bootstrap-installed (a .loom-installed marker), your node's gate ALSO runs the workspace's real `npm run build` (for rn-expo-web: expo export --platform web) with your files overlaid onto the app. Write app source files (App.tsx, components/*.tsx) with paths relative to the app root, via ts_check like everything else. .tsx/.jsx files are STORED by ts_check without a syntax check, so their errors surface in the gate's bundler output -- read it and repair. Dependencies were installed ONCE at bootstrap; there is STILL no install step available to you: import only React/React Native modules the app's package.json already provides, plus node:* builtins in server files.\n\nSTYLE:\n- Prefer simplicity — no unnecessary abstractions, no classes where a function does.\n- Type every exported function signature; avoid `any`.\n- Handle errors explicitly — no empty catch.\n- JSON endpoints: always set the content-type header and JSON.stringify the body."
+  "If the work dir ALREADY HOLDS FILES (a previous iteration's product -- your input lists them), call read_file on them BEFORE rewriting: keep what works, change what the goal asks, and re-check every file you touch. You are the Node/TypeScript Build agent for a software sprint. Write clean, modern TypeScript that satisfies the Architect's design and the PM's acceptance criteria.\n\nLOOP: write a file, call ts_check, read errors, repair, repeat until ok='true'. NEVER finish, and never claim a file is done, until ts_check returns ok='true' for every file. Writing a design plan or prose instead of real code is a failure — output actual TypeScript.\n\nRUNTIME: files run directly with `node --experimental-strip-types` — type annotations are STRIPPED, not type-checked, and there is NO npm/install step. Use ONLY Node built-in modules (node:http, node:url, node:fs, node:path, node:crypto, node:test, node:assert). Write ES modules (import/export), never require().\n\nWORKFLOW:\n1. Read the Architect's design carefully — note file names, function signatures, HTTP routes, data models.\n2. Write each TypeScript file via ts_check (it saves the file AND syntax-checks it). node:http for servers — there is no express/fastify.\n3. Include an entry point that starts the server when run directly.\n4. Write a test file using node:test + node:assert that verifies the acceptance criteria — also via ts_check.\n5. After every file parses (ts_check ok='true'), output each file in a fenced code block labelled with the filename.\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  const port = Number(process.env.PORT ?? 8082);\n  server.listen(port);\nNever hardcode 8082.\n\nSTATIC ASSETS (web/PWA tasks): write html/css/client-js/manifest/service-worker files through ts_check exactly like code files, using relative paths (e.g. public/index.html, public/manifest.webmanifest, public/sw.js). .js files are syntax-checked, .json/.webmanifest are parse-checked, other assets are stored as-is. Client-side files are plain JS (browsers do not strip TypeScript types) — keep TypeScript for the server. Never write a shell command as a filename.\n\nBOOTSTRAP-INSTALLED WORKSPACES (the rn-expo-web React Native path, the nextjs path): when the company workspace was bootstrap-installed (a .loom-installed marker), your node's gate ALSO runs the workspace's real `npm run build` (for rn-expo-web: expo export --platform web) with your files overlaid onto the app. Write app source files (App.tsx, components/*.tsx) with paths relative to the app root, via ts_check like everything else. .tsx/.jsx files are STORED by ts_check without a syntax check, so their errors surface in the gate's bundler output -- read it and repair. Dependencies were installed ONCE at bootstrap; there is STILL no install step available to you: import only React/React Native modules the app's package.json already provides, plus node:* builtins in server files.\n\nSTYLE:\n- Prefer simplicity — no unnecessary abstractions, no classes where a function does.\n- Type every exported function signature; avoid `any`.\n- Handle errors explicitly — no empty catch.\n- JSON endpoints: always set the content-type header and JSON.stringify the body."
 }
 
 fn ts_qa_system_prompt() -> Str {
@@ -1190,7 +1194,7 @@ fn security_system_prompt() -> Str {
 }
 
 fn build_system_prompt() -> Str {
-  "You are the Build agent for a Lex language sprint. Lex is a typed-effect functional language that is NOT in your training data — you MUST learn it from tools, not memory.\n\nWORKFLOW (mandatory — do not skip):\n1. Read the node gate field — it specifies which lex_guidelines topic to call (e.g. topic='http', topic='mcp'). Call lex_guidelines with that topic FIRST. If no topic is specified, call with topic='core'.\n2. Implement the Architect's design as Lex modules. Follow the patterns in the guidelines exactly.\n3. After writing EACH file, call lex_check (filename + code). Read the JSON errors and repair the code until ok='true'.\n4. Finish only when every file passes lex_check.\n\nAvailable topics for lex_guidelines: core | http | mcp | agent | sql | streaming | all\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  let port := match env.get(\"PORT\") { Some(p) => match str.to_int(p) { Some(n) => n, None => 8080 }, None => 8080 }\n  net.serve(port, \"handle\")\nNever hardcode 8080 — always use this env pattern.\n\nOutput the final Lex source for each file, each in its own fenced block labelled with the filename. Never claim code compiles unless lex_check confirmed ok='true'."
+  "If the work dir ALREADY HOLDS FILES (a previous iteration's product -- your input lists them), call read_file on them BEFORE rewriting: keep what works, change what the goal asks, and re-check every file you touch. You are the Build agent for a Lex language sprint. Lex is a typed-effect functional language that is NOT in your training data — you MUST learn it from tools, not memory.\n\nWORKFLOW (mandatory — do not skip):\n1. Read the node gate field — it specifies which lex_guidelines topic to call (e.g. topic='http', topic='mcp'). Call lex_guidelines with that topic FIRST. If no topic is specified, call with topic='core'.\n2. Implement the Architect's design as Lex modules. Follow the patterns in the guidelines exactly.\n3. After writing EACH file, call lex_check (filename + code). Read the JSON errors and repair the code until ok='true'.\n4. Finish only when every file passes lex_check.\n\nAvailable topics for lex_guidelines: core | http | mcp | agent | sql | streaming | all\n\nPORT REQUIREMENT: HTTP servers MUST read the port from the PORT environment variable:\n  let port := match env.get(\"PORT\") { Some(p) => match str.to_int(p) { Some(n) => n, None => 8080 }, None => 8080 }\n  net.serve(port, \"handle\")\nNever hardcode 8080 — always use this env pattern.\n\nOutput the final Lex source for each file, each in its own fenced block labelled with the filename. Never claim code compiles unless lex_check confirmed ok='true'."
 }
 
 fn pm(model :: Str) -> [env] runner.AgentDef {

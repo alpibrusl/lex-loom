@@ -29,13 +29,13 @@ fn tools_for(role :: Str) -> List[Str] {
         ["lex_guidelines", "lex_check"]
       } else {
         if role == "build" {
-          ["lex_guidelines", "lex_check"]
+          ["lex_guidelines", "lex_check", "read_file"]
         } else {
           if role == "py_build" {
-            ["py_check"]
+            ["py_check", "read_file"]
           } else {
             if role == "ts_build" {
-              ["ts_check"]
+              ["ts_check", "read_file"]
             } else {
               if role == "qa" {
                 ["lex_check", "lex_run"]

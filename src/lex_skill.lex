@@ -586,6 +586,37 @@ fn make_security_scan_tool(sprint_id :: Str) -> t.Tool {
 # Executes a function in a previously-checked file. For tests, use
 # fn_name='run_all'. The file must already exist in the work dir (write it
 # with lex_check first).
+# read_file (#364): a build that inherits the previous iteration's product
+# must be able to READ it before rewriting it -- until now the build roles
+# could only write-and-compile, so a seeded work dir would be overwritten
+# blind. Reads a relative path from whichever work dir holds it (python,
+# node, lex); refuses `..` and absolute paths; caps the content.
+fn make_read_file_tool(sprint_id :: Str) -> t.Tool {
+  let dirs := [py_work_dir(sprint_id), ts_work_dir(sprint_id), work_dir(sprint_id)]
+  let params := { title: "ReadFile", description: "Read a file from the sprint work dir, return {ok, content}", fields: [s.required_str("filename", [])] }
+  t.define("read_file", "Read <filename> (a relative path) from the work dir and return {ok:'true'|'false', content:<text or error>}. Use it to see what is already on disk -- the previous iteration's product, or a file you wrote earlier -- BEFORE rewriting it. Long files are cut at 12000 characters.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let filename := match jv.get_field(args, "filename") {
+      Some(JStr(v)) => v,
+      _ => "",
+    }
+    if str.is_empty(filename) or str.contains(filename, "..") or str.starts_with(filename, "/") {
+      Ok(JObj([("ok", JStr("false")), ("content", JStr("refusing: give a plain relative path inside the work dir (no '..', no leading '/')"))]))
+    } else {
+      let script := str.join(["for D in ", str.join(list.map(dirs, fn (d :: Str) -> Str {
+        str.join(["'", d, "'"], "")
+      }), " "), "; do if [ -f \"$D/", filename, "\" ]; then head -c 12000 \"$D/", filename, "\"; [ $(wc -c < \"$D/", filename, "\") -gt 12000 ] && printf '\\n...[cut at 12000 characters]'; exit 0; fi; done; echo \"NOFILE\"; exit 3"], "")
+      match proc.run("bash", ["-c", script]) {
+        Err(msg) => Ok(JObj([("ok", JStr("false")), ("content", JStr(msg))])),
+        Ok(res) => if res.exit_code == 0 {
+          Ok(JObj([("ok", JStr("true")), ("content", JStr(res.stdout))]))
+        } else {
+          Ok(JObj([("ok", JStr("false")), ("content", JStr(str.concat("no such file in the work dir: ", filename)))]))
+        },
+      }
+    }
+  })
+}
+
 fn make_lex_run_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := work_dir(sprint_id)
   let params := { title: "LexRun", description: "Run a function in a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("fn_name", []), s.required_str("args", [])] }

@@ -450,15 +450,19 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
               str.join([cfg.request, "\n\nThe response schema this product must return (from the spec — the implementation is being written separately against this same contract):\n", schema], "")
             }
           } else {
-            if needs_the_file_listing(n.role) {
-              let files := launch_file_listing(cfg.id)
-              if str.is_empty(files) {
-                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
-              } else {
-                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThese are the files the build actually wrote, and they are the ONLY files that exist. Work with these — do not guess a conventional name like main.py or app.py, do not name a file that is not on this list, and do not re-create any of them:\n", files, "\n"], "")
-              }
+            if is_build_role_name(n.role) and not str.is_empty(launch_file_listing(cfg.id)) {
+              str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThe work dir ALREADY HOLDS these files (the previous iteration's product, or your own earlier work). Read them with read_file before rewriting; modify, do not start over:\n", launch_file_listing(cfg.id)], "")
             } else {
-              str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+              if needs_the_file_listing(n.role) {
+                let files := launch_file_listing(cfg.id)
+                if str.is_empty(files) {
+                  str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+                } else {
+                  str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input, "\n\nThese are the files the build actually wrote, and they are the ONLY files that exist. Work with these — do not guess a conventional name like main.py or app.py, do not name a file that is not on this list, and do not re-create any of them:\n", files, "\n"], "")
+                }
+              } else {
+                str.join(["Sprint goal: ", cfg.request, "\n\nPrevious step output:\n", input], "")
+              }
             }
           }
         }
@@ -1514,6 +1518,18 @@ fn launch_file_listing(sprint_id :: Str) -> [proc] Str {
 # Roles that act on the files the build wrote, rather than on its prose: they
 # all need to be told which files those actually are. QA is here because it was
 # reconstructing the implementation from the build's text and testing the copy.
+fn is_build_role_name(role :: Str) -> Bool {
+  if role == "build" {
+    true
+  } else {
+    if role == "py_build" {
+      true
+    } else {
+      role == "ts_build"
+    }
+  }
+}
+
 fn needs_the_file_listing(role :: Str) -> Bool {
   if role == "launch" {
     true

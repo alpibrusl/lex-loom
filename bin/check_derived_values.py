@@ -176,6 +176,83 @@ def collection_failure(root: Path) -> str:
             "fix the file so `pytest --collect-only` passes:\n\n" + tail + "\n")
 
 
+def pin_failure(root: Path, files) -> str:
+    """A pin is only worth something if it is RUN. tzc16, iteration 1: the
+    author pinned `assert EXPECTED_EPOCH == 1752181800` -- derived name on
+    one side, literal on the other, exactly the accepted idiom -- and the
+    literal was 12h10m wrong (1752181800 is 21:10 UTC, not 09:00). This check
+    saw a pin and passed it; QA failed the pin three bounces later, blaming a
+    correct app each time. The author has no tool that computes, so a pin it
+    writes is a guess with a derivation next to it. Execute the pins here:
+    module-level imports and assignments as the prelude, then every
+    `assert <expr> == <literal>` whose literal this check would have
+    flagged, each reported with the value the derivation actually gives.
+    Anything other than an AssertionError (an import that needs the app, a
+    syntax the parser rejects) is not this check's verdict."""
+    import ast, subprocess
+    out = []
+    for path in files:
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            continue
+        prelude, pins = [], []
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)):
+                prelude.append(ast.get_source_segment(path.read_text(), node) or "")
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assert) and isinstance(node.test, ast.Compare)
+                    and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.Eq)):
+                continue
+            left, right = node.test.left, node.test.comparators[0]
+            def is_lit(n):
+                return isinstance(n, ast.Constant) and any(
+                    pat.search(str(n.value)) for pat, _ in LITERALS)
+            if is_lit(right) and not is_lit(left):
+                expr, lit = left, right
+            elif is_lit(left) and not is_lit(right):
+                expr, lit = right, left
+            else:
+                continue
+            if isinstance(expr, ast.Constant):
+                continue
+            pins.append((node.lineno, ast.unparse(expr), repr(lit.value)))
+        if not pins:
+            continue
+        # Each prelude statement runs on its own with failures tolerated -- a
+        # module-level `app = importlib.import_module("main")` that needs the
+        # build must not stop the datetime pins from being evaluated -- and
+        # each pin is evaluated on its own; a pin whose expression cannot be
+        # evaluated here (a name the prelude never bound) is skipped, not
+        # judged.
+        import json
+        script = ("import sys\n_ns = {}\n"
+                  f"for _stmt in {json.dumps(prelude)}:\n"
+                  "    try:\n        exec(_stmt, _ns)\n    except Exception:\n        pass\n"
+                  f"for _lineno, _expr, _lit in {json.dumps(pins)}:\n"
+                  "    try:\n        _v = eval(_expr, _ns)\n    except Exception:\n        continue\n"
+                  "    if _v != eval(_lit):\n"
+                  "        print('PIN_FAIL\\t' + str(_lineno) + '\\t' + repr(_v) + '\\t' + _lit)\n")
+        try:
+            r = subprocess.run([sys.executable, "-c", script], cwd=str(root),
+                               capture_output=True, text=True, timeout=60)
+        except Exception:
+            continue
+        for line in r.stdout.splitlines():
+            if line.startswith("PIN_FAIL\t"):
+                _, lineno, got, lit = line.split("\t", 3)
+                out.append((path.name, lineno, lit, got))
+    if not out:
+        return ""
+    msg = ["check_derived_values: a PIN is wrong -- the derivation does not give the literal.", ""]
+    for name, lineno, lit, got in out:
+        msg.append(f"  {name}:{lineno}  pinned {lit}, but the derivation gives {got}")
+    msg += ["", "The pin did its job here instead of at QA: the literal was typed from memory",
+            "and the computation disagrees. Replace the literal with the derivation's value",
+            "(the second number above) or drop the pin and assert against the derivation.", ""]
+    return "\n".join(msg)
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     files = [p for p in root.rglob("*") if p.is_file()
@@ -197,6 +274,10 @@ def main() -> int:
         coll = collection_failure(root)
         if coll:
             print(coll)
+            return 1
+        pin = pin_failure(root, files)
+        if pin:
+            print(pin)
             return 1
         print(f"check_derived_values: {len(files)} test file(s), expected values are derived")
         return 0

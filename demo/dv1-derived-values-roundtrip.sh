@@ -53,5 +53,15 @@ printf 'from .app import app\n' > "$W/pkgok/tzconvert/__init__.py"; printf 'app 
 if (cd "$W/pkgbad" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then bad "a package importing a name its module never defines was accepted -- tzc15 iter 1 sealed exactly this"; else ok "a package that cannot be imported is denied where it was written"; fi
 if (cd "$W/pkgok" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then ok "a healthy package imports cleanly"; else bad "a healthy package was denied"; fi
 
+echo "== 7. a pin is executed at the author, not discovered by QA"
+# tzc16 iteration 1, verbatim shape: derived name pinned to a literal typed
+# from memory, 12h10m wrong. Three QA bounces blamed a correct app.
+mkdir -p "$W/pinbad" "$W/pinok"
+printf 'from datetime import datetime, timezone\nEXPECTED_EPOCH = int(datetime(2025, 7, 10, 9, 0, tzinfo=timezone.utc).timestamp())\n\ndef test_pin_unix_epoch_literal():\n    assert EXPECTED_EPOCH == 1752181800\n' > "$W/pinbad/test_pin.py"
+printf 'from datetime import datetime, timezone\nEXPECTED_EPOCH = int(datetime(2025, 7, 10, 9, 0, tzinfo=timezone.utc).timestamp())\n\ndef test_pin_unix_epoch_literal():\n    assert EXPECTED_EPOCH == 1752138000\n' > "$W/pinok/test_pin.py"
+rc=0; out=$(cd "$W/pinbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1) || rc=$?
+case "$rc:$out" in 1:*"1752138000"*) ok "a wrong pin is denied where it was written, with the value the derivation gives" ;; 0:*) bad "a wrong pin (1752181800 for 09:00 UTC) was accepted -- tzc16's three bounces" ;; *) bad "the wrong pin was denied without naming the true value" ;; esac
+if (cd "$W/pinok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a correct pin passes"; else bad "a correct pin was denied"; fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

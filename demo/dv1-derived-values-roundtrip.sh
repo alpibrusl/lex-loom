@@ -88,5 +88,15 @@ if (cd "$W/helperok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/nu
 rc=0; out=$(cd "$W/helperbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1) || rc=$?
 case "$rc:$out" in 1:*"15:30:00+01:00"*) ok "a wrong pin through a local helper is denied, naming the value the helper gives" ;; 0:*) bad "a wrong pin through a local helper was accepted -- the helper was never run" ;; *) bad "the wrong helper pin was denied without naming the true value" ;; esac
 
+echo "== 10. two test files with one basename are named, with the fix"
+mkdir -p "$W/dup/tests"
+printf 'def test_a():\n    assert 1\n' > "$W/dup/test_convert.py"; printf 'def test_b():\n    assert 1\n' > "$W/dup/tests/test_convert.py"
+if python3 -c 'import pytest' >/dev/null 2>&1; then
+  rc=0; out=$(cd "$W/dup" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1) || rc=$?
+  case "$rc:$out" in 1:*"share one"*"test_convert.py: "*) ok "duplicate test basenames are named with the two fixes" ;; 1:*) bad "the duplicate was denied under the generic collection hint -- tzc21 iter 2's repeated denials" ;; *) bad "two test files sharing a basename were accepted (pytest cannot collect them)" ;; esac
+else
+  ok "duplicate-basename case skipped: no pytest on this host"
+fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

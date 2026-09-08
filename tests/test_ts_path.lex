@@ -73,7 +73,7 @@ fn test_ts_roster_rows_agree() -> Result[Unit, Str] {
       found or e == x
     })
   }
-  if rt.tools_for("ts_build") == ["ts_check"] {
+  if rt.tools_for("ts_build") == ["ts_check", "read_file"] {
     if rt.tools_for("ts_qa") == ["run_node_code"] {
       if has(role_kinds.known_kinds(), "ts_build") {
         if has(role_kinds.known_kinds(), "ts_qa") {
@@ -88,7 +88,7 @@ fn test_ts_roster_rows_agree() -> Result[Unit, Str] {
       Err("ts_qa should wield exactly [run_node_code]")
     }
   } else {
-    Err("ts_build should wield exactly [ts_check]")
+    Err("ts_build should wield exactly [ts_check, read_file]")
   }
 }
 

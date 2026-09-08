@@ -19,6 +19,8 @@ import "std.crypto" as crypto
 
 import "lex-schema/json_value" as jv
 
+import "lex-schema/error" as e
+
 import "../src/agent/runner" as runner
 
 import "../src/orchestrator" as orch
@@ -242,8 +244,88 @@ fn test_compile_denial_names_the_way_out() -> [env, io, net, proc, random, fs_wr
   }
 }
 
+# #364: after a passing iteration the product carries into the next one.
+fn test_carry_forward_copies_the_product_and_skips_scratch() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let tag := crypto.random_str_hex(4)
+  let prev := str.join(["t-carry-", tag, "/iter-1"], "")
+  let next := str.join(["t-carry-", tag, "/iter-2"], "")
+  let pd := lexskill.py_work_dir(prev)
+  let nd := lexskill.py_work_dir(next)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", pd, "' '", nd, "' && mkdir -p '", pd, "/tests' '", pd, "/__pycache__' && printf 'def add(a, b):\\n    return a + b\\n' > '", pd, "/app.py' && printf 'from app import add\\ndef test_add():\\n    assert add(1, 1) == 2\\n' > '", pd, "/tests/test_app.py' && : > '", pd, "/_scratch.py' && : > '", pd, "/__pycache__/app.cpython-314.pyc'"], "")])
+  let n := runner.carry_artifact_forward(prev, next)
+  let after := match proc.run("bash", ["-c", str.join(["cd '", nd, "' 2>/dev/null && find . -type f | sort | tr '\\n' ' '"], "")]) {
+    Ok(r) => str.trim(r.stdout),
+    Err(_) => "?",
+  }
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", pd, "' '", nd, "'"], "")])
+  if str.contains(after, "./app.py") and str.contains(after, "./tests/test_app.py") and n == 2 {
+    if str.contains(after, "_scratch") or str.contains(after, "__pycache__") {
+      Err(str.concat("scratch or cache files were carried into the next iteration: ", after))
+    } else {
+      Ok(())
+    }
+  } else {
+    Err(str.join(["the previous iteration's product did not reach the next work dir (n=", int.to_str(n), "): ", after], ""))
+  }
+}
+
+fn test_carry_forward_leaves_an_existing_work_dir_alone() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let tag := crypto.random_str_hex(4)
+  let prev := str.join(["t-carry2-", tag, "/iter-1"], "")
+  let next := str.join(["t-carry2-", tag, "/iter-2"], "")
+  let pd := lexskill.py_work_dir(prev)
+  let nd := lexskill.py_work_dir(next)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", pd, "' '", nd, "' && mkdir -p '", pd, "' '", nd, "' && printf 'x = 1\\n' > '", pd, "/app.py' && printf 'y = 2\\n' > '", nd, "/own.py'"], "")])
+  let n := runner.carry_artifact_forward(prev, next)
+  let after := match proc.run("bash", ["-c", str.join(["ls '", nd, "' | tr '\\n' ' '"], "")]) {
+    Ok(r) => str.trim(r.stdout),
+    Err(_) => "?",
+  }
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", pd, "' '", nd, "'"], "")])
+  if n == 0 and after == "own.py" {
+    Ok(())
+  } else {
+    Err(str.join(["an existing work dir was written over by the carry (n=", int.to_str(n), "): ", after], ""))
+  }
+}
+
+fn read_field(r :: Result[jv.Json, e.Errors], field :: Str) -> Str {
+  match r {
+    Ok(res) => match jv.get_field(res, field) {
+      Some(JStr(v)) => v,
+      _ => "",
+    },
+    Err(_) => "err",
+  }
+}
+
+fn test_read_file_reads_the_work_dir_and_refuses_escapes() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-read/", crypto.random_str_hex(4))
+  let d := lexskill.py_work_dir(sprint)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "/pkg' && printf 'def add(a, b):\\n    return a + b\\n' > '", d, "/pkg/app.py' && head -c 20000 /dev/zero | tr '\\0' 'x' > '", d, "/big.py'"], "")])
+  let tool := lexskill.make_read_file_tool(sprint)
+  let ok_read := tool.execute(JObj([("filename", JStr("pkg/app.py"))]))
+  let escape := tool.execute(JObj([("filename", JStr("../../etc/passwd"))]))
+  let big := tool.execute(JObj([("filename", JStr("big.py"))]))
+  let missing := tool.execute(JObj([("filename", JStr("nope.py"))]))
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", d, "'"], "")])
+  if read_field(ok_read, "ok") == "true" and str.contains(read_field(ok_read, "content"), "def add(a, b)") {
+    if read_field(escape, "ok") == "false" and read_field(missing, "ok") == "false" {
+      if str.contains(read_field(big, "content"), "cut at 12000") and str.len(read_field(big, "content")) < 12100 {
+        Ok(())
+      } else {
+        Err("a 20000-byte file was not cut at 12000 characters")
+      }
+    } else {
+      Err("read_file followed a '..' path or reported a missing file as ok")
+    }
+  } else {
+    Err(str.concat("read_file could not read a file the build wrote: ", read_field(ok_read, "content")))
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

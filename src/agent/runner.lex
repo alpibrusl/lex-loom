@@ -644,6 +644,33 @@ fn quarantine_test_files(role :: Str, sprint_id :: Str) -> [proc] Int {
   }
 }
 
+# Continuity between iterations (#364). Every iteration used to start from an
+# empty work dir while the strategist wrote revise goals as deltas to a
+# product that was not there (tzc15 iter 3, tzc18 iter 3). After a PASSING
+# iteration its sealed work dirs (python, node, lex) are copied into the next
+# iteration's, minus caches, scratch `_*` files and quarantined tests, so the
+# build modifies a product instead of rebuilding one. Returns the number of
+# files carried.
+fn carry_artifact_forward(prev_sprint_id :: Str, sprint_id :: Str) -> [proc] Int {
+  let pairs := list.map(["py_build", "ts_build", "build"], fn (role :: Str) -> (Str, Str) {
+    (tool_work_dir_for_role(role, prev_sprint_id), tool_work_dir_for_role(role, sprint_id))
+  })
+  list.fold(pairs, 0, fn (n :: Int, p :: (Str, Str)) -> [proc] Int {
+    match p {
+      (from, to) => {
+        let script := str.join(["F='", from, "'\n", "T='", to, "'\n", "[ -d \"$F\" ] || { echo 0; exit 0; }\n", "[ -e \"$T\" ] && { echo 0; exit 0; }\n", "mkdir -p \"$T\"\n", "cd \"$F\" && find . -type d \\( -name __pycache__ -o -name .pytest_cache -o -name node_modules -o -name '_*' \\) -prune -o -type f ! -name '_*' -print | while read -r f; do mkdir -p \"$T/$(dirname \"$f\")\" && cp \"$f\" \"$T/$f\"; done\n", "find \"$T\" -type f | wc -l"], "")
+        match proc.run("bash", ["-c", script]) {
+          Ok(res) => match str.to_int(str.trim(res.stdout)) {
+            Some(k) => n + k,
+            None => n,
+          },
+          Err(_) => n,
+        }
+      },
+    }
+  })
+}
+
 fn tool_work_dir_for_role(role :: Str, sprint_id :: Str) -> Str {
   if role == "py_build" or role == "py_test_author" {
     py_work_dir(sprint_id)

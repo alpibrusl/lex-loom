@@ -216,11 +216,15 @@ fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id ::
 # tzc18 iter 3 "fix the tzconvert test suite so QA passes" -- and the sprint
 # then produced only the delta: nothing to launch, QA fail, iteration lost.
 # Until artifacts carry forward (#364) the goal states the premise (#365).
-fn iteration_goal(goal :: Str, k :: Int) -> Str {
+fn iteration_goal(goal :: Str, k :: Int, carried :: Str) -> Str {
   if k <= 1 {
     goal
   } else {
-    str.join([goal, "\n\nNOTE: this iteration starts from an EMPTY work dir. Nothing built or tested in earlier iterations is on disk. Build everything this goal needs to run and be verified -- the server, its tests, its requirements -- not only the change described above."], "")
+    if str.is_empty(str.trim(carried)) {
+      str.join([goal, "\n\nNOTE: this iteration starts from an EMPTY work dir. Nothing built or tested in earlier iterations is on disk. Build everything this goal needs to run and be verified -- the server, its tests, its requirements -- not only the change described above."], "")
+    } else {
+      str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product (it passed its verdict). These files are on disk:\n", carried, "\nModify this product: read files before rewriting them, keep what works, change what the goal asks, keep the tests passing."], "")
+    }
   }
 }
 
@@ -237,6 +241,23 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
 
 fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let sprint_id := company.iteration_sprint_id(ccfg.id, k)
+  let carried_files := if k > 1 and prev_ctx.last_verdict == "passed" {
+    runner.carry_artifact_forward(parent_sprint, sprint_id)
+  } else {
+    0
+  }
+  let carried_listing := if carried_files > 0 {
+    orch.launch_file_listing(sprint_id)
+  } else {
+    ""
+  }
+  let __pc := if carried_files > 0 {
+    let __t := tr.trail(db, sprint_id, "product_carried_forward", str.join(["{\"from\":\"", parent_sprint, "\",\"files\":", int.to_str(carried_files), "}"], ""))
+    io.print(str.join(["[company] carried ", int.to_str(carried_files), " product file(s) from ", parent_sprint, " into ", sprint_id], ""))
+  } else {
+    ()
+  }
+  let current_goal := iteration_goal(current_goal, k, carried_listing)
   let __carry := if k > 1 {
     let n := company.carry_specs_forward(db, str.concat(parent_sprint, "-next"), sprint_id)
     io.print(str.join(["[company] carried ", int.to_str(n), " tightened spec(s) into ", sprint_id], ""))
@@ -336,7 +357,7 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     ()
   }
   let next_goal := if decision.decision == "revise" {
-    iteration_goal(decision.goal, k + 1)
+    decision.goal
   } else {
     current_goal
   }

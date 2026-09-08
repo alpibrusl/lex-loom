@@ -40,7 +40,7 @@ fn deliverables_for(role :: Str) -> List[Deliverable] {
     [{ patterns: ["*.lex"], exclude: ["*_test.lex"], what: "a Lex source file (not a test)" }]
   } else {
     if role == "test_author" {
-      [{ patterns: ["*_test.lex"], exclude: [], what: "a Lex test file (*_test.lex)" }]
+      [{ patterns: ["*_test.lex", "test_*.lex"], exclude: [], what: "a Lex test file (*_test.lex or test_*.lex)" }]
     } else {
       if role == "py_build" {
         [{ patterns: ["*.py"], exclude: ["test_*.py", "*_test.py", "conftest.py", "_*.py", "__init__.py"], what: "a Python module (not a test, not a scratch _*.py, not a bare __init__.py)" }]

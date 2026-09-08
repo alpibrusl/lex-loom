@@ -140,6 +140,19 @@ fn test_lex_build_needs_a_source_file() -> [io, proc] Result[Unit, Str] {
   }
 }
 
+# #392: the suite runner and the author's tool accept test_*.lex as well as
+# *_test.lex; the contract accepted only the second, so an author writing
+# test_wordcount.lex would be allowed, run by QA, and denied here.
+fn test_lex_test_author_accepts_test_prefix() -> [io, proc] Result[Unit, Str] {
+  let d := runner.tool_work_dir_for_role("test_author", "rc-lta-prefix")
+  let __s := seed(d, "test_wordcount.lex", "fn run_all() -> Int {\n  0\n}\n")
+  if contract_holds("test_author", "rc-lta-prefix") {
+    Ok(())
+  } else {
+    Err("test_wordcount.lex does not satisfy the Lex test_author contract, though the suite runner would execute it")
+  }
+}
+
 fn test_lex_test_author_needs_a_test() -> [io, proc] Result[Unit, Str] {
   let __s := seed(lexskill.work_dir("rc-lext-good"), "app_test.lex", "fn t() -> Int {\n  1\n}\n")
   if contract_holds("test_author", "rc-lext-good") {
@@ -345,7 +358,7 @@ fn test_no_role_loses_its_own_tools() -> [env, fs_read] Result[Unit, Str] {
 }
 
 fn run_all() -> [env, fs_read, io, proc] Int {
-  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py_build accepts a package", test_py_build_accepts_a_package()), ("py_build rejects a tests-only tree", test_py_build_rejects_a_tests_only_tree()), ("py test author accepts tests in a folder", test_py_test_author_accepts_tests_in_a_folder()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique()), ("no role loses its own tools", test_no_role_loses_its_own_tools())]
+  let results := [("py_build needs a module", test_py_build_needs_a_module()), ("py_build accepts a module", test_py_build_accepts_a_module()), ("py_build accepts a package", test_py_build_accepts_a_package()), ("py_build rejects a tests-only tree", test_py_build_rejects_a_tests_only_tree()), ("py test author accepts tests in a folder", test_py_test_author_accepts_tests_in_a_folder()), ("py test author needs a test", test_py_test_author_needs_a_test()), ("lex build needs a source file", test_lex_build_needs_a_source_file()), ("lex test author needs a test", test_lex_test_author_needs_a_test()), ("lex test author accepts the test_ prefix", test_lex_test_author_accepts_test_prefix()), ("ts_build needs a module", test_ts_build_needs_a_module()), ("ts test author needs a test", test_ts_test_author_needs_a_test()), ("prose roles owe nothing", test_prose_roles_owe_nothing()), ("every language is complete", test_every_language_is_complete()), ("each test author holds only its own tool", test_each_test_author_holds_only_its_own_tool()), ("test author mapping is total", test_test_author_mapping_is_total()), ("every test author kind gets the re-derivation critique", test_every_test_author_kind_gets_the_rederivation_critique()), ("a builder still gets the builder critique", test_a_builder_still_gets_the_builder_critique()), ("no role loses its own tools", test_no_role_loses_its_own_tools())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

@@ -1546,27 +1546,31 @@ fn find_build_artifact_by_name_heuristic(db :: conn.ConnDb, sprint_id :: Str) ->
 # notice this itself.
 type NodeResultRow = { accepted :: Int }
 
+# Every graph row of the sprint is read (#396): a sprint persists one row per
+# phase and subgraph (lexwc2 had eight), and `ORDER BY created_at DESC LIMIT
+# 1` picked whichever was written last -- the Intake graph, with no build
+# node -- so the strategist was told "NO Lex build node has EVER been
+# accepted" one minute after a Lex build was accepted and the verdict passed.
 fn graph_node_ids_with_exact_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str) -> [sql] List[Str] {
-  let q := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY created_at", params: [PStr(sprint_id)] }, db.dialect)
   let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
-    Ok(rs) => match list.head(rs) {
-      None => [],
-      Some(r) => match jv.parse(r.graph_json) {
-        Err(_) => [],
+    Ok(rs) => list.fold(rs, [], fn (acc0 :: List[Str], r :: GraphRow) -> List[Str] {
+      match jv.parse(r.graph_json) {
+        Err(_) => acc0,
         Ok(j) => match jv.get_field(j, "nodes") {
-          Some(JList(nodes)) => list.fold(nodes, [], fn (acc :: List[Str], n :: jv.Json) -> List[Str] {
+          Some(JList(nodes)) => list.fold(nodes, acc0, fn (acc :: List[Str], n :: jv.Json) -> List[Str] {
             if json_str_field(n, "role") == role {
               list.concat(acc, [json_str_field(n, "id")])
             } else {
               acc
             }
           }),
-          _ => [],
+          _ => acc0,
         },
-      },
-    },
+      }
+    }),
   }
 }
 

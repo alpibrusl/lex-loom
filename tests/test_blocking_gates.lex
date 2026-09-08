@@ -138,6 +138,46 @@ fn test_park_holds_subtree_and_continues_independent() -> [env, io, time, crypto
   }
 }
 
+# #360: a failed gate holds its own subtree and NOTHING else. tzc18 iter 1
+# lost both builds to a denied test author that neither depended on.
+fn failing_graph(sprint_id :: Str) -> graph.SprintGraph {
+  { id: sprint_id, phase: Implementation, nodes: [{ id: "author", role: "docs", gate: "spec len-gt 100000", expand: None, activate_when: "" }, { id: "qa", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "author", to: "qa", handoff: "tests" }] }
+}
+
+fn mk_failing_cfg(db :: conn.ConnDb, sprint_id :: Str) -> [env] orch.SprintCfg {
+  let trail_none :: Option[tlog.Log] := None
+  { id: sprint_id, request: "demo request", model: "proc:cat", db: db, api_calls_max: 50, roster: [proc_agent("author"), proc_agent("qa"), proc_agent("build")], trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
+}
+
+fn test_a_failed_layer_does_not_abandon_independent_nodes() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let sid := str.concat("gov-fail-", crypto.random_str_hex(6))
+      let pr := orch.run_phase(failing_graph(sid), Implementation, "", [], mk_failing_cfg(db, sid))
+      match outcome_for(pr.outcomes, "author") {
+        None => Err("no outcome for the failing node"),
+        Some(oa) => match check("the failing node is not attested", not oa.attested) {
+          Err(e) => Err(e),
+          Ok(_) => match outcome_for(pr.outcomes, "build") {
+            None => Err("the independent node has NO outcome -- the failed layer abandoned it (tzc18's two builds)"),
+            Some(ob) => match check("the independent node ran and sealed", ob.attested and ob.sealed) {
+              Err(e) => Err(e),
+              Ok(_) => match outcome_for(pr.outcomes, "qa") {
+                None => Err("the dependent node has no outcome at all -- nothing in the trail says why it never ran"),
+                Some(oq) => match check("the dependent node is held with a reason", str.starts_with(oq.reason, "NOT RUN: an upstream node failed")) {
+                  Err(e) => Err(e),
+                  Ok(_) => check("the phase still fails", not pr.success),
+                },
+              },
+            },
+          },
+        },
+      }
+    },
+  }
+}
+
 # Approve, re-enter: the gate seals from the human-attested artifact without
 # re-running the node or pushing a duplicate item; downstream now runs.
 fn test_approve_resumes_downstream() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
@@ -213,7 +253,7 @@ fn test_reject_cancels_subtree() -> [env, io, time, crypto, random, sql, fs_read
 }
 
 fn suite() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] List[Result[Unit, Str]] {
-  [test_blocking_parse(), test_park_holds_subtree_and_continues_independent(), test_approve_resumes_downstream(), test_reject_cancels_subtree()]
+  [test_blocking_parse(), test_a_failed_layer_does_not_abandon_independent_nodes(), test_park_holds_subtree_and_continues_independent(), test_approve_resumes_downstream(), test_reject_cancels_subtree()]
 }
 
 fn run_all() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {

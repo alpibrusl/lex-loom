@@ -1047,57 +1047,79 @@ fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read, vcs] Str
 }
 
 # ── run_phase ─────────────────────────────────────────────────────────────────
+# A failed layer no longer abandons the rest of the phase (#360). tzc18
+# iteration 1: the test author (by design in a layer before the builds) was
+# denied, and both build nodes were then neither run nor recorded -- the only
+# symptom was QA's "never produced an artifact". Now only the DESCENDANTS of
+# a failed node are held (outcome "NOT RUN: an upstream node failed its
+# gate", trail node_not_run_upstream_failed), exactly as a parked human gate
+# holds its subtree; independent nodes run. The phase still fails.
 fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] PhaseResult {
   match graph.topo_sort(g) {
     Err(e) => { phase: p, outcomes: [], success: false },
     Ok(layers) => {
       let entry_parent := current_parent(cfg)
-      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent, parked: [] }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str] } {
-        if not acc.success {
-          acc
-        } else {
-          let blocked := graph.descendants(g, acc.parked)
-          let is_blocked := fn (id :: Str) -> Bool {
-            list.fold(blocked, false, fn (found :: Bool, b :: Str) -> Bool {
-              found or b == id
-            })
+      let result := list.fold(layers, { outcomes: [], last_ref: input_ref, cache: cache, success: true, parent: entry_parent, parked: [], failed: [] }, fn (acc :: { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str], failed :: List[Str] }, layer :: List[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] { outcomes :: List[NodeOutcome], last_ref :: Str, cache :: ArtifactCache, success :: Bool, parent :: Option[Str], parked :: List[Str], failed :: List[Str] } {
+        let blocked := graph.descendants(g, acc.parked)
+        let is_blocked := fn (id :: Str) -> Bool {
+          list.fold(blocked, false, fn (found :: Bool, b :: Str) -> Bool {
+            found or b == id
+          })
+        }
+        let downstream_of_failed := graph.descendants(g, acc.failed)
+        let is_orphaned := fn (id :: Str) -> Bool {
+          list.fold(downstream_of_failed, false, fn (found :: Bool, b :: Str) -> Bool {
+            found or b == id
+          })
+        }
+        let to_run := list.filter(layer, fn (id :: Str) -> Bool {
+          not is_blocked(id) and not is_orphaned(id)
+        })
+        let held_outcomes := list.map(list.filter(layer, is_blocked), fn (id :: Str) -> [sql, fs_write, time, random, crypto] NodeOutcome {
+          let __tp := tr.trail(cfg.db, cfg.id, "node_parked_downstream", str.join(["{\"node\":\"", id, "\"}"], ""))
+          { node_id: id, attested: false, sealed: false, artifact: "", reason: "PARKED downstream of a blocking human gate" }
+        })
+        let orphaned_outcomes := list.map(list.filter(layer, fn (id :: Str) -> Bool {
+          is_orphaned(id) and not is_blocked(id)
+        }), fn (id :: Str) -> [sql, fs_write, time, random, crypto] NodeOutcome {
+          let __tp := tr.trail(cfg.db, cfg.id, "node_not_run_upstream_failed", str.join(["{\"node\":\"", id, "\",\"failed_upstream\":", jv.stringify(JStr(str.join(acc.failed, ", "))), "}"], ""))
+          { node_id: id, attested: false, sealed: false, artifact: "", reason: str.concat("NOT RUN: an upstream node failed its gate: ", str.join(acc.failed, ", ")) }
+        })
+        let layer_result := run_layer(to_run, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
+        let combined := list.concat(list.concat(layer_result.outcomes, held_outcomes), orphaned_outcomes)
+        let all_ok := list.fold(combined, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
+          if not ok {
+            false
+          } else {
+            o.attested or is_parked_outcome(o)
           }
-          let to_run := list.filter(layer, fn (id :: Str) -> Bool {
-            not is_blocked(id)
-          })
-          let held_outcomes := list.map(list.filter(layer, is_blocked), fn (id :: Str) -> [sql, fs_write, time, random, crypto] NodeOutcome {
-            let __tp := tr.trail(cfg.db, cfg.id, "node_parked_downstream", str.join(["{\"node\":\"", id, "\"}"], ""))
-            { node_id: id, attested: false, sealed: false, artifact: "", reason: "PARKED downstream of a blocking human gate" }
-          })
-          let layer_result := run_layer(to_run, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
-          let combined := list.concat(layer_result.outcomes, held_outcomes)
-          let all_ok := list.fold(combined, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
-            if not ok {
-              false
-            } else {
-              o.attested or is_parked_outcome(o)
-            }
-          })
-          let new_parked := list.fold(combined, acc.parked, fn (ps :: List[Str], o :: NodeOutcome) -> List[Str] {
-            if is_parked_outcome(o) {
-              list.concat(ps, [o.node_id])
-            } else {
-              ps
-            }
-          })
-          let next_ref := list.fold(layer_result.outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
-            if o.attested {
-              if not str.is_empty(o.artifact) {
-                o.artifact
-              } else {
-                ref
-              }
+        })
+        let new_parked := list.fold(combined, acc.parked, fn (ps :: List[Str], o :: NodeOutcome) -> List[Str] {
+          if is_parked_outcome(o) {
+            list.concat(ps, [o.node_id])
+          } else {
+            ps
+          }
+        })
+        let next_ref := list.fold(layer_result.outcomes, acc.last_ref, fn (ref :: Str, o :: NodeOutcome) -> Str {
+          if o.attested {
+            if not str.is_empty(o.artifact) {
+              o.artifact
             } else {
               ref
             }
-          })
-          { outcomes: list.concat(acc.outcomes, combined), last_ref: next_ref, cache: layer_result.cache, success: all_ok, parent: current_parent(cfg), parked: new_parked }
-        }
+          } else {
+            ref
+          }
+        })
+        let new_failed := list.fold(layer_result.outcomes, acc.failed, fn (fs :: List[Str], o :: NodeOutcome) -> List[Str] {
+          if o.attested or is_parked_outcome(o) {
+            fs
+          } else {
+            list.concat(fs, [o.node_id])
+          }
+        })
+        { outcomes: list.concat(acc.outcomes, combined), last_ref: next_ref, cache: layer_result.cache, success: acc.success and all_ok, parent: current_parent(cfg), parked: new_parked, failed: new_failed }
       })
       { phase: p, outcomes: result.outcomes, success: result.success }
     },

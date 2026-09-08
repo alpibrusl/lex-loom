@@ -272,6 +272,18 @@ if [ -z "${STOP_WHEN:-}" ]; then
 fi
 
 echo "[bootstrap] company='$CID' path='$CPATH' workspace='$DIR' (${copied} skeleton files laid down)"
+# Pre-warm the package cache with ONE lex invocation before anything starts
+# (#389). `lex` refreshes ~/.lex/packages/<dep> to upstream HEAD on any run,
+# and a company launch starts two `lex run` processes within a second; when
+# an upstream lex-* repository moved since the last run, one process rewrote
+# a package directory while the other was importing it, and the company died
+# at startup with `package import error: module "src/bridge" not found in
+# package "lex-ag-ui"` (lexwc1, twice, during a fleet-wide toolchain bump).
+# A single check settles the cache first; the launch then sees a stable tree.
+if ! lex check --strict "$LOOM_ROOT/src/company_runner.lex" >/dev/null 2>&1; then
+  echo "[bootstrap] the package cache could not be settled (lex check failed) — run: cd $LOOM_ROOT && lex check --strict src/company_runner.lex" >&2
+  exit 1
+fi
 echo "[bootstrap] policy → MAX_ITERATIONS=$CMAXIT STOP_WHEN='${STOP_WHEN:-<none>}' MODEL=$CMODEL"
 if [ -n "$CSOFT_MESH_URL" ]; then
   echo "[bootstrap] soft → mesh_url=$CSOFT_MESH_URL org_id=$CSOFT_ORG_ID roles=${CSOFT_ROLES:-<none>} settlement=${CSOFT_SETTLEMENT:-off}"

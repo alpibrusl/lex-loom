@@ -178,7 +178,7 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
         ""
       } else {
         str.join(["-H 'Content-Type: application/json' --data '", str.replace(body, "'", "'\\''"), "' "], "")
-      }, "-w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??|400|401|403|405|409|415|422) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx \"", port_str, ":$L\" && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
+      }, "-w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??|400|401|403|405|409|415|422) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "OTHER=$(for C in $PID $(pgrep -P $PID 2>/dev/null); do lsof -a -p $C -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk 'NR>1{print $9}' | sed 's/.*://'; done | grep -v \"^", port_str, "$\" | head -1)\n", "[ -z \"$OTHER\" ] && OTHER=$(grep -oE \"bind on address \\('[^']*', [0-9]+\\)\" '", srv_log, "' 2>/dev/null | grep -oE '[0-9]+\\)$' | tr -d ')' | grep -v \"^", port_str, "$\" | head -1)\n", "[ -n \"$OTHER\" ] && echo \"OTHERPORT:$OTHER\"\n", "for C in $(pgrep -P $PID 2>/dev/null); do kill -9 $C 2>/dev/null; done; kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx \"", port_str, ":$L\" && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {
@@ -231,10 +231,21 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
                 str.join(["a server answered on port ", port_str, ", but it is NOT the one this command started — that process had already exited. Something else is holding the port. It replied: ", str.slice(str.trim(resp_part), 0, 300)], "")
               } else {
                 if str.is_empty(last_part) {
-                  if str.is_empty(log_part) {
-                    str.join(["server did not respond within ", int.to_str(timeout_s), "s, and wrote nothing to its log — check that the command actually starts a server"], "")
+                  if str.contains(combined, "OTHERPORT:") {
+                    let other := str.trim(match list.head(str.split(match list.head(list.tail(str.split(combined, "OTHERPORT:"))) {
+                      Some(v) => v,
+                      None => "",
+                    }, "\n")) {
+                      Some(v) => v,
+                      None => "",
+                    })
+                    str.join(["the server is listening on port ", other, ", not the port it was given (PORT=", port_str, "). Read the port from the PORT environment variable and bind 0.0.0.0 on it; do not hardcode ", other, " (on this host 8000 and 8080 are permanently busy)."], "")
                   } else {
-                    str.join(["server did not respond within ", int.to_str(timeout_s), "s on port ", port_str, ". The server itself said:\n", str.slice(log_part, 0, 800)], "")
+                    if str.is_empty(log_part) {
+                      str.join(["server did not respond within ", int.to_str(timeout_s), "s, and wrote nothing to its log — check that the command actually starts a server"], "")
+                    } else {
+                      str.join(["server did not respond within ", int.to_str(timeout_s), "s on port ", port_str, ". The server itself said:\n", str.slice(log_part, 0, 800)], "")
+                    }
                   }
                 } else {
                   if str.contains(combined, "OURS_ALIVE:1") {

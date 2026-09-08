@@ -387,6 +387,19 @@ fn py_name_error(filename :: Str) -> [proc] Str {
 # silently on the missing folder, py_compile then said "No such file", and the
 # builder concluded "directory creation doesn't persist" -- and spent the rest
 # of its 124 calls on bootstrap/probe/setup scripts it had no way to run.
+# A file whose whole content is one bare word is not a module (#375): tzc21's
+# author, told it could remove a file with delete:true, wrote "delete" AS the
+# file's content instead. py_compile accepts a bare name, pytest ignores the
+# file, and QA had to explain it a phase later.
+fn is_bare_word(code :: Str) -> Bool {
+  let t := str.trim(code)
+  if str.is_empty(t) {
+    false
+  } else {
+    not str.contains(t, " ") and not str.contains(t, "\n") and not str.contains(t, "(") and not str.contains(t, "=") and not str.contains(t, ":") and not str.contains(t, "#") and not str.contains(t, "\"")
+  }
+}
+
 fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := py_work_dir(sprint_id)
   let params := { title: "PyCheck", description: "Compile a .py file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", []), s.optional(s.required_bool("delete"))] }
@@ -405,6 +418,7 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       _ => false,
     }
     let name_err := py_name_error(filename)
+    let bare_word := is_bare_word(code)
     if wants_delete {
       match proc.run("bash", ["-c", str.join(["rm -f '", path, "'"], "")]) {
         Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
@@ -414,27 +428,31 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       if not str.is_empty(name_err) {
         Ok(JObj([("ok", JStr("false")), ("output", JStr(name_err))]))
       } else {
-        match proc.run("bash", ["-c", str.join(["mkdir -p '", dir, "' \"$(dirname '", path, "')\""], "")]) {
-          Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-          Ok(_) => match io.write(path, code) {
-            Err(werr) => Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["could not write ", filename, ": ", werr], "")))])),
-            Ok(_) => {
-              let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-              match proc.run("bash", ["-c", cmd]) {
-                Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-                Ok(r) => {
-                  let combined := str.concat(r.stdout, r.stderr)
-                  let ok := str.contains(combined, "##EXIT:0")
-                  let __ev := record_lex_check_evidence(evidence_path, filename, ok)
-                  Ok(JObj([("ok", JStr(if ok {
-                    "true"
-                  } else {
-                    "false"
-                  })), ("output", JStr(combined))]))
-                },
-              }
+        if bare_word {
+          Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["refusing to write ", filename, ": its whole content is the single word '", str.trim(code), "', which is not a module. If you meant to REMOVE this file, call py_check with filename and delete:true and no code."], "")))]))
+        } else {
+          match proc.run("bash", ["-c", str.join(["mkdir -p '", dir, "' \"$(dirname '", path, "')\""], "")]) {
+            Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+            Ok(_) => match io.write(path, code) {
+              Err(werr) => Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["could not write ", filename, ": ", werr], "")))])),
+              Ok(_) => {
+                let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+                match proc.run("bash", ["-c", cmd]) {
+                  Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+                  Ok(r) => {
+                    let combined := str.concat(r.stdout, r.stderr)
+                    let ok := str.contains(combined, "##EXIT:0")
+                    let __ev := record_lex_check_evidence(evidence_path, filename, ok)
+                    Ok(JObj([("ok", JStr(if ok {
+                      "true"
+                    } else {
+                      "false"
+                    })), ("output", JStr(combined))]))
+                  },
+                }
+              },
             },
-          },
+          }
         }
       }
     }

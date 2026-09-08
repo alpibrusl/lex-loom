@@ -72,7 +72,23 @@ fn test_verdict_suite_allows_when_there_is_no_test_file() -> [io, proc] Result[U
 # The tolerance must not swallow a real failure.
 # #356: tests in a tests/ folder are the suite. tzc16 iter 2's QA was right
 # (7 passing in tests/test_convert.py) and was denied NO TEST FILE.
+fn host_has_pytest() -> [proc] Bool {
+  match proc.run("python3", ["-c", "import pytest"]) {
+    Ok(r) => r.exit_code == 0,
+    Err(_) => false,
+  }
+}
+
 fn test_verdict_suite_finds_tests_in_a_folder() -> [io, proc] Result[Unit, Str] {
+  if not host_has_pytest() {
+    io.print("skip suite-in-a-folder case: no pytest on this host (the preflight reports that)\n")
+    Ok(())
+  } else {
+    suite_in_a_folder_is_found()
+  }
+}
+
+fn suite_in_a_folder_is_found() -> [io, proc] Result[Unit, Str] {
   let sid := "verdict-suite-folder"
   let dir := str.concat("/tmp/loom-py-work-", sid)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir, "/tests && printf 'def add(a, b):\\n    return a + b\\n' > ", dir, "/app.py && : > ", dir, "/tests/__init__.py && printf 'from app import add\\ndef test_add():\\n    assert add(2, 2) == 4\\n' > ", dir, "/tests/test_app.py"], "")])

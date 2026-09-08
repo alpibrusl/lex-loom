@@ -17,7 +17,7 @@ names already exist in `lex-soft`, `lex-guard`, `lex-x402` and `lex-trail`;
 
 | Need (strategy §7) | Exists in | Surface |
 |---|---|---|
-| Company identity, signing key | `lex-soft/src/identity.lex`, `trust.lex` | org identity, key handling, trust records |
+| Company identity, signing key | **not reusable** — `lex-soft/src/identity.lex` is DB-backed accounts/JWT with no keypair primitive (verified by the lex-code team, lex-economy `tasks/identity.task`); `lex-economy/identity` is self-contained on `std.crypto` ed25519 | corrected 2026-09-08 |
 | Ledger, spend, metering | `lex-soft/src/ledger.lex`, `spend.lex`, `metering.lex` | `record_spend`, `record_chargeback`, per-agent ledger |
 | Spend policy and gating | `lex-guard` | `spend`, `spend_gated`, `spend_reviewed`, `check_stateless(policy, intent)`, `authorize_spend_cap` |
 | Capability offers and matching | `lex-soft/src/matchmaking.lex`, `registry.lex` | `Offer {id, attrs}`, `Query`, `offer_satisfies(o, q)`, `OrgCaps` |
@@ -63,7 +63,7 @@ Rules that apply to the whole package:
 
 ### 2.1 `identity` — CompanyId and keys
 
-Thin wrapper over `lex-soft/identity`.
+Self-contained on `std.crypto`'s ed25519 (`ed25519_public_key`, `ed25519_sign`, `ed25519_verify`); lex-soft's identity module has no keypair primitive. Built as `lex-economy/src/identity.lex`.
 
 ```lex
 type CompanyId = { id :: Str, public_key_b64 :: Str }

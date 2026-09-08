@@ -568,6 +568,10 @@ fn suite_kind_for_qa(role :: Str) -> Str {
 # live on the first company-reliability run: the Lex branch ended with
 # `exit $rc`, so every Lex QA PASS was denied "verdict not grounded", the
 # sprint bounced its full 4 rounds, and a 10-minute company run took past 45.
+# The OUTER guard ("is there any Python here?") is recursive too (#358): with
+# every module under a package folder and no top-level .py, `ls *.py` failed,
+# the branch fell through to `true`, and a claimed PASS was grounded without
+# pytest ever running -- the false-POSITIVE twin of the NO TEST FILE denial.
 # COUNT the matches RECURSIVELY (#356): tzc16 iter 2's QA reported 7 passing
 # tests in tests/test_convert.py, pytest agreed, and this check said NO TEST
 # FILE because it listed the top level only -- the fourth flat-layout gate
@@ -582,7 +586,7 @@ fn suite_kind_for_qa(role :: Str) -> Str {
 fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, Str] {
   let kind := suite_kind_for_qa(role)
   if kind == "py_build" {
-    verify_shell("if ls *.py >/dev/null 2>&1; then n=$(find . -path '*/__pycache__' -prune -o \\( -name 'test_*.py' -o -name '*_test.py' \\) -type f -print 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; false; fi; else true; fi", kind, sprint_id)
+    verify_shell("if find . -path '*/__pycache__' -prune -o -name '*.py' -type f -print 2>/dev/null | grep -q .; then n=$(find . -path '*/__pycache__' -prune -o \\( -name 'test_*.py' -o -name '*_test.py' \\) -type f -print 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; false; fi; else true; fi", kind, sprint_id)
   } else {
     if kind == "build" {
       verify_shell("rc=0; found=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; found=1; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; if [ \"$found\" -eq 0 ]; then if ls *.lex >/dev/null 2>&1; then echo 'NO TEST FILE: the build produced source but no test file, so a claimed PASS is not grounded in anything runnable'; rc=1; fi; fi; [ \"$rc\" -eq 0 ]", kind, sprint_id)

@@ -189,6 +189,23 @@ def collection_failure(root: Path) -> str:
     if r.returncode in (0, 5):
         return ""
     tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-12:])
+    # Two test files with one basename in different folders and no
+    # tests/__init__.py: pytest's "import file mismatch". tzc21 iter 2's
+    # author was denied for it repeatedly under a hint about module-level
+    # assertions it could not act on (#377). Name the files and the fixes.
+    if "import file mismatch" in (r.stdout + r.stderr):
+        by_name = {}
+        for f in root.rglob("*.py"):
+            if "__pycache__" in f.parts or any(part.startswith("_") for part in f.parts):
+                continue
+            if f.name.startswith("test_") or f.name.endswith("_test.py"):
+                by_name.setdefault(f.name, []).append(str(f.relative_to(root)))
+        dups = {k: v for k, v in by_name.items() if len(v) > 1}
+        listed = "\n".join(f"  {k}: {', '.join(sorted(v))}" for k, v in sorted(dups.items())) or "  (pytest reported a mismatch; check for two test files with the same name)"
+        return ("check_derived_values: the test suite cannot be COLLECTED: two test files share one\n"
+                "basename, and pytest refuses to import both (\"import file mismatch\"):\n\n" + listed + "\n\n"
+                "Fix either way: keep ONE of them (remove the other with py_check delete:true, or give\n"
+                "it a different name), or add an empty tests/__init__.py so the folder is a package.\n")
     # A module that is not on disk yet is the build's to write, not the
     # author's to import around; a collection error caused only by that is
     # not the author's fault either.

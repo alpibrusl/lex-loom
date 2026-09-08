@@ -168,9 +168,27 @@ def collection_failure(root: Path) -> str:
                            cwd=str(root), capture_output=True, text=True, timeout=120)
     except Exception:
         return ""  # pytest missing or hung: not this check's verdict to give
-    if r.returncode == 0:
+    # pytest's exit codes: 0 tests collected, 5 NO tests collected, 2 collection
+    # interrupted by errors, 4 usage error. Only 2 and 4 are the author's
+    # collection failure. 5 is what a correct author produces before the build
+    # exists -- `pytest.skip("app module not importable", allow_module_level=True)`
+    # -- and the metaspec REQUIRES the author to run independently of the
+    # build (tests-authored-independently). tzc18 iteration 1 denied exactly
+    # that author four times, the failed layer took the builds down with it,
+    # and QA had nothing to judge (#360). Whether tests exist and run is QA's
+    # and acceptance's question, asked against the built app.
+    if r.returncode in (0, 5):
         return ""
     tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-12:])
+    # A module that is not on disk yet is the build's to write, not the
+    # author's to import around; a collection error caused only by that is
+    # not the author's fault either.
+    import re as _re
+    missing = _re.findall(r"No module named '([A-Za-z_][\w.]*)'", tail)
+    if missing and all(not (root / (m.split(".")[0] + ".py")).exists()
+                       and not (root / m.split(".")[0]).is_dir() for m in missing) \
+            and "AssertionError" not in tail and "SyntaxError" not in tail:
+        return ""
     return ("check_derived_values: the test suite cannot be COLLECTED, so no test can run.\n"
             "A module-level assertion or import in a test file fails before pytest starts;\n"
             "fix the file so `pytest --collect-only` passes:\n\n" + tail + "\n")

@@ -84,6 +84,10 @@ fn record_launch_evidence(evidence_path :: Str, ok :: Bool) -> [io] Unit {
 # refused the media type, and eight attempts reported a live server as down.
 # The launch agent had never been told the tool can POST -- neither the tool
 # description nor the prompt named `method`/`body` (#342); both do now.
+# And 422/400/401/403/409 (#356): tzc16's launch POSTed /convert with a body
+# FastAPI rejected as float_parsing -- a 422 from the validator means the app
+# is up and the route is mounted, which is all launch attests to. The body's
+# correctness is QA's question. Only a 404 says the route is not there.
 #
 # One registry file per company. The single global file was erased by the
 # test suite while company tzc12 was running -- its run_server tests `rm -f`
@@ -174,7 +178,7 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
         ""
       } else {
         str.join(["-H 'Content-Type: application/json' --data '", str.replace(body, "'", "'\\''"), "' "], "")
-      }, "-w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??|405|415) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx \"", port_str, ":$L\" && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
+      }, "-w '\\n##STATUS:%{http_code}' '", url, "' 2>/dev/null) || continue\n", "  [ -n \"$RESP\" ] || continue\n", "  LAST=$RESP\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do grep -qx \"", port_str, ":$L\" \"$REG\" 2>/dev/null || echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  case \"${RESP##*##STATUS:}\" in 2??|3??|400|401|403|405|409|415|422) OK=1; break;; esac\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do echo \"", port_str, ":$L\" >> \"$REG\" 2>/dev/null || true; done\n", "  if kill -0 $PID 2>/dev/null; then\n", "    echo \"READY\"\n", "    echo \"RESPONSE:$RESP\"\n", "    exit 0\n", "  fi\n", "  echo \"FOREIGN\"\n", "  echo \"RESPONSE:$RESP\"\n", "  echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "  exit 1\n", "fi\n", "echo \"TIMEOUT\"\n", "kill -0 $PID 2>/dev/null && echo \"OURS_ALIVE:1\" || echo \"OURS_ALIVE:0\"\n", "kill -9 $PID 2>/dev/null; for L in $(lsof -ti tcp:", port_str, " 2>/dev/null); do cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx \"", port_str, ":$L\" && kill -9 $L 2>/dev/null; done; true\n", "echo \"LASTRESPONSE:$LAST\"\n", "echo \"SERVERLOG:$(tail -5 '", srv_log, "' 2>/dev/null)\"\n", "exit 1"], "")
       match proc.run("bash", ["-c", script]) {
         Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("spawn failed: ", msg))), ("url", JStr(url)), ("response", JStr("")), ("pid", JStr(""))])),
         Ok(r) => {

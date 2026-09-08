@@ -70,6 +70,20 @@ fn test_verdict_suite_allows_when_there_is_no_test_file() -> [io, proc] Result[U
 }
 
 # The tolerance must not swallow a real failure.
+# #356: tests in a tests/ folder are the suite. tzc16 iter 2's QA was right
+# (7 passing in tests/test_convert.py) and was denied NO TEST FILE.
+fn test_verdict_suite_finds_tests_in_a_folder() -> [io, proc] Result[Unit, Str] {
+  let sid := "verdict-suite-folder"
+  let dir := str.concat("/tmp/loom-py-work-", sid)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir, "/tests && printf 'def add(a, b):\\n    return a + b\\n' > ", dir, "/app.py && : > ", dir, "/tests/__init__.py && printf 'from app import add\\ndef test_add():\\n    assert add(2, 2) == 4\\n' > ", dir, "/tests/test_app.py"], "")])
+  let r := runner.verify_verdict_suite("py_qa", sid)
+  let __rm := proc.run("bash", ["-c", str.concat("rm -rf ", dir)])
+  match r {
+    Ok(_) => Ok(()),
+    Err(e) => Err(str.concat("a passing suite in tests/ was not found -- tzc16 iter 2's denial of a correct PASS: ", e)),
+  }
+}
+
 fn test_verdict_suite_denies_when_a_test_fails() -> [io, proc] Result[Unit, Str] {
   let sid := "verdict-suite-failing"
   let dir := str.concat("/tmp/loom-lex-work-", sid)
@@ -445,7 +459,7 @@ fn test_a_test_file_importing_a_missing_impl_is_still_allowed() -> [io, proc] Re
 }
 
 fn suite() -> [io, proc] List[Result[Unit, Str]] {
-  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected(), test_a_failed_gate_names_the_files_it_saw(), test_an_empty_gate_dir_still_reports_no_files(), test_a_broken_conftest_is_caught(), test_a_real_conftest_is_accepted(), test_a_test_file_importing_a_missing_impl_is_still_allowed()]
+  [test_shell_gate_passes_on_fenced_dockerfile(), test_shell_gate_fails_with_no_fenced_content(), test_shell_gate_propagates_command_failure(), test_verdict_suite_allows_when_there_is_no_test_file(), test_verdict_suite_finds_tests_in_a_folder(), test_verdict_suite_denies_when_a_test_fails(), test_verdict_suite_denies_source_with_no_test_file(), test_verdict_suite_allows_an_empty_work_dir(), test_pasted_expected_value_is_rejected(), test_derived_expected_value_is_allowed(), test_inputs_and_plain_constants_are_not_flagged(), test_shell_gate_sees_tool_written_files(), test_shell_gate_without_seed_still_refuses_prose(), test_fenced_answer_overrides_the_seeded_copy(), test_pinned_literal_is_allowed(), test_unpinned_literal_is_still_rejected(), test_pinning_one_value_does_not_excuse_another(), test_no_test_file_is_a_failure(), test_import_gate_catches_a_missing_package(), test_compiles_gate_accepts_what_the_import_gate_rejects(), test_import_gate_passes_a_real_module(), test_build_path_gate_can_reach_repo_tools(), test_qa_sees_a_test_file_matching_only_one_pattern(), test_qa_sees_the_underscore_suffix_convention(), test_qa_still_reports_a_genuinely_missing_test_file(), test_pin_on_a_later_line_is_allowed(), test_a_literal_compared_to_an_undervied_name_is_still_rejected(), test_a_failed_gate_names_the_files_it_saw(), test_an_empty_gate_dir_still_reports_no_files(), test_a_broken_conftest_is_caught(), test_a_real_conftest_is_accepted(), test_a_test_file_importing_a_missing_impl_is_still_allowed()]
 }
 
 fn run_all() -> [io, proc] Unit {

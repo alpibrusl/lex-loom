@@ -290,6 +290,35 @@ fn test_a_422_on_post_proves_the_route_exists() -> [env, net, io, proc, fs_write
   }
 }
 
+# tzc21 iter 2: the build hardcoded port 8000 (Colima's, permanently busy
+# here) and ignored PORT=8081; three launches ended in a bare timeout. The
+# denial now names the port the server really bound.
+fn wrong_port_cmd(port :: Int) -> Str {
+  str.join(["cd /tmp && python3 -m http.server ", int.to_str(port + 1)], "")
+}
+
+fn test_a_server_on_the_wrong_port_is_named() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
+  let __free := free_port(8798)
+  let r := run_with(8797, wrong_port_cmd(8797), "/", "GET", "")
+  let leak := match proc.run("bash", ["-c", "lsof -ti tcp:8798 2>/dev/null | wc -l | tr -d ' '"]) {
+    Ok(o) => str.trim(o.stdout),
+    Err(_) => "?",
+  }
+  let __cleanup := free_port(8798)
+  match get_bool(r, "ok") {
+    Some(true) => Err("a server on the wrong port was accepted as READY"),
+    _ => if str.contains(get_str(r, "error"), "listening on port 8798") and str.contains(get_str(r, "error"), "PORT=8797") {
+      if leak == "0" {
+        Ok(())
+      } else {
+        Err("the server that bound the wrong port outlived the timed-out launch")
+      }
+    } else {
+      Err(str.concat("the timeout did not name the port the server really bound -- tzc21's three bare timeouts: ", get_str(r, "error")))
+    },
+  }
+}
+
 fn test_a_415_on_get_proves_the_route_exists() -> [env, net, io, proc, fs_write] Result[Unit, Str] {
   let r := run_with(8793, json_only_cmd(8793), "/convert", "GET", "")
   match get_bool(r, "ok") {
@@ -417,7 +446,7 @@ fn test_each_company_has_its_own_registry_file() -> Result[Unit, Str] {
 }
 
 fn suite() -> [env, net, io, proc, fs_write] List[Result[Unit, Str]] {
-  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_a_415_on_get_proves_the_route_exists(), test_a_422_on_post_proves_the_route_exists(), test_launch_is_told_run_server_can_post(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_company_end_stops_the_servers_it_launched(), test_company_end_leaves_a_pid_that_no_longer_holds_its_port(), test_each_company_has_its_own_registry_file()]
+  [test_a_working_endpoint_is_accepted(), test_a_404_endpoint_is_not_evidence(), test_a_server_we_did_not_start_is_refused(), test_a_command_that_starts_nothing_is_refused(), test_a_foreign_process_on_the_port_is_not_killed(), test_loom_can_restart_on_a_port_it_started(), test_a_failed_launch_frees_its_port(), test_a_post_route_can_be_probed_with_post(), test_a_405_on_get_proves_the_route_exists(), test_a_415_on_get_proves_the_route_exists(), test_a_server_on_the_wrong_port_is_named(), test_a_422_on_post_proves_the_route_exists(), test_launch_is_told_run_server_can_post(), test_wiping_another_registry_does_not_orphan_a_companys_server(), test_company_end_stops_the_servers_it_launched(), test_company_end_leaves_a_pid_that_no_longer_holds_its_port(), test_each_company_has_its_own_registry_file()]
 }
 
 fn run_all() -> [env, net, io, proc, fs_write] Unit {

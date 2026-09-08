@@ -181,6 +181,44 @@ fn test_a_failed_layer_does_not_abandon_independent_nodes() -> [env, io, time, c
   }
 }
 
+# #368: a test author that ends denied does not leave its draft for QA.
+fn denied_author_graph(sprint_id :: Str) -> graph.SprintGraph {
+  { id: sprint_id, phase: Implementation, nodes: [{ id: "author", role: "py_test_author", gate: "spec len-gt 100000", expand: None, activate_when: "" }], edges: [] }
+}
+
+fn test_a_denied_test_author_leaves_no_tests_for_qa() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
+  match open_db() {
+    Err(e) => Err(e),
+    Ok(db) => {
+      let sid := str.concat("gov-qfiles-", crypto.random_str_hex(6))
+      let d := runner.tool_work_dir_for_role("py_test_author", sid)
+      let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "/tests' && printf 'def add(a, b):\\n    return a + b\\n' > '", d, "/app.py' && printf 'def test_x():\\n    assert 1\\n' > '", d, "/test_x.py' && printf 'def test_y():\\n    assert 1\\n' > '", d, "/tests/test_y.py'"], "")])
+      let pr := orch.run_phase(denied_author_graph(sid), Implementation, "", [], mk_failing_cfg(db, sid))
+      let after := match proc.run("bash", ["-c", str.join(["cd '", d, "' && ls -A test_x.py tests/test_y.py app.py 2>/dev/null | tr '\\n' ' '; ls -d _denied_tests 2>/dev/null"], "")]) {
+        Ok(r) => str.trim(r.stdout),
+        Err(_) => "?",
+      }
+      let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", d, "'"], "")])
+      match outcome_for(pr.outcomes, "author") {
+        None => Err("no outcome for the author"),
+        Some(o) => if o.attested {
+          Err("setup failed: the author was accepted, so nothing was there to quarantine")
+        } else {
+          if str.contains(after, "test_x.py") or str.contains(after, "tests/test_y.py") {
+            Err(str.concat("a denied author's test files are still where QA will read them -- tzc19's 'root test_convert.py hardcodes wrong epoch': ", after))
+          } else {
+            if str.contains(after, "app.py") and str.contains(after, "_denied_tests") {
+              Ok(())
+            } else {
+              Err(str.concat("quarantine touched the wrong files: ", after))
+            }
+          }
+        },
+      }
+    },
+  }
+}
+
 # Approve, re-enter: the gate seals from the human-attested artifact without
 # re-running the node or pushing a duplicate item; downstream now runs.
 fn test_approve_resumes_downstream() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {
@@ -256,7 +294,7 @@ fn test_reject_cancels_subtree() -> [env, io, time, crypto, random, sql, fs_read
 }
 
 fn suite() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] List[Result[Unit, Str]] {
-  [test_blocking_parse(), test_a_failed_layer_does_not_abandon_independent_nodes(), test_park_holds_subtree_and_continues_independent(), test_approve_resumes_downstream(), test_reject_cancels_subtree()]
+  [test_blocking_parse(), test_a_denied_test_author_leaves_no_tests_for_qa(), test_a_failed_layer_does_not_abandon_independent_nodes(), test_park_holds_subtree_and_continues_independent(), test_approve_resumes_downstream(), test_reject_cancels_subtree()]
 }
 
 fn run_all() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {

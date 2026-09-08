@@ -1037,10 +1037,62 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
 # for roles/callers that don't need grounded json-verdict evidence. `sprint_id`
 # is forwarded to tool_by_name; pass "" for roles/callers that never touch the
 # shared work dir.
+# The test author shares the work dir with the build and may only touch TEST
+# files (#384). tzc22 iter 1: the author, wanting an importable stub for its
+# own tests, wrote `main.py` = "# placeholder" over the build's module and
+# then deleted it; QA found "no application source", launch "could not
+# import module main", and the iteration bounced. The metaspec makes the
+# author independent of the build; independence does not include the
+# authority to destroy the build's files.
+fn author_may_touch(filename :: Str) -> Bool {
+  let base := list.fold(str.split(filename, "/"), filename, fn (acc :: Str, part :: Str) -> Str {
+    part
+  })
+  if str.starts_with(filename, "tests/") or str.starts_with(base, "_") or base == "conftest.py" {
+    true
+  } else {
+    if str.starts_with(base, "test_") or str.ends_with(base, "_test.py") or str.ends_with(base, "_test.lex") or str.ends_with(base, "_test.ts") or str.ends_with(base, ".test.ts") or str.ends_with(base, ".test.js") {
+      true
+    } else {
+      false
+    }
+  }
+}
+
+fn tests_only(tool :: t.Tool) -> t.Tool {
+  { name: tool.name, description: str.concat(tool.description, " AS THE TEST AUTHOR you may only write or delete test files (test_*.py, *_test.py, anything under tests/, conftest.py) and _scratch files; every other file belongs to the build and a call naming it is refused."), params: tool.params, execute: fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let filename := match jv.get_field(args, "filename") {
+      Some(JStr(v)) => v,
+      _ => "",
+    }
+    if str.is_empty(filename) or author_may_touch(filename) {
+      tool.execute(args)
+    } else {
+      Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["refusing: '", filename, "' is the build's file, not a test. The test author writes and deletes TEST files only (test_*.py, *_test.py, tests/..., conftest.py, _scratch). If your tests need the module, import it -- the build writes it, and a missing import is not your fault before the build exists."], "")))]))
+    }
+  }, precondition: tool.precondition, approval_scope: tool.approval_scope }
+}
+
+fn is_test_author(role :: Str) -> Bool {
+  if role == "test_author" {
+    true
+  } else {
+    if role == "py_test_author" {
+      true
+    } else {
+      role == "ts_test_author"
+    }
+  }
+}
+
 fn tools_of_role(role :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] List[t.Tool] {
   list.fold(rt.tools_for(role), [], fn (acc :: List[t.Tool], name :: Str) -> [env] List[t.Tool] {
     match tool_by_name(name, evidence_path, sprint_id) {
-      Some(tool) => list.concat(acc, [tool]),
+      Some(tool) => if is_test_author(role) and (name == "py_check" or name == "lex_check" or name == "ts_check") {
+        list.concat(acc, [tests_only(tool)])
+      } else {
+        list.concat(acc, [tool])
+      },
       None => acc,
     }
   })

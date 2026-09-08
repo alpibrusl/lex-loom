@@ -386,6 +386,31 @@ fn is_step_budget_exhausted(output :: Str) -> Bool {
   str.contains(str.trim(output), "[max_steps reached]")
 }
 
+# A QA FAIL that cites loom's own pipeline is not a verdict about the product
+# (#372). tzc19 iter 3: the strategist's goal had absorbed pipeline words
+# ("collect-gated", "smoke-import gate"), the PM made "run the derived-value
+# gate" an acceptance criterion, and QA tried to execute
+# $LOOM_ROOT/bin/check_derived_values.py inside run_code -- where LOOM_ROOT
+# is unset and the script is not in the work dir -- and FAILED a launched,
+# 13-tests-green build twice for it. Those gates run before QA, by the
+# pipeline; their availability inside QA's sandbox says nothing about the
+# product. Such a FAIL is not final: the node retries with the reason below.
+fn fail_cites_pipeline_infra(output :: Str) -> Bool {
+  if str.contains(output, "LOOM_ROOT") {
+    true
+  } else {
+    if str.contains(output, "check_derived_values") {
+      true
+    } else {
+      str.contains(output, "check_imports.py")
+    }
+  }
+}
+
+fn pipeline_infra_fail_reason() -> Str {
+  "the FAIL cites loom's own pipeline (LOOM_ROOT, bin/check_*.py): those gates already ran before this node and are not yours to run. Judge the product's behaviour only -- its routes, responses, errors and its real test suite -- and emit a verdict about the product."
+}
+
 fn is_infra_outcome(output :: Str) -> Bool {
   if is_provider_error(output) {
     true
@@ -534,7 +559,12 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
               }
             } else {
               match evaluate_gate(n.gate, output) {
-                GateDeny(reason) => {
+                GateDeny(reason0) => {
+                  let reason := if gates.is_json_verdict_pass(n.gate) and fail_cites_pipeline_infra(output) {
+                    pipeline_infra_fail_reason()
+                  } else {
+                    reason0
+                  }
                   let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
                   let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(reason)), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
                   let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
@@ -744,7 +774,7 @@ fn claimed_pass_of(output :: Str) -> Bool {
 fn verdict_fail_is_final(gate :: Str, output :: Str) -> Bool {
   if gates.is_json_verdict_pass(gate) {
     match gates.extract_verdict(output) {
-      Some(v) => str.to_upper(str.trim(v)) == "FAIL",
+      Some(v) => str.to_upper(str.trim(v)) == "FAIL" and not fail_cites_pipeline_infra(output),
       None => false,
     }
   } else {

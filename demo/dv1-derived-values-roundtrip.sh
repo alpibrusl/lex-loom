@@ -79,5 +79,14 @@ else
   ok "collection cases skipped: no pytest on this host"
 fi
 
+echo "== 9. a pin may call a helper defined in the file; the helper is executed"
+# tzc19 iter 1: `assert expected_iso() == "..."` denied eight times as a paste.
+mkdir -p "$W/helperok" "$W/helperbad"
+printf 'from datetime import datetime\nfrom zoneinfo import ZoneInfo\n\ndef expected_iso():\n    return datetime(2025, 7, 15, 14, 30, tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Europe/London")).isoformat()\n\ndef test_pin():\n    assert expected_iso() == "2025-07-15T15:30:00+01:00"\n' > "$W/helperok/test_pin.py"
+printf 'from datetime import datetime\nfrom zoneinfo import ZoneInfo\n\ndef expected_iso():\n    return datetime(2025, 7, 15, 14, 30, tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo("Europe/London")).isoformat()\n\ndef test_pin():\n    assert expected_iso() == "2025-07-15T16:30:00+01:00"\n' > "$W/helperbad/test_pin.py"
+if (cd "$W/helperok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a correct pin through a local helper is accepted"; else bad "a pin through a local helper was denied as a paste -- tzc19's eight denials"; fi
+rc=0; out=$(cd "$W/helperbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>&1) || rc=$?
+case "$rc:$out" in 1:*"15:30:00+01:00"*) ok "a wrong pin through a local helper is denied, naming the value the helper gives" ;; 0:*) bad "a wrong pin through a local helper was accepted -- the helper was never run" ;; *) bad "the wrong helper pin was denied without naming the true value" ;; esac
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

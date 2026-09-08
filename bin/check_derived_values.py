@@ -90,10 +90,19 @@ def pinned_literals(lines) -> set:
         if not grew:
             break
 
+    # A call to a helper DEFINED IN THIS FILE is a derivation too (#366).
+    # tzc19's author wrote `assert expected_iso() == "2025-07-15T15:30:00+01:00"`
+    # -- the pin idiom, with the derivation behind a def -- and was denied eight
+    # times as a paste. The executed-pin check (#355) is what makes such a pin
+    # checkable, and its prelude carries the defs so it can run them.
+    local_fns = set(re.findall(r"^\s*def\s+([A-Za-z_]\w*)\s*\(", "\n".join(lines), re.M))
+    def calls_local_fn(line):
+        return any(re.search(r"\b%s\s*\(" % re.escape(f), line) for f in local_fns)
+
     pins = set()
     for line in lines:
         # The literal and the derivation on ONE line.
-        inline = looks_computed(line)
+        inline = looks_computed(line) or ("==" in line and calls_local_fn(line))
         # Or the literal compared against a name bound to a derivation earlier.
         # This is how the idiom is actually written, and rejecting it was a real
         # false positive: a run produced exactly
@@ -216,7 +225,9 @@ def pin_failure(root: Path, files) -> str:
             continue
         prelude, pins = [], []
         for node in tree.body:
-            if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)):
+            if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.FunctionDef, ast.ClassDef)):
+                if isinstance(node, ast.FunctionDef) and node.name.startswith("test"):
+                    continue  # tests are QA's to run; helpers and fixtures are the prelude
                 prelude.append(ast.get_source_segment(path.read_text(), node) or "")
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Assert) and isinstance(node.test, ast.Compare)

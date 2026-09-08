@@ -63,5 +63,21 @@ rc=0; out=$(cd "$W/pinbad" && python3 "$OLDPWD/bin/check_derived_values.py" . 2>
 case "$rc:$out" in 1:*"1752138000"*) ok "a wrong pin is denied where it was written, with the value the derivation gives" ;; 0:*) bad "a wrong pin (1752181800 for 09:00 UTC) was accepted -- tzc16's three bounces" ;; *) bad "the wrong pin was denied without naming the true value" ;; esac
 if (cd "$W/pinok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a correct pin passes"; else bad "a correct pin was denied"; fi
 
+echo "== 8. an author who tolerates the build not existing yet is not denied for it"
+# tzc18 iter 1: the metaspec puts the author in parallel with the build, the
+# author skipped its module when the app was absent (pytest exit 5, "no tests
+# collected"), and the check denied it four times.
+mkdir -p "$W/noapp" "$W/noapp2" "$W/badassert"
+printf 'import pytest\ntry:\n    from main import app\nexcept ImportError:\n    pytest.skip("app module not importable", allow_module_level=True)\n\ndef test_x():\n    assert app\n' > "$W/noapp/test_convert.py"
+printf 'from main import app\n\ndef test_x():\n    assert app\n' > "$W/noapp2/test_convert.py"
+printf 'from datetime import datetime\nEXPECTED = datetime(2025,7,10,12,0).isoformat()\nassert EXPECTED == "2025-07-10T12:00:00+05:00"\ndef test_x():\n    assert EXPECTED\n' > "$W/badassert/test_pin.py"
+if python3 -c 'import pytest' >/dev/null 2>&1; then
+  if (cd "$W/noapp" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a module-level skip for an absent app is accepted (pytest exit 5)"; else bad "an author who skipped because the build does not exist yet was denied -- tzc18 iter 1"; fi
+  if (cd "$W/noapp2" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "importing a module the build has not written yet is accepted"; else bad "an import of the not-yet-built module was held against the author"; fi
+  if (cd "$W/badassert" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then bad "a wrong module-level assertion (real collection error) was accepted"; else ok "a wrong module-level assertion is still denied at the author"; fi
+else
+  ok "collection cases skipped: no pytest on this host"
+fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

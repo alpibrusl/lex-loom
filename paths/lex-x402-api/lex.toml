@@ -1,7 +1,7 @@
 [package]
 name        = "lex-x402-api"
 version     = "0.1.0"
-lex         = "0.10.0"
+lex         = "0.10.18"
 description = "Golden-path skeleton for a Lex HTTP API that charges per call via x402."
 license     = "EUPL-1.2"
 

@@ -626,6 +626,24 @@ fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, St
 # denied the node for "no fenced files". Seeding the gate's scratch dir from the
 # tool's own dir closes that gap; the fenced answer is still extracted on top,
 # so anything the node restated in its reply still wins.
+# A test author that ends DENIED leaves its last draft in the work dir, and
+# every later gate then reads it as the suite (#368): tzc19 iter 1's QA
+# failed the build against "root test_convert.py hardcodes wrong epoch" -- a
+# file from the FIRST pass's denied author, still there in the second pass.
+# Move the role's test files into `_denied_tests/` (the `_` prefix every gate
+# ignores and clear_work_dir removes). Returns how many entries were moved.
+fn quarantine_test_files(role :: Str, sprint_id :: Str) -> [proc] Int {
+  let d := tool_work_dir_for_role(role, sprint_id)
+  let script := str.join(["cd '", d, "' 2>/dev/null || { echo 0; exit 0; }\n", "Q=\"_denied_tests/$(date +%s)\"\n", "n=0\n", "for f in test_*.py *_test.py conftest.py test_*.lex *_test.lex test_*.ts *_test.ts *.test.ts; do\n", "  [ -e \"$f\" ] || continue\n", "  mkdir -p \"$Q\" && mv \"$f\" \"$Q/\" && n=$((n+1))\n", "done\n", "if [ -d tests ]; then mkdir -p \"$Q\" && mv tests \"$Q/tests\" && n=$((n+1)); fi\n", "echo $n"], "")
+  match proc.run("bash", ["-c", script]) {
+    Ok(res) => match str.to_int(str.trim(res.stdout)) {
+      Some(n) => n,
+      None => 0,
+    },
+    Err(_) => 0,
+  }
+}
+
 fn tool_work_dir_for_role(role :: Str, sprint_id :: Str) -> Str {
   if role == "py_build" or role == "py_test_author" {
     py_work_dir(sprint_id)

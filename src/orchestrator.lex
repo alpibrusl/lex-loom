@@ -1054,6 +1054,31 @@ fn resolve_input(db :: conn.ConnDb, input_ref :: Str) -> [sql, fs_read, vcs] Str
 # a failed node are held (outcome "NOT RUN: an upstream node failed its
 # gate", trail node_not_run_upstream_failed), exactly as a parked human gate
 # holds its subtree; independent nodes run. The phase still fails.
+fn role_of_node(g :: graph.SprintGraph, node_id :: Str) -> Str {
+  list.fold(g.nodes, "", fn (acc :: Str, n :: graph.Node) -> Str {
+    if n.id == node_id {
+      n.role
+    } else {
+      acc
+    }
+  })
+}
+
+fn is_test_author_role_name(role :: Str) -> Bool {
+  if role == "test_author" {
+    true
+  } else {
+    if role == "py_test_author" {
+      true
+    } else {
+      role == "ts_test_author"
+    }
+  }
+}
+
+# A denied test author's draft is quarantined right after its layer (#368) so
+# QA judges the build against no tests rather than against a draft that never
+# passed its own gate, and a bounce does not inherit it.
 fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :: ArtifactCache, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] PhaseResult {
   match graph.topo_sort(g) {
     Err(e) => { phase: p, outcomes: [], success: false },
@@ -1086,6 +1111,20 @@ fn run_phase(g :: graph.SprintGraph, p :: graph.Phase, input_ref :: Str, cache :
           { node_id: id, attested: false, sealed: false, artifact: "", reason: str.concat("NOT RUN: an upstream node failed its gate: ", str.join(acc.failed, ", ")) }
         })
         let layer_result := run_layer(to_run, g, acc.last_ref, acc.cache, cfg, acc.parent, graph.phase_to_str(p))
+        let __quarantine := list.map(layer_result.outcomes, fn (o :: NodeOutcome) -> [sql, fs_write, time, random, crypto, proc] Unit {
+          if o.attested or is_parked_outcome(o) {
+            ()
+          } else {
+            let role := role_of_node(g, o.node_id)
+            if is_test_author_role_name(role) {
+              let n := runner.quarantine_test_files(role, cfg.id)
+              let __tq := tr.trail(cfg.db, cfg.id, "test_files_quarantined", str.join(["{\"node\":\"", o.node_id, "\",\"role\":\"", role, "\",\"moved\":", int.to_str(n), "}"], ""))
+              ()
+            } else {
+              ()
+            }
+          }
+        })
         let combined := list.concat(list.concat(layer_result.outcomes, held_outcomes), orphaned_outcomes)
         let all_ok := list.fold(combined, true, fn (ok :: Bool, o :: NodeOutcome) -> Bool {
           if not ok {

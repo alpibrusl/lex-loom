@@ -2,7 +2,7 @@
 # grounding fix.
 #
 # Found live (pdfx2 company run): the improver rewrote the `qa` role's system
-# prompt to demand things qa's real tools (lex_check, lex_run only) cannot
+# prompt to demand things qa's real tools (read_file, lex_run only) cannot
 # do -- "start the binary and confirm it accepts connections", "persist the
 # actual smoke-test result to artifacts/smoke/...". qa has no way to start a
 # server or make an HTTP request; that's the `launch` role's job. The
@@ -21,14 +21,14 @@ import "../src/improver" as improver
 
 fn test_tool_capability_note_names_qa_tools() -> [env] Result[Unit, Str] {
   let note := improver.tool_capability_note("qa")
-  if str.contains(note, "lex_check") {
+  if str.contains(note, "lex_run") {
     if str.contains(note, "lex_run") {
       Ok(())
     } else {
       Err(str.concat("expected lex_run named in the qa capability note: ", note))
     }
   } else {
-    Err(str.concat("expected lex_check named in the qa capability note: ", note))
+    Err(str.concat("expected lex_run named in the qa capability note: ", note))
   }
 }
 
@@ -64,7 +64,7 @@ fn test_tool_capability_note_handles_toolless_roles() -> [env] Result[Unit, Str]
 
 fn test_improvement_prompt_includes_capability_note() -> [env] Result[Unit, Str] {
   let prompt := improver.improvement_prompt("qa", "old prompt", "lesson learned", [])
-  if str.contains(prompt, "lex_check") {
+  if str.contains(prompt, "lex_run") {
     Ok(())
   } else {
     Err(str.concat("expected the improvement prompt to include the qa capability note: ", prompt))

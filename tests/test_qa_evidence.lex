@@ -156,18 +156,20 @@ fn test_for_role_qa_threads_evidence_path_to_its_tools() -> [env, net, io, proc]
   match roles.for_role("qa", "test-model", path, "test-qa-evidence") {
     None => Err("expected for_role(\"qa\", ...) to resolve to an agent"),
     Some(agent) => {
-      let lex_check_tools := list.filter(agent.tools, fn (tl :: t.Tool) -> Bool {
-        tl.name == "lex_check"
+      let lex_run_tools := list.filter(agent.tools, fn (tl :: t.Tool) -> Bool {
+        tl.name == "lex_run"
       })
-      match list.head(lex_check_tools) {
-        None => Err("expected the qa agent to have a lex_check tool"),
+      match list.head(lex_run_tools) {
+        None => Err("expected the qa agent to have a lex_run tool (since #394 qa reads and runs; it never writes)"),
         Some(tool) => {
-          let args := JObj([("filename", JStr("evidence_test_for_role.lex")), ("code", JStr("fn main() -> Unit { () }"))])
+          let seed := lexskill.make_lex_check_tool(path, "test-qa-evidence")
+          let __w := seed.execute(JObj([("filename", JStr("evidence_test_for_role.lex")), ("code", JStr("fn run_all() -> Unit {\n  ()\n}\n"))]))
+          let args := JObj([("filename", JStr("evidence_test_for_role.lex")), ("fn_name", JStr("run_all")), ("args", JStr(""))])
           match tool.execute(args) {
-            Err(_) => Err("lex_check tool call itself failed"),
+            Err(_) => Err("lex_run tool call itself failed"),
             Ok(_) => match runner.verify_json_verdict_evidence(path, true) {
               Ok(_) => Ok(()),
-              Err(e) => Err(str.concat("expected the qa agent's real lex_check tool (constructed via roles.for_role, the same path the orchestrator uses) to ground a claimed PASS, got: ", e)),
+              Err(e) => Err(str.concat("expected the qa agent's real lex_run tool (constructed via roles.for_role, the same path the orchestrator uses) to ground a claimed PASS, got: ", e)),
             },
           }
         },

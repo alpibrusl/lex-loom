@@ -391,6 +391,29 @@ fn py_name_error(filename :: Str) -> [proc] Str {
 # author, told it could remove a file with delete:true, wrote "delete" AS the
 # file's content instead. py_compile accepts a bare name, pytest ignores the
 # file, and QA had to explain it a phase later.
+# A file whose FIRST LINE is its own name (#386): tzc23's author wrote
+# "test_convert.py" as line 1 -- the fenced-block-with-filename convention
+# echoed into the file. Python reads it as an undefined name and pytest dies
+# at collection; two attempts went to it before the gate's message landed.
+fn first_line(code :: Str) -> Str {
+  list.fold(str.split(code, "\n"), "", fn (acc :: Str, line :: Str) -> Str {
+    if str.is_empty(acc) and not str.is_empty(str.trim(line)) {
+      str.trim(line)
+    } else {
+      acc
+    }
+  })
+}
+
+fn first_line_is_a_filename(code :: Str) -> Bool {
+  let l := first_line(code)
+  if str.is_empty(l) or str.contains(l, " ") or str.starts_with(l, "#") {
+    false
+  } else {
+    str.ends_with(l, ".py") or str.ends_with(l, ".lex") or str.ends_with(l, ".ts")
+  }
+}
+
 fn is_bare_word(code :: Str) -> Bool {
   let t := str.trim(code)
   if str.is_empty(t) {
@@ -419,6 +442,7 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
     }
     let name_err := py_name_error(filename)
     let bare_word := is_bare_word(code)
+    let named_first_line := first_line_is_a_filename(code)
     if wants_delete {
       match proc.run("bash", ["-c", str.join(["rm -f '", path, "'"], "")]) {
         Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
@@ -431,27 +455,31 @@ fn make_py_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
         if bare_word {
           Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["refusing to write ", filename, ": its whole content is the single word '", str.trim(code), "', which is not a module. If you meant to REMOVE this file, call py_check with filename and delete:true and no code."], "")))]))
         } else {
-          match proc.run("bash", ["-c", str.join(["mkdir -p '", dir, "' \"$(dirname '", path, "')\""], "")]) {
-            Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-            Ok(_) => match io.write(path, code) {
-              Err(werr) => Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["could not write ", filename, ": ", werr], "")))])),
-              Ok(_) => {
-                let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
-                match proc.run("bash", ["-c", cmd]) {
-                  Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-                  Ok(r) => {
-                    let combined := str.concat(r.stdout, r.stderr)
-                    let ok := str.contains(combined, "##EXIT:0")
-                    let __ev := record_lex_check_evidence(evidence_path, filename, ok)
-                    Ok(JObj([("ok", JStr(if ok {
-                      "true"
-                    } else {
-                      "false"
-                    })), ("output", JStr(combined))]))
-                  },
-                }
+          if named_first_line {
+            Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["refusing to write ", filename, ": its first line is a bare file name (", first_line(code), "), which Python reads as an undefined name and pytest fails at collection. The file name goes in the `filename` argument, not inside the code -- remove that line."], "")))]))
+          } else {
+            match proc.run("bash", ["-c", str.join(["mkdir -p '", dir, "' \"$(dirname '", path, "')\""], "")]) {
+              Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+              Ok(_) => match io.write(path, code) {
+                Err(werr) => Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["could not write ", filename, ": ", werr], "")))])),
+                Ok(_) => {
+                  let cmd := str.join(["python3 -P -m py_compile ", path, " 2>&1 && echo 'ok'; echo '##EXIT:'$?"], "")
+                  match proc.run("bash", ["-c", cmd]) {
+                    Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+                    Ok(r) => {
+                      let combined := str.concat(r.stdout, r.stderr)
+                      let ok := str.contains(combined, "##EXIT:0")
+                      let __ev := record_lex_check_evidence(evidence_path, filename, ok)
+                      Ok(JObj([("ok", JStr(if ok {
+                        "true"
+                      } else {
+                        "false"
+                      })), ("output", JStr(combined))]))
+                    },
+                  }
+                },
               },
-            },
+            }
           }
         }
       }

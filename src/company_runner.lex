@@ -61,7 +61,7 @@ fn board_notes_section(notes :: List[Str]) -> Str {
 # Pure prompt construction, split out from decide_next so it's testable
 # without a real LLM call or a live DB (#86).
 fn strategist_prompt(mission :: Str, shipped :: Str, notes :: List[Str], operate :: Str, product_signals :: Str, economics :: Str, distribution :: Str, build_status :: Str, mgmt :: Str, current_goal :: Str, ctx :: company.IterCtx) -> Str {
-  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nREAL ECONOMICS (revenue read from a human-configured, read-only source, compared against estimated LLM spend — loom never touches payments itself):\n", economics, "\n\nDISTRIBUTION (real posts published via the Content Creator's publish_content tool, and real view counts read back from the product itself — not a self-reported claim of having written content, actual reach):\n", distribution, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, mgmt, "\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
+  str.join(["MISSION:\n", mission, "\n\nSHIPPED SO FAR:\n", shipped, "\n\nBOARD NOTES (advisory guidance from the human board member — weigh seriously, but ground your decision in LAST RESULT):\n", board_notes_section(notes), "\n\nOPERATE SIGNALS (real observations from OUTSIDE the build sandbox — e.g. is a launched server actually still responding between iterations. A shipped, QA-passed feature that these signals show isn't actually live is evidence against 'continue', independent of the last QA verdict):\n", operate, "\n\nPRODUCT SIGNALS (self-reported by the product's own /loom/usage endpoint — real usage, not just liveness; weigh as informative context, not verified fact):\n", product_signals, "\n\nREAL ECONOMICS (revenue read from a human-configured, read-only source, compared against estimated LLM spend — loom never touches payments itself):\n", economics, "\n\nDISTRIBUTION (real posts published via the Content Creator's publish_content tool, and real view counts read back from the product itself — not a self-reported claim of having written content, actual reach):\n", distribution, "\n\nLEX BUILD STATUS (ground truth from the sprint graphs actually run, not a self-report — if MISSION describes a Lex server, an x402/payment gate, or any other Lex-side integration, this is the ONLY reliable signal of whether that integration was ever actually attempted, independent of how much Python-side work has shipped):\n", build_status, mgmt, "\n\nNOTE ON GOALS: every iteration builds from an EMPTY work dir; nothing from earlier iterations is on disk. A revise goal must describe the complete product to build and verify this iteration, not a change to something that no longer exists.\n\nCURRENT GOAL:\n", current_goal, "\n\nLAST RESULT:\nverdict=", ctx.last_verdict, "\ndigest: ", ctx.digest_summary, "\n\nDecide the company's next move."], "")
 }
 
 # Pure, testable: whether pending notes should be marked consumed given the
@@ -209,6 +209,21 @@ fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id ::
   }
 }
 
+# Every iteration builds from an EMPTY work dir; nothing sealed earlier is on
+# disk (the company workspace holds the bootstrap skeleton, not the product).
+# The strategist writes revise goals as if the product carried forward --
+# tzc15 iter 3 "store both as static content served by the FastAPI server",
+# tzc18 iter 3 "fix the tzconvert test suite so QA passes" -- and the sprint
+# then produced only the delta: nothing to launch, QA fail, iteration lost.
+# Until artifacts carry forward (#364) the goal states the premise (#365).
+fn iteration_goal(goal :: Str, k :: Int) -> Str {
+  if k <= 1 {
+    goal
+  } else {
+    str.join([goal, "\n\nNOTE: this iteration starts from an EMPTY work dir. Nothing built or tested in earlier iterations is on disk. Build everything this goal needs to run and be verified -- the server, its tests, its requirements -- not only the change described above."], "")
+  }
+}
+
 fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   match budget.check_scope(db, ccfg.id, "total") {
     Exhausted => {
@@ -321,7 +336,7 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     ()
   }
   let next_goal := if decision.decision == "revise" {
-    decision.goal
+    iteration_goal(decision.goal, k + 1)
   } else {
     current_goal
   }

@@ -27,6 +27,10 @@ import "../src/orchestrator" as orch
 
 import "../src/lex_skill" as lexskill
 
+import "../src/roles" as roles
+
+import "lex-llm/src/tool" as t
+
 fn seed_dir(sprint :: Str, files :: Str) -> [proc] Unit {
   let d := lexskill.py_work_dir(sprint)
   let __ := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "/__pycache__' && cd '", d, "' && for f in ", files, "; do echo 'X = 1' > \"$f\"; done"], "")])
@@ -347,8 +351,49 @@ fn test_py_check_refuses_a_bare_word_as_a_module() -> [env, io, net, proc, rando
   }
 }
 
+fn author_call(sprint :: Str, args :: jv.Json) -> [env, net, io, proc] Result[jv.Json, e.Errors] {
+  let none :: Result[jv.Json, e.Errors] := Err(e.single("", "no_tool", "the py_test_author has no py_check tool"))
+  list.fold(roles.tools_of_role("py_test_author", "/tmp/loom-lexcheck-evidence-test.json", sprint), none, fn (acc :: Result[jv.Json, e.Errors], tl :: t.Tool) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    if tl.name == "py_check" {
+      tl.execute(args)
+    } else {
+      acc
+    }
+  })
+}
+
+# #384: the test author may not overwrite or delete the build's files.
+# tzc22 iter 1: it wrote main.py = "# placeholder" and then deleted it.
+fn test_the_author_cannot_touch_the_builds_module() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let sprint := str.concat("t-auth/", crypto.random_str_hex(4))
+  let d := lexskill.py_work_dir(sprint)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "' && printf 'def add(a, b):\\n    return a + b\\n' > '", d, "/main.py'"], "")])
+  {
+    {
+      let over := author_call(sprint, JObj([("filename", JStr("main.py")), ("code", JStr("# placeholder\n"))]))
+      let del := author_call(sprint, JObj([("filename", JStr("main.py")), ("delete", JBool(true))]))
+      let test := author_call(sprint, JObj([("filename", JStr("tests/test_x.py")), ("code", JStr("def test_x():\n    assert 1\n"))]))
+      let scratch := author_call(sprint, JObj([("filename", JStr("_derive.py")), ("code", JStr("x = 1\n"))]))
+      let size := match proc.run("bash", ["-c", str.join(["wc -c < '", d, "/main.py' 2>/dev/null | tr -d ' '"], "")]) {
+        Ok(o) => str.trim(o.stdout),
+        Err(_) => "?",
+      }
+      let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", d, "'"], "")])
+      if read_field(over, "ok") == "false" and read_field(del, "ok") == "false" and size == "32" {
+        if read_field(test, "ok") == "true" and read_field(scratch, "ok") == "true" {
+          Ok(())
+        } else {
+          Err("the author can no longer write its own test or scratch files")
+        }
+      } else {
+        Err(str.join(["the test author touched the build's main.py (overwrite ok=", read_field(over, "ok"), " delete ok=", read_field(del, "ok"), " size=", size, ") -- tzc22 iter 1"], ""))
+      }
+    }
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes(), test_py_check_refuses_a_bare_word_as_a_module()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes(), test_py_check_refuses_a_bare_word_as_a_module(), test_the_author_cannot_touch_the_builds_module()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

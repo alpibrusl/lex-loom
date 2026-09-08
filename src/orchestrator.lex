@@ -1463,9 +1463,19 @@ fn sanitize_id(s :: Str) -> Str {
 # The listing is per-sprint, so it belongs in the node's INPUT and never in a
 # system prompt: those are persisted in agent_pool and replayed in later
 # sprints, where a file list is not merely stale but actively misleading.
+# The listing walks the tree (#370). tzc19 iter 2's build was a package --
+# tzconvert/main.py held uvicorn.run -- and a top-level `ls` showed launch
+# only "tests tzconvert", so it guessed tzconvert/app.py, then server.py,
+# seven attempts on files that never existed. The listing now names every
+# file with its relative path and ends with ENTRY POINT CANDIDATES: the files
+# that start a server, each with the command that runs it -- `python3 -m
+# pkg.module` for a file inside a package, since `python3 pkg/main.py` puts
+# the package dir, not the root, on sys.path and intra-package imports fail.
 fn launch_file_listing(sprint_id :: Str) -> [proc] Str {
   let dirs := str.join([lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id)], "")
-  match proc.run("bash", ["-c", str.join(["for D in ", dirs, "; do [ -d \"$D\" ] && ls -1 \"$D\" 2>/dev/null | grep -v '^__pycache__$'; done"], "")]) {
+  let walk := "find . -type d \\( -name __pycache__ -o -name _denied_tests -o -name .pytest_cache -o -name node_modules \\) -prune -o -type f -print 2>/dev/null | sed 's#^\\./##' | sort"
+  let script := str.join(["for D in ", dirs, "; do\n", "  [ -d \"$D\" ] || continue\n", "  cd \"$D\" || continue\n", "  ", walk, "\n", "  C=$(", walk, " | while read -r f; do case \"$f\" in *.py) grep -lE 'uvicorn\\.run\\(|app\\.run\\(|serve_forever\\(|HTTPServer\\(|__name__ == .__main__.' \"$f\" 2>/dev/null;; *.ts|*.js) grep -lE '\\.listen\\(' \"$f\" 2>/dev/null;; *.lex) grep -lE 'serve|listen' \"$f\" 2>/dev/null;; esac; done)\n", "  if [ -n \"$C\" ]; then\n", "    echo 'ENTRY POINT CANDIDATES (files that start a server, with the command that runs each):'\n", "    for f in $C; do case \"$f\" in */*.py) m=${f%.py}; m=${m//\\//.}; echo \"  $f  ->  PORT=<port> python3 -m $m\";; *.py) echo \"  $f  ->  PORT=<port> python3 $f\";; *) echo \"  $f\";; esac; done\n", "  fi\n", "  cd - >/dev/null\n", "done"], "")
+  match proc.run("bash", ["-c", script]) {
     Err(_) => "",
     Ok(r) => str.trim(r.stdout),
   }

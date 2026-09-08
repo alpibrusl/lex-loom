@@ -139,14 +139,17 @@ fn test_park_holds_subtree_and_continues_independent() -> [env, io, time, crypto
 }
 
 # #360: a failed gate holds its own subtree and NOTHING else. tzc18 iter 1
-# lost both builds to a denied test author that neither depended on.
+# lost both builds to a denied test author that neither depended on. The
+# independent node sits in the LAYER AFTER the failure (seed -> build), the
+# shape tzc18 had; in the same layer it would run before the early exit and
+# the sabotage would only ever fail on the dependent node.
 fn failing_graph(sprint_id :: Str) -> graph.SprintGraph {
-  { id: sprint_id, phase: Implementation, nodes: [{ id: "author", role: "docs", gate: "spec len-gt 100000", expand: None, activate_when: "" }, { id: "qa", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "author", to: "qa", handoff: "tests" }] }
+  { id: sprint_id, phase: Implementation, nodes: [{ id: "author", role: "docs", gate: "spec len-gt 100000", expand: None, activate_when: "" }, { id: "seed", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "qa", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "build", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "author", to: "qa", handoff: "tests" }, { from: "seed", to: "build", handoff: "brief" }] }
 }
 
 fn mk_failing_cfg(db :: conn.ConnDb, sprint_id :: Str) -> [env] orch.SprintCfg {
   let trail_none :: Option[tlog.Log] := None
-  { id: sprint_id, request: "demo request", model: "proc:cat", db: db, api_calls_max: 50, roster: [proc_agent("author"), proc_agent("qa"), proc_agent("build")], trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
+  { id: sprint_id, request: "demo request", model: "proc:cat", db: db, api_calls_max: 50, roster: [proc_agent("author"), proc_agent("seed"), proc_agent("qa"), proc_agent("build")], trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
 }
 
 fn test_a_failed_layer_does_not_abandon_independent_nodes() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Result[Unit, Str] {

@@ -1306,7 +1306,7 @@ fn impl_phase_of(outcomes :: List[NodeOutcome]) -> PhaseResult {
 fn acceptance_command(g :: graph.SprintGraph) -> Str {
   let qa_kind := graph.qa_role_for_graph(g)
   if qa_kind == "py_qa" {
-    "n=$(ls -1 test_*.py *_test.py 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'ACCEPTANCE: no test file in the sealed artifact'; false; fi"
+    "n=$(find . -path '*/__pycache__' -prune -o \\( -name 'test_*.py' -o -name '*_test.py' \\) -type f -print 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then python3 -m pytest -q; else echo 'ACCEPTANCE: no test file in the sealed artifact'; false; fi"
   } else {
     if qa_kind == "qa" {
       "rc=0; found=0; for f in *_test.lex test_*.lex; do [ -e \"$f\" ] || continue; found=1; ${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net \"$f\" run_all || rc=1; done; if [ \"$found\" -eq 0 ]; then echo 'ACCEPTANCE: no test file in the sealed artifact'; rc=1; fi; [ \"$rc\" -eq 0 ]"

@@ -11,6 +11,8 @@ import "../src/orchestrator" as orch
 
 import "../src/roles" as roles
 
+import "../src/role_tools" as role_tools
+
 fn infra_fail() -> Str {
   "{\"verdict\":\"FAIL\",\"reason\":\"Step 2 (derived-value gate) failed: LOOM_ROOT is empty and bin/check_derived_values.py does not exist, so the mandated hardcoding check could not be executed\"}"
 }
@@ -78,8 +80,30 @@ fn test_prompts_keep_paths_and_ports_out_of_the_spec() -> Result[Unit, Str] {
   }
 }
 
+# #394: no QA role holds a tool that writes into the work dir. lexwc1's Lex
+# QA held lex_check and overwrote the build's server.lex 20+ times.
+fn test_qa_roles_hold_no_writing_tool() -> Result[Unit, Str] {
+  let writing := ["lex_check", "py_check", "ts_check"]
+  let offending := list.fold(["qa", "py_qa", "ts_qa"], [], fn (acc :: List[Str], role :: Str) -> List[Str] {
+    list.fold(role_tools.tools_for(role), acc, fn (acc2 :: List[Str], tool :: Str) -> List[Str] {
+      if list.fold(writing, false, fn (f :: Bool, w :: Str) -> Bool {
+        f or w == tool
+      }) {
+        list.concat(acc2, [str.join([role, ":", tool], "")])
+      } else {
+        acc2
+      }
+    })
+  })
+  if list.is_empty(offending) and str.contains(roles.qa_system_prompt(), "you never write a file") {
+    Ok(())
+  } else {
+    Err(str.concat("a QA role can write into the build's work dir: ", str.join(offending, ", ")))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_a_fail_citing_the_pipeline_is_not_final(), test_a_fail_about_the_product_is_still_final(), test_the_infra_reason_names_the_cause(), test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product(), test_prompts_keep_paths_and_ports_out_of_the_spec()]
+  [test_a_fail_citing_the_pipeline_is_not_final(), test_a_fail_about_the_product_is_still_final(), test_the_infra_reason_names_the_cause(), test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product(), test_prompts_keep_paths_and_ports_out_of_the_spec(), test_qa_roles_hold_no_writing_tool()]
 }
 
 fn run_all() -> Unit {

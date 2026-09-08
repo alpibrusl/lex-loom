@@ -114,7 +114,7 @@ fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time, random] Result[
       let run_id := "testops-flush"
       let path := runner.ops_file(run_id)
       let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
-      let ok_tool := runner.wrap_tool(path, make_ok_tool("lex_check"))
+      let ok_tool := runner.wrap_tool(path, make_ok_tool("lex_run"))
       let err_tool := runner.wrap_tool(path, make_err_tool("lex_run"))
       let __c1 := invoke_n(ok_tool, 2)
       let __c2 := invoke_n(err_tool, 1)
@@ -122,14 +122,14 @@ fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time, random] Result[
       let n := count_op_calls(db, "flush-qa")
       if n == 3 {
         let ps := payloads(db, "flush-qa")
-        if str.contains(ps, "\"tool\":\"lex_check\",\"ok\":true") {
+        if str.contains(ps, "\"tool\":\"lex_run\",\"ok\":true") {
           if str.contains(ps, "\"tool\":\"lex_run\",\"ok\":false") {
             Ok(())
           } else {
             Err(str.concat("missing err payload for lex_run: ", ps))
           }
         } else {
-          Err(str.concat("missing ok payload for lex_check: ", ps))
+          Err(str.concat("missing ok payload for lex_run: ", ps))
         }
       } else {
         Err(str.concat("expected 3 op_call rows, got ", int.to_str(n)))
@@ -141,8 +141,8 @@ fn test_wrap_and_flush() -> [net, io, proc, sql, fs_write, time, random] Result[
 # The wrapped tool keeps its name — op_grant emission (orchestrator) and the
 # roster both read tl.name, so wrapping must not change the granted tool list.
 fn test_wrap_preserves_name() -> Result[Unit, Str] {
-  let tl := runner.wrap_tool("/tmp/loom-ops-unused.log", make_ok_tool("lex_check"))
-  if tl.name == "lex_check" {
+  let tl := runner.wrap_tool("/tmp/loom-ops-unused.log", make_ok_tool("lex_run"))
+  if tl.name == "lex_run" {
     Ok(())
   } else {
     Err(str.concat("wrapped tool renamed to ", tl.name))
@@ -157,10 +157,10 @@ fn test_verify_operations_within_grant() -> [net, io, proc, sql, fs_write, time,
       let run_id := "testops-clean"
       let path := runner.ops_file(run_id)
       let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
-      let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_check")), 1)
+      let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_run")), 1)
       let __c2 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_run")), 1)
       let __f := runner.flush_op_calls(db, run_id, "clean-qa")
-      let __g := insert_grant(db, "s1", "clean-qa", "qa", "lex_check,lex_run")
+      let __g := insert_grant(db, "s1", "clean-qa", "qa", "read_file,lex_run")
       let r := verify.verify_operations(db, "s1")
       if r.ops == 2 {
         if r.exceeded == 0 {
@@ -213,7 +213,7 @@ fn test_flush_is_drained() -> [net, io, proc, sql, fs_write, time, random] Resul
       let run_id := "testops-drain"
       let path := runner.ops_file(run_id)
       let __rm := proc.run("bash", ["-c", str.concat("rm -f ", path)])
-      let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_check")), 1)
+      let __c1 := invoke_n(runner.wrap_tool(path, make_ok_tool("lex_run")), 1)
       let __f1 := runner.flush_op_calls(db, run_id, "drain-qa")
       let __f2 := runner.flush_op_calls(db, run_id, "drain-qa")
       let n := count_op_calls(db, "drain-qa")

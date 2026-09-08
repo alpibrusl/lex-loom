@@ -45,6 +45,25 @@ fn test_the_listing_names_the_files_that_exist() -> [proc] Result[Unit, Str] {
 # The names launch actually guessed must NOT appear when they do not exist —
 # a listing that mentioned every conventional name would satisfy the test above
 # while reproducing the bug exactly.
+# #370: a package build. tzc19 iter 2's launch guessed tzconvert/app.py and
+# tzconvert/server.py because a top-level ls showed it only "tests tzconvert".
+fn test_the_listing_walks_into_a_package_and_names_the_entry_point() -> [proc] Result[Unit, Str] {
+  let sprint := "t-entrypoint-pkg/iter-1"
+  let dir := lexskill.py_work_dir(sprint)
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf '", dir, "' && mkdir -p '", dir, "/tzconvert' '", dir, "/tests' && : > '", dir, "/tzconvert/__init__.py' && printf 'import uvicorn\\napp = 1\\nif __name__ == \"__main__\":\\n    uvicorn.run(app)\\n' > '", dir, "/tzconvert/main.py' && printf 'X = 1\\n' > '", dir, "/tzconvert/convert.py' && printf 'def test_x():\\n    assert 1\\n' > '", dir, "/tests/test_x.py'"], "")])
+  let listing := orch.launch_file_listing(sprint)
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", dir, "'"], "")])
+  if str.contains(listing, "tzconvert/main.py") and str.contains(listing, "python3 -m tzconvert.main") {
+    if str.contains(listing, "tzconvert/convert.py  ->") {
+      Err(str.concat("a module that starts no server was offered as an entry point: ", listing))
+    } else {
+      Ok(())
+    }
+  } else {
+    Err(str.concat("the listing does not walk into the package or does not name how to run its entry point -- tzc19's seven guessed launches: ", listing))
+  }
+}
+
 fn test_the_listing_does_not_invent_conventional_names() -> [proc] Result[Unit, Str] {
   let sprint := "t-entrypoint-2/iter-1"
   let dir := lexskill.py_work_dir(sprint)
@@ -146,7 +165,7 @@ fn test_a_short_result_is_untouched() -> Result[Unit, Str] {
 }
 
 fn suite() -> [proc] List[Result[Unit, Str]] {
-  [test_the_listing_names_the_files_that_exist(), test_the_listing_does_not_invent_conventional_names(), test_pycache_is_not_offered(), test_a_missing_work_dir_yields_nothing(), test_the_trail_keeps_the_end_of_a_long_failure(), test_the_trail_still_keeps_the_beginning(), test_a_clipped_result_admits_it_is_clipped(), test_a_clipped_result_stays_one_line(), test_a_short_result_is_untouched()]
+  [test_the_listing_names_the_files_that_exist(), test_the_listing_walks_into_a_package_and_names_the_entry_point(), test_the_listing_does_not_invent_conventional_names(), test_pycache_is_not_offered(), test_a_missing_work_dir_yields_nothing(), test_the_trail_keeps_the_end_of_a_long_failure(), test_the_trail_still_keeps_the_beginning(), test_a_clipped_result_admits_it_is_clipped(), test_a_clipped_result_stays_one_line(), test_a_short_result_is_untouched()]
 }
 
 fn run_all() -> [proc] Unit {

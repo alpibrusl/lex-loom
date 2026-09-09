@@ -37,8 +37,8 @@ trap cleanup EXIT
 echo "+ ubuntu 24.04 base"; tar -xzf "$JT_DIR/ubuntu-base.tgz" -C "$mnt" --numeric-owner
 cp /etc/resolv.conf "$mnt/etc/resolv.conf"
 mount -t proc proc "$mnt/proc"; mount --bind /dev "$mnt/dev"; mount -t sysfs sys "$mnt/sys"
-echo "+ apt (python3 curl ca-certificates iproute2 sqlite3 git)"
-chroot "$mnt" /bin/sh -c 'export DEBIAN_FRONTEND=noninteractive; apt-get -qq update >/dev/null && apt-get -qq install -y --no-install-recommends python3 ca-certificates curl iproute2 sqlite3 git >/dev/null && apt-get clean && rm -rf /var/lib/apt/lists/*'
+echo "+ apt (python3 curl ca-certificates iproute2 sqlite3 git procps)"
+chroot "$mnt" /bin/sh -c 'export DEBIAN_FRONTEND=noninteractive; apt-get -qq update >/dev/null && apt-get -qq install -y --no-install-recommends python3 ca-certificates curl iproute2 sqlite3 git procps >/dev/null && apt-get clean && rm -rf /var/lib/apt/lists/*'
 umount "$mnt/sys" "$mnt/dev" "$mnt/proc"
 echo "+ lex $LEX_VERSION"; t="$(mktemp -d)"; tar -xzf "$LEX_TGZ" -C "$t"; install -m 0755 "$(find "$t" -type f -name lex | head -1)" "$mnt/usr/local/bin/lex"; rm -rf "$t"
 echo "+ lex-loom snapshot + package cache"; mkdir -p "$mnt/opt/loom" "$mnt/root/.lex"; tar -xzf "$JT_DIR/loom.tgz" -C "$mnt/opt/loom"; tar -xzf "$JT_DIR/packages.tgz" -C "$mnt/root/.lex"

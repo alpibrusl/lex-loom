@@ -150,6 +150,27 @@ def scan(path: Path):
                 break
     return out
 
+def lex_stub_failure(files) -> str:
+    """A Lex test that imports nothing from the work dir tests a stub of its
+    own making. lexwc4 iteration 1: the author defined `handle` inside
+    wordcount_test.lex returning {body:"{}", status:200}; all five tests ran
+    against that stub, all five failed against the real server at QA. A test
+    file must reach the build's module through `import "./<module>"`. (#404)"""
+    bad = []
+    for path in files:
+        if path.suffix != ".lex":
+            continue
+        text = path.read_text()
+        if not any(line.strip().startswith('import "./') for line in text.splitlines()):
+            bad.append(path.name)
+    if not bad:
+        return ""
+    return ("check_derived_values: a Lex test file imports nothing from the work dir, so it can\n"
+            "only test a stub of its own:\n\n" + "\n".join(f"  {b}" for b in bad) + "\n\n"
+            "Import the module the build writes -- `import \"./server\" as server` -- and call\n"
+            "its functions; do not define the implementation inside the test.\n")
+
+
 def collection_failure(root: Path) -> str:
     """A test file that cannot be COLLECTED takes the whole suite down before
     a single test runs. tzc13, iteration 1: test_tzconvert.py pinned a derived
@@ -324,6 +345,10 @@ def main() -> int:
         pin = pin_failure(root, files)
         if pin:
             print(pin)
+            return 1
+        stub = lex_stub_failure(files)
+        if stub:
+            print(stub)
             return 1
         print(f"check_derived_values: {len(files)} test file(s), expected values are derived")
         return 0

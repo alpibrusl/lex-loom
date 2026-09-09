@@ -43,7 +43,7 @@ fi
 echo "== 5. a Lex suite is not pytest's to collect"
 # The Lex test_author eval baseline read 0/5: every attempt was denied "no
 # tests collected" by pytest run over a directory holding only .lex files.
-mkdir -p "$W/lexsuite"; printf 'fn test_shift() -> Result[Unit, Str] {\n  match shift(1700000000, "Asia/Kolkata") {\n    Ok(v) => if v == 1700000000 + 330 * 60 { Ok(()) } else { Err("shift") },\n    Err(e) => Err(e),\n  }\n}\n' > "$W/lexsuite/tzoffset_test.lex"
+mkdir -p "$W/lexsuite"; printf 'import "./tzoffset" as tz\n\nfn test_shift() -> Result[Unit, Str] {\n  match tz.shift(1700000000, "Asia/Kolkata") {\n    Ok(v) => if v == 1700000000 + 330 * 60 { Ok(()) } else { Err("shift") },\n    Err(e) => Err(e),\n  }\n}\n' > "$W/lexsuite/tzoffset_test.lex"
 if (cd "$W/lexsuite" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a derived Lex suite passes without pytest ever running"; else bad "a Lex-only suite was denied -- the 0/5 Lex test_author baseline"; fi
 
 echo "== 6. a package whose __init__ cannot import is denied at the build, not found by QA"
@@ -97,6 +97,13 @@ if python3 -c 'import pytest' >/dev/null 2>&1; then
 else
   ok "duplicate-basename case skipped: no pytest on this host"
 fi
+
+echo "== 11. a Lex test that imports nothing tests only its own stub"
+mkdir -p "$W/lexstub" "$W/lexok"
+printf 'fn handle() -> Int {\n  200\n}\n\nfn test_health() -> Result[Unit, Str] {\n  if handle() == 200 { Ok(()) } else { Err("x") }\n}\n' > "$W/lexstub/server_test.lex"
+printf 'import "./server" as server\n\nfn test_health() -> Result[Unit, Str] {\n  if server.handle() == 200 { Ok(()) } else { Err("x") }\n}\n' > "$W/lexok/server_test.lex"
+if (cd "$W/lexstub" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then bad "a Lex test defining its own implementation was accepted -- lexwc4 iter 1"; else ok "a stub-only Lex test is denied where it was written"; fi
+if (cd "$W/lexok" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a Lex test that imports the build's module passes"; else bad "a Lex test importing the module was denied"; fi
 
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

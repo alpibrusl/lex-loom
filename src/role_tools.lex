@@ -61,7 +61,7 @@ fn tools_for(role :: Str) -> List[Str] {
                             if role == "cx" {
                               ["fetch_support_items"]
                             } else {
-                              if role == "research" {
+                              if role == "research" or role == "opportunity_research" {
                                 ["web_search"]
                               } else {
                                 []

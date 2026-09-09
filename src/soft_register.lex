@@ -44,7 +44,7 @@ fn known_capabilities(role :: Str) -> List[Str] {
   if role == "cx" {
     ["support.fetch_items"]
   } else {
-    if role == "research" {
+    if role == "research" or role == "opportunity_research" {
       ["research.web_search"]
     } else {
       if role == "content_creator" {

@@ -9,8 +9,8 @@ Every criterion is mechanical and comes from what loom itself recorded:
   checkable:acceptance-passed  that sprint's trail carries acceptance_passed
                                (the sealed artifact was re-executed in a clean
                                dir and its own suite passed)
-  checkable:app-present        the workspace's app.py exists and is not the
-                               skeleton's (something was built)
+  checkable:app-present        a top-level Python module exists that is not a
+                               test and not the skeleton's (something was built)
   checkable:tests-present      at least one test file exists that is not the
                                skeleton's (something was tested)
 
@@ -62,11 +62,17 @@ def main() -> int:
     else:
         unmet.append(("checkable:acceptance-passed", "no acceptance_passed in the trail of the passing sprint (%s)" % (passed_sprint or "none")))
 
-    app = ws / "app.py"
-    if app.exists() and digest(app) != digest(skeleton / "app.py"):
+    # Run 1 found live: the build put the product in main.py and left the
+    # skeleton's app.py untouched, and a criterion pinned to the file NAME
+    # settled a working, tested, launched API at 50%. The criterion is that
+    # something was built: any top-level Python module that is not a test
+    # and not byte-identical to the skeleton's copy.
+    skel_mods = {digest(p) for p in skeleton.glob("*.py")}
+    built = [p for p in ws.glob("*.py") if not p.name.startswith("test_") and not p.name.endswith("_test.py") and digest(p) not in skel_mods]
+    if built:
         met.append("checkable:app-present")
     else:
-        unmet.append(("checkable:app-present", "app.py missing or identical to the path skeleton"))
+        unmet.append(("checkable:app-present", "no top-level Python module beyond the path skeleton's (nothing was built)"))
 
     skel_tests = {digest(p) for p in (skeleton / "tests").glob("test_*.py")} if (skeleton / "tests").exists() else set()
     own_tests = [p for p in ws.rglob("test_*.py") if "__pycache__" not in p.parts and digest(p) not in skel_tests]

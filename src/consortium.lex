@@ -125,7 +125,7 @@ fn software_contract_id() -> Str {
 # founder's judgement went into the research contract; delivery is
 # mechanical.
 fn run1_software_criteria() -> List[request_bid.Criterion] {
-  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:app-present", "the workspace holds an app.py that is not the path skeleton's"), crit("checkable:tests-present", "the workspace holds test files beyond the path skeleton's")]
+  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:app-present", "the workspace holds a Python module beyond the path skeleton's (the product was built)"), crit("checkable:tests-present", "the workspace holds test files beyond the path skeleton's")]
 }
 
 fn software_request_description(report :: Str) -> Str {

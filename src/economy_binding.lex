@@ -15,6 +15,8 @@ import "lex-orm/src/connection" as conn
 
 import "lex-economy/src/treasury" as treasury
 
+import "./budget" as budget
+
 import "lex-trail/src/log" as tlog
 
 fn ensure_treasury(db :: conn.ConnDb, company_id :: Str, currency :: Str, opening_cents :: Int) -> [sql] Result[treasury.Treasury, Str] {
@@ -41,6 +43,19 @@ fn commit_for_contract(db :: conn.ConnDb, log :: tlog.Log, company_id :: Str, co
   match treasury.commit_funds(db.handle, log, company_id, contract_id, commitment_id, amount_cents, currency) {
     Err(e) => Err(e),
     Ok(_) => Ok(commitment_id),
+  }
+}
+
+# Piece 2 (#398): a company's opening balance is the `total` budget envelope
+# it already runs under -- one number, one source of truth. A company with
+# no total envelope gets no treasury (no budget, no funds), and says so.
+fn fund_from_total_envelope(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_read] Result[Option[treasury.Treasury], Str] {
+  match budget.envelope_for(db, company_id, "total") {
+    None => Ok(None),
+    Some(e) => match ensure_treasury(db, company_id, "EUR", e.cap_cents) {
+      Err(err) => Err(err),
+      Ok(t) => Ok(Some(t)),
+    },
   }
 }
 

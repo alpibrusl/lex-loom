@@ -40,6 +40,8 @@ import "./manager" as manager
 
 import "./budget" as budget
 
+import "./economy_binding" as eb
+
 import "./org" as org
 
 type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: Str, stopped_by :: Str }
@@ -450,6 +452,14 @@ fn run_company(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, ev
 # are stopped afterwards (#338).
 fn run_company_loop(db :: conn.ConnDb, ccfg :: company.CompanyCfg, api_max :: Int, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let __save := company.save_company(db, ccfg)
+  let __fund := match eb.fund_from_total_envelope(db, ccfg.id) {
+    Err(e) => io.print(str.join(["[company] economy: treasury NOT opened: ", e], "")),
+    Ok(None) => io.print("[company] economy: no total budget envelope, no treasury"),
+    Ok(Some(t)) => {
+      let __t := tr.trail(db, ccfg.id, "treasury_opened", str.join(["{\"company\":\"", ccfg.id, "\",\"balance_cents\":", int.to_str(t.balance_cents), ",\"committed_cents\":", int.to_str(t.committed_cents), "}"], ""))
+      io.print(str.join(["[company] economy: treasury ", ccfg.id, " balance=", int.to_str(t.balance_cents), "c committed=", int.to_str(t.committed_cents), "c"], ""))
+    },
+  }
   let stage0 := company.load_stage(db, ccfg.id)
   let resume := company.resume_point(db, ccfg.id)
   let __p0 := io.print(str.join(["[company] start id=", ccfg.id, " stage=", company.stage_to_str(stage0), " resume_at=iter-", int.to_str(resume.start_idx), " max_iterations=", int.to_str(ccfg.max_iterations), " stop_when='", ccfg.stop_when, "' evolve=", if evolve {

@@ -95,10 +95,18 @@ export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC
 WORKER_PIDS=()
 WORKER_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loom-company-workers.XXXXXX")"
 
+# A worker that does not act on SIGTERM (found live inside a lex-os box,
+# lex-loom#415 step 3: the company was done and this `wait` held the box
+# open until the host timeout) gets two seconds, then SIGKILL.
 cleanup() {
   if [ "${#WORKER_PIDS[@]}" -gt 0 ]; then
     echo "[run-company] stopping ${#WORKER_PIDS[@]} worker process(es): ${WORKER_PIDS[*]}"
     kill "${WORKER_PIDS[@]}" 2>/dev/null || true
+    for i in 1 2 3 4; do
+      alive=0; for p in "${WORKER_PIDS[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+      [ "$alive" = 0 ] && break; sleep 0.5
+    done
+    kill -9 "${WORKER_PIDS[@]}" 2>/dev/null || true
     wait "${WORKER_PIDS[@]}" 2>/dev/null || true
   fi
 }

@@ -98,6 +98,8 @@ jobs:
         run: bash demo/ev1-eval-suite-roundtrip.sh
       - name: "Demo: derived-values + import checkers (#333)"
         run: bash demo/dv1-derived-values-roundtrip.sh
+      - name: "Demo: opportunity-report gate + search backends (research pack)"
+        run: bash demo/rr1-research-report-roundtrip.sh
       - name: "Demo: GP1 Node/TS golden path (#92)"
         run: bash demo/gp1-ts-path-roundtrip.sh
       - name: "Demo: GP2 web-pwa golden path (#92)"

@@ -59,9 +59,11 @@ OUT="evals/results/$STAMP.tsv"
 # every expected value in a test is DERIVED from the table (shift(0,
 # "Asia/Kolkata") = 19800), so the derived-values gate has teeth here too.
 LEX_TASK='Write a Lex module tzoffset.lex exposing `fn offset_minutes(tz :: Str) -> Result[Int, Str]` that returns the fixed UTC offset in minutes for exactly these zones: "UTC" -> 0, "Asia/Kolkata" -> 330, "Asia/Kathmandu" -> 345, "America/New_York" -> -300 (standard time), and Err("unknown timezone") for anything else; and `fn shift(epoch :: Int, tz :: Str) -> Result[Int, Str]` that adds the zone offset in SECONDS to a unix epoch (Err propagates). Tests must cover every zone, an unknown zone, and shift on a non-zero epoch.'
+RESEARCH_TASK='PROBLEM SPACE: paid micro-APIs for solo developers who need to validate and normalise user-submitted data (addresses, phone numbers, CSV uploads, free-text dates). Find ONE technically feasible micro-product opportunity in this space and write the opportunity report.'
 task_for() {
   case "$1" in
     build|test_author|qa) printf '%s' "$LEX_TASK" ;;
+    opportunity_research) printf '%s' "$RESEARCH_TASK" ;;
     *) printf '' ;;
   esac
 }

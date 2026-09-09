@@ -6,3 +6,4 @@ launch	4	json-ok-true; the whole #312/#316/#320/#321 chain lands here
 build	5	spec compiles via lex_check; the Lex half of the pipeline had no baseline
 test_author	5	the derived-values gate on .lex tests
 qa	5	json-verdict-pass on a Lex module; lex_check + run_all on disk
+opportunity_research	4	check_research_report over a fenced report.md; ResearchCo's only deliverable (consortium run 1)

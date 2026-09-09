@@ -25,12 +25,17 @@ once contracting between two works end to end.
 | Company | Mission | Path / roles | Sells | Buys |
 |---|---|---|---|---|
 | **SoftwareCo** | Turn an opportunity report into a working, tested, launched micro-API | `python-fastapi`, packs `core` (proven: 4 of 5 finished runs on 2026-09-08) | `software-delivery/v1` | `opportunity-research/v1` |
-| **ResearchCo** | Find one technically feasible micro-product opportunity and document it with evidence | prose roles: researcher, analyst, verifier (`core` + `research` pack, judge-gated) | `opportunity-research/v1` | nothing in run 1 |
+| **ResearchCo** | Find one technically feasible micro-product opportunity and document it with evidence | packs `core` + `research`; the `opportunity_research` role writes a fenced `report.md`, gated by `bin/check_research_report.py` (mechanical, not judge-gated) | `opportunity-research/v1` | nothing in run 1 |
 
 Both companies run on the same model (`qwen3.8:27b-mlx` through LiteLLM) and
 the same machine, one at a time. Wall-clock: a SoftwareCo iteration is about
-50 minutes; a ResearchCo iteration is unmeasured (**risk**: prose roles are
-the most-denied nodes in every run so far).
+50 minutes; a ResearchCo iteration is unmeasured. The `opportunity_research`
+role is in `evals/suite.tsv` so its gate pass rate is measured the same way
+as the software roles before the run (see `evals/baseline.tsv`).
+
+Web search: `bin/web_search.py` (DuckDuckGo, then Brave, then Bing; each
+result carries its URL). DuckDuckGo has bot-blocked this host since
+2026-09-09; without the fallbacks every research query returned nothing.
 
 ## 3. Capital (simulated cents)
 
@@ -78,10 +83,15 @@ price 40 000 cents, deadline 90 minutes).
 
 Criteria:
 
-- Checkable: report present, ≥ 3 alternatives in a comparison table, a named
-  target user, a problem statement, an implementation estimate in hours, a
-  dependency list, a confidence figure between 0 and 100, every cited source
-  resolvable (HTTP 200) — all mechanical (`spec sh` gates over the report).
+- Checkable, one attr each, exactly as `bin/check_research_report.py` prints
+  them on success (so the evidence bundle is the checker's own output):
+  `checkable:problem-statement`, `checkable:target-user`,
+  `checkable:three-alternatives` (a comparison table with ≥ 3 rows),
+  `checkable:implementation-estimate` (in hours), `checkable:dependencies`,
+  `checkable:two-sources` (≥ 2 distinct http(s) URLs), `checkable:confidence`
+  (0–100), `checkable:recommendation`. Source resolvability (HTTP 200) is
+  deliberately not checked in run 1: the search backend only returns URLs it
+  read, and a flaky remote must not fail a settled contract.
 - AskHuman: "Is the recommended opportunity one you would fund?" — answered by
   the founder; until then the verdict is `Ambiguous`.
 

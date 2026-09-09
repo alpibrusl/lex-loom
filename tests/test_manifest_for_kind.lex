@@ -38,6 +38,28 @@ fn test_security_gets_sandboxed_exec() -> Result[Unit, Str] {
   has_exec("security", "security", "Sandboxed")
 }
 
+# Joint loom + lex-os test (lex-loom#415): the research roles must be able
+# to run the search script and reach the search engines AND the model, and
+# every other grant must at least reach the model. The generator used to
+# emit `"egress":[]` for every role.
+fn test_research_roles_get_search_egress_and_sandboxed_exec() -> Result[Unit, Str] {
+  let m := manifests.manifest_json_for_kind("opportunity_research", "sprint-test")
+  if str.contains(m, "\"exec\":\"Sandboxed\"") and str.contains(m, "\"filesystem\":\"ReadWrite\"") and str.contains(m, "\"search.yahoo.com:443\"") and str.contains(m, "\"html.duckduckgo.com:443\"") and str.contains(m, "\"169.254.42.1:4000\"") and manifests.manifest_json_for_kind("research", "sprint-test") == m {
+    Ok(())
+  } else {
+    Err(str.concat("research grant lacks sandboxed exec, ReadWrite, or the search + model egress: ", m))
+  }
+}
+
+fn test_every_grant_reaches_the_model_and_nothing_else_by_default() -> Result[Unit, Str] {
+  let m := manifests.manifest_json_for_kind("build", "sprint-test")
+  if str.contains(m, "\"egress\":[\"169.254.42.1:4000\"]") and not str.contains(m, "yahoo") {
+    Ok(())
+  } else {
+    Err(str.concat("build grant egress is not exactly the model endpoint: ", m))
+  }
+}
+
 fn test_scribe_gets_no_exec() -> Result[Unit, Str] {
   has_exec("scribe", "scribe", "None")
 }
@@ -180,7 +202,7 @@ fn test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [test_build_gets_sandboxed_exec(), test_py_build_gets_sandboxed_exec(), test_fe_build_gets_sandboxed_exec(), test_qa_gets_sandboxed_exec(), test_py_qa_gets_sandboxed_exec(), test_security_gets_sandboxed_exec(), test_scribe_gets_no_exec(), test_unmapped_role_defaults_to_no_exec(), test_unmapped_role_defaults_to_readonly_fs(), test_build_gets_readwrite_fs(), test_qa_gets_readonly_fs(), test_preset_name_for_kind_matches_build(), test_preset_name_for_kind_matches_qa(), test_preset_name_for_kind_unmapped_falls_back_to_demo(), test_manifest_json_for_kind_matches_preset_composition(), test_parse_isolation_overrides_empty_string(), test_parse_isolation_overrides_parses_pairs(), test_parse_isolation_overrides_skips_malformed_segments(), test_preset_for_kind_with_overrides_honors_override(), test_preset_for_kind_with_overrides_falls_back_without_override(), test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo()]
+  [test_build_gets_sandboxed_exec(), test_py_build_gets_sandboxed_exec(), test_fe_build_gets_sandboxed_exec(), test_qa_gets_sandboxed_exec(), test_py_qa_gets_sandboxed_exec(), test_security_gets_sandboxed_exec(), test_scribe_gets_no_exec(), test_research_roles_get_search_egress_and_sandboxed_exec(), test_every_grant_reaches_the_model_and_nothing_else_by_default(), test_unmapped_role_defaults_to_no_exec(), test_unmapped_role_defaults_to_readonly_fs(), test_build_gets_readwrite_fs(), test_qa_gets_readonly_fs(), test_preset_name_for_kind_matches_build(), test_preset_name_for_kind_matches_qa(), test_preset_name_for_kind_unmapped_falls_back_to_demo(), test_manifest_json_for_kind_matches_preset_composition(), test_parse_isolation_overrides_empty_string(), test_parse_isolation_overrides_parses_pairs(), test_parse_isolation_overrides_skips_malformed_segments(), test_preset_for_kind_with_overrides_honors_override(), test_preset_for_kind_with_overrides_falls_back_without_override(), test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo()]
 }
 
 fn run_all() -> Unit {

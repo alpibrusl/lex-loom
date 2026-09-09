@@ -24,8 +24,32 @@ import "std.int" as int
 
 import "std.list" as list
 
+# The model endpoint as a lex-os box sees it: the host across the tap
+# gateway (169.254.42.1), where LiteLLM listens on :4000. Every grant carries
+# it -- found in the first joint loom + lex-os test (lex-loom#415): the
+# generator emitted `"egress":[]`, so under lex-os no role could have
+# reached its own model, let alone a search engine.
+fn litellm_egress() -> Str {
+  "169.254.42.1:4000"
+}
+
+# The search backends bin/web_search.py may reach, in its fallback order.
+fn search_egress() -> List[Str] {
+  ["html.duckduckgo.com:443", "search.yahoo.com:443", "search.brave.com:443", "www.bing.com:443"]
+}
+
+fn egress_json(hosts :: List[Str]) -> Str {
+  str.join(["[", str.join(list.map(hosts, fn (h :: Str) -> Str {
+    str.join(["\"", h, "\""], "")
+  }), ","), "]"], "")
+}
+
 fn manifest_json(goal :: Str, filesystem :: Str, network :: Str, exec_level :: Str, floor :: Str, wall :: Int, cmds :: Int, money :: Int, api_calls :: Int) -> Str {
-  str.join(["{\"goal\":{\"description\":\"", goal, "\"},", "\"grant\":{\"filesystem\":\"", filesystem, "\",\"network\":\"", network, "\",\"exec\":\"", exec_level, "\"},", "\"budget\":{\"wall_clock_secs\":", int.to_str(wall), ",", "\"max_commands\":", int.to_str(cmds), ",", "\"max_money_cents\":", int.to_str(money), ",", "\"max_api_calls\":", int.to_str(api_calls), "},", "\"isolation_floor\":\"", floor, "\",\"egress\":[]}"], "")
+  manifest_json_with_egress(goal, filesystem, network, exec_level, floor, wall, cmds, money, api_calls, [litellm_egress()])
+}
+
+fn manifest_json_with_egress(goal :: Str, filesystem :: Str, network :: Str, exec_level :: Str, floor :: Str, wall :: Int, cmds :: Int, money :: Int, api_calls :: Int, egress :: List[Str]) -> Str {
+  str.join(["{\"goal\":{\"description\":\"", goal, "\"},", "\"grant\":{\"filesystem\":\"", filesystem, "\",\"network\":\"", network, "\",\"exec\":\"", exec_level, "\"},", "\"budget\":{\"wall_clock_secs\":", int.to_str(wall), ",", "\"max_commands\":", int.to_str(cmds), ",", "\"max_money_cents\":", int.to_str(money), ",", "\"max_api_calls\":", int.to_str(api_calls), "},", "\"isolation_floor\":\"", floor, "\",\"egress\":", egress_json(egress), "}"], "")
 }
 
 fn design_manifest_json(sprint_id :: Str) -> Str {
@@ -46,6 +70,13 @@ fn demo_manifest_json(sprint_id :: Str) -> Str {
 
 fn retro_manifest_json(sprint_id :: Str) -> Str {
   manifest_json(str.concat("loom sprint ", str.concat(sprint_id, " — Retro + Digest phases")), "ReadOnly", "Allowlist", "None", "Namespace", 3600, 500, 5000, 200)
+}
+
+# Research roles (research, opportunity_research): the model plus the search
+# backends, sandboxed exec for bin/web_search.py and the report checker,
+# ReadWrite for the search ledger and the gate's scratch dir.
+fn research_manifest_json(sprint_id :: Str) -> Str {
+  manifest_json_with_egress(str.concat("loom sprint ", str.concat(sprint_id, " — Research (web_search-grounded report)")), "ReadWrite", "Allowlist", "Sandboxed", "Gvisor", 3600, 500, 5000, 200, list.concat([litellm_egress()], search_egress()))
 }
 
 # Sprint-level manifest: union across all phases (ReadWrite FS, Allowlist Net, Sandboxed Exec).
@@ -105,7 +136,11 @@ fn preset_name_for_kind(kind :: Str) -> Str {
                   if kind == "scribe" {
                     "Retro"
                   } else {
-                    "Demo"
+                    if kind == "research" or kind == "opportunity_research" {
+                      "Research"
+                    } else {
+                      "Demo"
+                    }
                   }
                 }
               }
@@ -126,16 +161,20 @@ fn manifest_json_for_preset(preset :: Str, sprint_id :: Str) -> Str {
   if preset == "Design" {
     design_manifest_json(sprint_id)
   } else {
-    if preset == "Implementation" {
-      implementation_manifest_json(sprint_id)
+    if preset == "Research" {
+      research_manifest_json(sprint_id)
     } else {
-      if preset == "QA" {
-        qa_manifest_json(sprint_id)
+      if preset == "Implementation" {
+        implementation_manifest_json(sprint_id)
       } else {
-        if preset == "Retro" {
-          retro_manifest_json(sprint_id)
+        if preset == "QA" {
+          qa_manifest_json(sprint_id)
         } else {
-          demo_manifest_json(sprint_id)
+          if preset == "Retro" {
+            retro_manifest_json(sprint_id)
+          } else {
+            demo_manifest_json(sprint_id)
+          }
         }
       }
     }
@@ -177,7 +216,7 @@ fn manifest_json_for_kind(kind :: Str, sprint_id :: Str) -> Str {
 # never-hand-out-authority-by-omission fallback manifest_json_for_preset
 # already applies.
 fn known_presets() -> List[Str] {
-  ["Design", "Implementation", "QA", "Retro", "Demo"]
+  ["Design", "Implementation", "QA", "Retro", "Demo", "Research"]
 }
 
 fn preset_dims(preset :: Str) -> { fs :: Str, exec :: Str } {

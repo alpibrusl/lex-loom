@@ -6,3 +6,5 @@ py_qa	5	5
 qa	4	5
 build	4	5
 test_author	5	5
+# opportunity_research recorded 2026-09-09 — same model, commit 7ac9779; 4/4 with the sources-grounded gate (one attempt denied once for a URL outside the ledger, passed on retry; 43s–206s per attempt)
+opportunity_research	4	4

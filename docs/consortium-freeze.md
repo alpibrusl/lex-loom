@@ -90,8 +90,10 @@ Criteria:
   `checkable:implementation-estimate` (in hours), `checkable:dependencies`,
   `checkable:two-sources` (≥ 2 distinct http(s) URLs),
   `checkable:sources-grounded` (every cited URL is one `web_search` returned
-  in this run, from the search ledger the tool writes; the first live probe
-  cited 13 remembered URLs out of 21), `checkable:confidence` (0–100),
+  in this run, from the search ledger the tool writes; the trail clips tool
+  results at 700 characters, so grounding is auditable from the ledger, not
+  from the trail. Measured 2026-09-09: 4/4, one attempt denied once for a
+  URL it had not searched for and corrected on retry), `checkable:confidence` (0–100),
   `checkable:recommendation`. Source resolvability (HTTP 200) is
   deliberately not checked in run 1: a flaky remote must not fail a settled
   contract.

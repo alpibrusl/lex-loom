@@ -261,6 +261,33 @@ fn belongs_to_qa_phase(role :: Str) -> Bool {
   }
 }
 
+# A document sprint has nothing to run: no build, test, QA, launch or deploy
+# role anywhere, and an opportunity_research node whose own `spec sh`
+# checker gate is the mechanical verification (consortium run 1,
+# docs/consortium-freeze.md). The orchestrator must not bolt a code QA
+# phase onto it -- found live: ResearchCo's report passed every criterion
+# and the iteration still failed on a synthetic Lex QA demanding run_code.
+fn is_document_sprint(g :: SprintGraph) -> Bool {
+  let code_roles := ["build", "py_build", "ts_build", "fe_build", "test_author", "py_test_author", "ts_test_author", "qa", "py_qa", "ts_qa", "launch", "deploy"]
+  let has_code := list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      not list.is_empty(list.filter(code_roles, fn (r :: Str) -> Bool {
+        r == n.role
+      }))
+    }
+  })
+  let has_research := list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
+    if acc {
+      true
+    } else {
+      n.role == "opportunity_research"
+    }
+  })
+  has_research and not has_code
+}
+
 fn has_qa_node(g :: SprintGraph) -> Bool {
   list.fold(g.nodes, false, fn (acc :: Bool, n :: Node) -> Bool {
     if acc {

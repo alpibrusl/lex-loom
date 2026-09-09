@@ -43,7 +43,7 @@ fi
 echo "== 5. a Lex suite is not pytest's to collect"
 # The Lex test_author eval baseline read 0/5: every attempt was denied "no
 # tests collected" by pytest run over a directory holding only .lex files.
-mkdir -p "$W/lexsuite"; printf 'fn test_shift() -> Result[Unit, Str] {\n  match shift(1700000000, "Asia/Kolkata") {\n    Ok(v) => if v == 1700000000 + 330 * 60 { Ok(()) } else { Err("shift") },\n    Err(e) => Err(e),\n  }\n}\n' > "$W/lexsuite/tzoffset_test.lex"
+mkdir -p "$W/lexsuite"; printf 'import "./tzoffset" as tz\n\nfn test_shift() -> Result[Unit, Str] {\n  match tz.shift(1700000000, "Asia/Kolkata") {\n    Ok(v) => if v == 1700000000 + 330 * 60 { Ok(()) } else { Err("shift") },\n    Err(e) => Err(e),\n  }\n}\n' > "$W/lexsuite/tzoffset_test.lex"
 if (cd "$W/lexsuite" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null 2>&1); then ok "a derived Lex suite passes without pytest ever running"; else bad "a Lex-only suite was denied -- the 0/5 Lex test_author baseline"; fi
 
 echo "== 6. a package whose __init__ cannot import is denied at the build, not found by QA"

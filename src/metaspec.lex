@@ -653,6 +653,47 @@ fn rule_deploy_needs_a_real_target(g :: graph.SprintGraph, deploy_allowed :: Boo
 
 # check() stays pure and environment-blind; the caller supplies the one fact it
 # cannot know.
+# A document path (paths/research-report) delivers a report, not software.
+# Found live (consortium run 2, ResearchCo): the Architect, offered the same
+# catalogue as a software company, drew pm -> py_build -> py_test_author for
+# a mission whose only deliverable is an opportunity report; the company
+# would have built and QA'd code nobody asked for. On a document path every
+# code role is a violation, named so the Architect redraws with the roles
+# the path has.
+fn rule_document_path_has_no_code_roles(g :: graph.SprintGraph, document_only :: Bool) -> List[Violation] {
+  if not document_only {
+    []
+  } else {
+    let code_roles := ["build", "py_build", "ts_build", "fe_build", "test_author", "py_test_author", "ts_test_author", "qa", "py_qa", "ts_qa", "launch", "deploy", "devops"]
+    list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+      if list.is_empty(list.filter(code_roles, fn (r :: Str) -> Bool {
+        r == n.role
+      })) {
+        acc
+      } else {
+        list.concat(acc, [{ rule: "document-path-no-code-roles", message: str.join(["node ", n.id, " (role '", n.role, "') builds, tests, judges or ships software, but this company's path delivers a DOCUMENT: use opportunity_research (gate: spec sh \"python3 $LOOM_ROOT/bin/check_research_report.py .\") and prose roles (pm, scribe) only -- no build, test author, QA, launch, deploy or devops node"], "") }])
+      }
+    })
+  }
+}
+
+# The company-level check: structure + semantics, then the two facts only
+# the company knows -- whether a deploy target exists, and whether its path
+# delivers a document.
+fn check_for_company(g :: graph.SprintGraph, deploy_allowed :: Bool, document_only :: Bool) -> MetaspecResult {
+  match check_for_target(g, deploy_allowed) {
+    Invalid(vs) => Invalid(vs),
+    Valid => {
+      let extra := rule_document_path_has_no_code_roles(g, document_only)
+      if list.is_empty(extra) {
+        Valid
+      } else {
+        Invalid(extra)
+      }
+    },
+  }
+}
+
 fn check_for_target(g :: graph.SprintGraph, deploy_allowed :: Bool) -> MetaspecResult {
   match check(g) {
     Invalid(vs) => Invalid(vs),

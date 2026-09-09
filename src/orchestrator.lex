@@ -754,6 +754,15 @@ fn response_schema_of(prd :: Str) -> Str {
 # Whether this run may reach a real host. Default is local, which deploys
 # nowhere: LOOM_ENV unset or "local" means a deploy node has no tool and would
 # fail every attempt, so the graph should not contain one.
+# paths/research-report is the one document path today (consortium run 1's
+# ResearchCo); its companies never build software.
+fn document_path_only() -> [env] Bool {
+  match env.get("COMPANY_PATH") {
+    None => false,
+    Some(p) => str.trim(p) == "research-report",
+  }
+}
+
 fn deploy_target_allowed() -> [env] Bool {
   match env.get("LOOM_ENV") {
     None => false,
@@ -1263,7 +1272,7 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
           let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
           run_design(prd, request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
         },
-        Ok(_) => match metaspec.check_for_target(g, deploy_target_allowed()) {
+        Ok(_) => match metaspec.check_for_company(g, deploy_target_allowed(), document_path_only()) {
           Invalid(vs) => {
             let error_str := list.fold(vs, "", fn (acc :: Str, v :: metaspec.Violation) -> Str {
               str.join([acc, v.rule, ": ", v.message, "; "], "")

@@ -15,6 +15,10 @@ pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 W="$(mktemp -d "${TMPDIR:-/tmp}/loom-rr1.XXXXXX")"; trap 'rm -rf "$W"' EXIT
+# The search ledger: every URL web_search returned in this run. The gate
+# refuses any cited source outside it.
+export LOOM_SEARCH_LEDGER="$W/ledger.txt"
+printf 'https://cloudmersive.com/convert/validate-csv-api\nhttps://flatfile.com/pricing/\nhttps://csvlint.io/\n' > "$LOOM_SEARCH_LEDGER"
 
 good() {
 cat <<'MD'
@@ -55,7 +59,7 @@ MD
 echo "== 1. a complete report passes and names every verified attr"
 mkdir -p "$W/good"; good > "$W/good/report.md"
 out=$(cd "$W/good" && python3 "$OLDPWD/bin/check_research_report.py" . 2>&1) && rc=0 || rc=$?
-if [ "$rc" = 0 ] && [[ "$out" == *"RESEARCH_REPORT_OK"* ]] && [[ "$out" == *"checkable:two-sources"* ]] && [[ "$out" == *"checkable:three-alternatives"* ]]; then ok "complete report accepted; attrs printed for the evidence bundle"; else bad "complete report refused or attrs missing: $out"; fi
+if [ "$rc" = 0 ] && [[ "$out" == *"RESEARCH_REPORT_OK"* ]] && [[ "$out" == *"checkable:two-sources"* ]] && [[ "$out" == *"checkable:sources-grounded"* ]] && [[ "$out" == *"checkable:three-alternatives"* ]]; then ok "complete report accepted; attrs printed for the evidence bundle"; else bad "complete report refused or attrs missing: $out"; fi
 
 echo "== 2. each missing criterion is refused by its attr name (sabotage per section)"
 for sec in "## Problem:checkable:problem-statement" "## Target user:checkable:target-user" "## Implementation estimate:checkable:implementation-estimate" "## Dependencies:checkable:dependencies" "## Confidence:checkable:confidence" "## Recommendation:checkable:recommendation"; do
@@ -78,6 +82,29 @@ if [ "$rc" != 0 ] && [[ "$out" == *"checkable:confidence"* ]]; then ok "confiden
 mkdir -p "$W/hrs"; good | sed 's/^40 hours:/about a week:/' > "$W/hrs/report.md"
 out=$(cd "$W/hrs" && python3 "$OLDPWD/bin/check_research_report.py" . 2>&1) && rc=0 || rc=$?
 if [ "$rc" != 0 ] && [[ "$out" == *"checkable:implementation-estimate"* ]]; then ok "an estimate without hours refused"; else bad "'about a week' accepted as an hours estimate"; fi
+
+echo "== 3b. a source the search never returned is refused, however real it looks"
+# Live probe 2026-09-09: 13 of 21 cited URLs were recalled, not found.
+mkdir -p "$W/recall"; good | sed 's|https://flatfile.com/pricing|https://numverify.com/|' > "$W/recall/report.md"
+out=$(cd "$W/recall" && python3 "$OLDPWD/bin/check_research_report.py" . 2>&1) && rc=0 || rc=$?
+if [ "$rc" != 0 ] && [[ "$out" == *"checkable:sources-grounded"* ]] && [[ "$out" == *"numverify.com"* ]]; then ok "a remembered URL refused as checkable:sources-grounded, named"; else bad "a URL outside the ledger was accepted (rc=$rc): $out"; fi
+mkdir -p "$W/noledger"; good > "$W/noledger/report.md"
+out=$(cd "$W/noledger" && LOOM_SEARCH_LEDGER="$W/does-not-exist.txt" python3 "$OLDPWD/bin/check_research_report.py" . 2>&1) && rc=0 || rc=$?
+if [ "$rc" != 0 ] && [[ "$out" == *"checkable:sources-grounded"* ]] && [[ "$out" == *"never called"* ]]; then ok "no ledger (web_search never called) refused as checkable:sources-grounded"; else bad "a report with no search behind it was accepted (rc=$rc): $out"; fi
+mkdir -p "$W/slash"; good | sed 's|https://cloudmersive.com/convert/validate-csv-api|https://cloudmersive.com/convert/validate-csv-api/|' > "$W/slash/report.md"
+if (cd "$W/slash" && python3 "$OLDPWD/bin/check_research_report.py" . >/dev/null 2>&1); then ok "a trailing slash is the same source"; else bad "a trailing slash was treated as a different URL"; fi
+
+echo "== 3c. web_search records every URL it returns in the ledger"
+python3 - "$W" <<'PY' && ok "the tool appends each returned URL to LOOM_SEARCH_LEDGER" || bad "the tool did not record its URLs, so nothing could ever be grounded"
+import importlib.util, io, contextlib, os, sys
+spec = importlib.util.spec_from_file_location("ws", "bin/web_search.py"); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
+os.environ["LOOM_SEARCH_LEDGER"] = sys.argv[1] + "/ledger-tool.txt"
+brave = '<div class="snippet s" data-pos="0" data-type="web"><a href="https://example.com/recorded"><div class="title t">R</div></a><div class="content c">S</div></div>'
+ws.fetch = lambda url, data=None: brave if "brave" in url else "<html>" + "anomaly " * 40
+sys.argv = ["web_search.py", "q"]
+with contextlib.redirect_stdout(io.StringIO()): ws.main()
+assert open(os.environ["LOOM_SEARCH_LEDGER"]).read().strip() == "https://example.com/recorded"
+PY
 
 echo "== 4. no report on disk is a denial that says what to write"
 mkdir -p "$W/none"; out=$(cd "$W/none" && python3 "$OLDPWD/bin/check_research_report.py" . 2>&1) && rc=0 || rc=$?

@@ -163,8 +163,19 @@ fn test_phase_from_str() -> Result[Unit, Str] {
 }
 
 # ── Suite ─────────────────────────────────────────────────────────────────────
+fn test_document_sprint() -> Result[Unit, Str] {
+  let research := g("d1", [node("pm", "pm"), node("opp", "opportunity_research"), node("scribe", "scribe")], [])
+  let with_code := g("d2", [node("pm", "pm"), node("opp", "opportunity_research"), node("b", "py_build")], [])
+  let no_research := g("d3", [node("pm", "pm"), node("scribe", "scribe")], [])
+  if graph.is_document_sprint(research) and not graph.is_document_sprint(with_code) and not graph.is_document_sprint(no_research) {
+    Ok(())
+  } else {
+    Err("is_document_sprint: research-only graph must be one; a graph with a build node or without a research node must not")
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_empty_graph(), test_single_node(), test_duplicate_ids(), test_empty_role(), test_ungated_node(), test_unknown_edge_target(), test_unknown_edge_source(), test_linear_dag(), test_cycle_rejected(), test_diamond_dag(), test_topo_sort_layers(), test_from_json_roundtrip(), test_activate_when_roundtrip(), test_phase_from_str()]
+  [test_empty_graph(), test_single_node(), test_duplicate_ids(), test_empty_role(), test_ungated_node(), test_unknown_edge_target(), test_unknown_edge_source(), test_linear_dag(), test_cycle_rejected(), test_diamond_dag(), test_topo_sort_layers(), test_from_json_roundtrip(), test_activate_when_roundtrip(), test_phase_from_str(), test_document_sprint()]
 }
 
 fn run_all() -> Unit {

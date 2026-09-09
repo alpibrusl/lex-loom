@@ -1657,6 +1657,13 @@ fn and_contract(role :: Str, output :: Str, sprint_id :: Str, scratch :: Str, ga
   }
 }
 
+# The code QA phase the architect did not draw: one QA node for the graph's
+# build language plus a demo node, bounced against the implementation.
+fn synthetic_code_qa(sprint_graph :: graph.SprintGraph, impl_graph_ext :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, design_ref :: Str, cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
+  let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: graph.qa_role_for_graph(sprint_graph), gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
+  run_qa_with_bounce(synthetic_graph, impl_graph_ext, impl_result, impl_ref, producing_node(impl_result.outcomes, impl_ref), resolve_input(cfg.db, design_ref), cfg, 1)
+}
+
 fn run_qa_with_bounce(qa_graph :: graph.SprintGraph, impl_graph :: graph.SprintGraph, impl_result :: PhaseResult, impl_ref :: Str, impl_node :: Str, task_input :: Str, cfg :: SprintCfg, bounce :: Int) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] QaBounceResult {
   run_qa_with_bounce_tracked(qa_graph, impl_graph, impl_result, impl_ref, impl_node, task_input, cfg, bounce, "", impl_ref)
 }
@@ -1932,8 +1939,12 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
       let qa_impl_result := if graph.has_qa_node(sprint_graph) {
         run_qa_with_bounce(graph.qa_subgraph(sprint_graph), impl_graph_ext, impl_result, impl_ref, producing_node(impl_result.outcomes, impl_ref), resolve_input(cfg.db, design_ref), cfg, 1)
       } else {
-        let synthetic_graph := { id: str.concat(cfg.id, "-qa"), phase: graph.QA, nodes: [{ id: "qa", role: graph.qa_role_for_graph(sprint_graph), gate: "spec json-verdict-pass", expand: None, activate_when: "" }, { id: "demo", role: "demo", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "qa", to: "demo", handoff: "schema {}" }] }
-        run_qa_with_bounce(synthetic_graph, impl_graph_ext, impl_result, impl_ref, producing_node(impl_result.outcomes, impl_ref), resolve_input(cfg.db, design_ref), cfg, 1)
+        if graph.is_document_sprint(sprint_graph) {
+          let __tdoc := tr.trail(cfg.db, cfg.id, "qa_skipped_document_sprint", "{\"reason\":\"no code to run; the deliverable's own checker gate is the verification\"}")
+          { qa: { phase: graph.QA, outcomes: [], success: impl_result.success }, impl: impl_phase_of(impl_result.outcomes) }
+        } else {
+          synthetic_code_qa(sprint_graph, impl_graph_ext, impl_result, impl_ref, design_ref, cfg)
+        }
       }
       let qa_result := qa_impl_result.qa
       let impl_result2 := qa_impl_result.impl

@@ -118,6 +118,12 @@ model_overrides = ",".join(f"{k}:{v}" for k, v in models_table.items() if str(v)
 budget_table = m.get("budget", {}) if isinstance(m.get("budget", {}), dict) else {}
 envelopes_table = budget_table.get("envelopes", {}) if isinstance(budget_table.get("envelopes", {}), dict) else {}
 budget_envelopes = ",".join(f"{k}:{v}" for k, v in envelopes_table.items())
+# No explicit envelopes but a policy budget: the budget IS the total envelope
+# (cents). The company's treasury (lex-economy, #398) opens with the total
+# envelope's cap, so without this a budgeted company ran with a spend guard
+# and no funds -- tzc27 printed "no total budget envelope, no treasury".
+if not budget_envelopes and budg is not None:
+    budget_envelopes = f"total:{int(round(float(budg) * 100))}"
 
 out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,

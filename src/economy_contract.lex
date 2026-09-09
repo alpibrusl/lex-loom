@@ -53,6 +53,76 @@ fn evidence_from_sprint(criteria :: List[request_bid.Criterion], success :: Bool
   })
 }
 
+# Evidence from a checker's own output: bin/check_research_report.py prints
+# `RESEARCH_REPORT_VERIFIED <attr> ...` naming every criterion it verified
+# (on a refusal too), so a checkable criterion is satisfied exactly when its
+# attr is on that line; `RESEARCH_REPORT_OK ...` on a full pass counts the
+# same way. No line means nothing verified. Human criteria get nothing here.
+fn evidence_from_checker(criteria :: List[request_bid.Criterion], checker_output :: Str) -> List[evidence.EvidenceItem] {
+  let verified := list.fold(str.split(checker_output, "\n"), [], fn (acc :: List[Str], line :: Str) -> List[Str] {
+    if str.starts_with(str.trim(line), "RESEARCH_REPORT_OK") or str.starts_with(str.trim(line), "RESEARCH_REPORT_VERIFIED") {
+      list.concat(acc, str.split(str.trim(line), " "))
+    } else {
+      acc
+    }
+  })
+  list.fold(criteria, [], fn (acc :: List[evidence.EvidenceItem], c :: request_bid.Criterion) -> List[evidence.EvidenceItem] {
+    if is_human(c.attr) {
+      acc
+    } else {
+      let hit := not list.is_empty(list.filter(verified, fn (v :: Str) -> Bool {
+        v == c.attr
+      }))
+      list.concat(acc, [{ attr: c.attr, satisfied: hit, note: if hit {
+        "verified by check_research_report"
+      } else {
+        str.concat("not on the checker's verified line: ", str.slice(str.trim(checker_output), 0, 300))
+      } }])
+    }
+  })
+}
+
+# The founder's answer to a human criterion, as one evidence item.
+fn human_answer_item(attr :: Str, yes :: Bool, note :: Str) -> evidence.EvidenceItem {
+  { attr: attr, satisfied: yes, note: note }
+}
+
+# Awarded -> InProgress -> Delivered -> Verified(verdict) from explicit
+# evidence items (the checker's, plus any human answers already given).
+fn verify_with_evidence(c :: contract.Contract, criteria :: List[request_bid.Criterion], items :: List[evidence.EvidenceItem]) -> Result[contract.Contract, Str] {
+  match contract.transition(c, contract.WasStarted) {
+    Err(e) => Err(e),
+    Ok(started) => match contract.transition(started, contract.WasDelivered) {
+      Err(e) => Err(e),
+      Ok(delivered) => contract.transition(delivered, contract.WasVerified(evidence.evaluate(criteria, items))),
+    },
+  }
+}
+
+# Awarded -> InProgress -> Delivered -> Verified(v) with a verdict already
+# decided from the evidence (a delivery meeting no checkable criterion is
+# Rejected on that half alone; the human criterion stays unassessed).
+fn verify_with_verdict(c :: contract.Contract, v :: contract.Verdict) -> Result[contract.Contract, Str] {
+  match contract.transition(c, contract.WasStarted) {
+    Err(e) => Err(e),
+    Ok(started) => match contract.transition(started, contract.WasDelivered) {
+      Err(e) => Err(e),
+      Ok(delivered) => contract.transition(delivered, contract.WasVerified(v)),
+    },
+  }
+}
+
+# A contract held Verified(Ambiguous) is re-verified once the human has
+# answered: back to Delivered (the delivery stands), then WasVerified with
+# the fuller evidence. Any other state is refused -- a settled or disputed
+# contract is not reopened by a late answer.
+fn reverify_after_answer(c :: contract.Contract, criteria :: List[request_bid.Criterion], items :: List[evidence.EvidenceItem]) -> Result[contract.Contract, Str] {
+  match c.state {
+    Verified(Ambiguous(_)) => contract.transition(contract.with_state(c, contract.Delivered), contract.WasVerified(evidence.evaluate(criteria, items))),
+    _ => Err("only a contract held Ambiguous takes a human answer"),
+  }
+}
+
 fn paid_cents_for(price_cents :: Int, v :: contract.Verdict) -> Int {
   match v {
     Fulfilled => price_cents,

@@ -1455,9 +1455,45 @@ fn backlog_section(db :: conn.ConnDb, company_id :: Str) -> [sql] Str {
 fn find_build_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
   let ids := build_role_node_ids(db, sprint_id)
   if list.is_empty(ids) {
-    find_build_artifact_by_name_heuristic(db, sprint_id)
+    let research := role_node_ids(db, sprint_id, ["opportunity_research"])
+    if list.is_empty(research) {
+      find_build_artifact_by_name_heuristic(db, sprint_id)
+    } else {
+      find_build_artifact_by_ids(db, sprint_id, research)
+    }
   } else {
     find_build_artifact_by_ids(db, sprint_id, ids)
+  }
+}
+
+# Node ids whose role is one of `roles`, from the sprint's latest graph. A
+# research company (paths/research-report) has no build node: its deliverable
+# is the opportunity_research node's fenced report.md, and it must reach
+# $LOOM_WORKSPACE like a build artifact does.
+fn role_node_ids(db :: conn.ConnDb, sprint_id :: Str, roles :: List[Str]) -> [sql] List[Str] {
+  let q := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY created_at DESC LIMIT 1", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => match list.head(rs) {
+      None => [],
+      Some(r) => match jv.parse(r.graph_json) {
+        Err(_) => [],
+        Ok(j) => match jv.get_field(j, "nodes") {
+          Some(JList(nodes)) => list.fold(nodes, [], fn (acc :: List[Str], n :: jv.Json) -> List[Str] {
+            let role := json_str_field(n, "role")
+            if list.is_empty(list.filter(roles, fn (x :: Str) -> Bool {
+              x == role
+            })) {
+              acc
+            } else {
+              list.concat(acc, [json_str_field(n, "id")])
+            }
+          }),
+          _ => [],
+        },
+      },
+    },
   }
 }
 

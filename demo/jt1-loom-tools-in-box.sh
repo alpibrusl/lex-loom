@@ -58,13 +58,19 @@ MANIFEST="$JT_DIR/research-manifest.effective.json"
 echo "== 2. loom rootfs (python + loom's scripts + resolved names + CA certs)"
 ROOTFS="$ASSETS/loom-rootfs.ext4"
 if [ "${FRESH_ROOTFS:-0}" = "1" ] || [ ! -f "$ROOTFS" ]; then
+  # The demo image is 300 MB; python alone is ~400 MB unpacked. Grow the copy.
   cp "$ASSETS/rootfs.ext4" "$ROOTFS"
+  truncate -s 2G "$ROOTFS"; e2fsck -fp "$ROOTFS" >/dev/null || true; resize2fs "$ROOTFS" >/dev/null
   [ -f /tmp/jt1-python.tgz ] || curl -fsSL -o /tmp/jt1-python.tgz "$PY_URL"
   mnt="$(mktemp -d)"; mount -o loop "$ROOTFS" "$mnt"
+  trap 'umount "$mnt" 2>/dev/null || true' EXIT
   mkdir -p "$mnt/opt" && tar -xzf /tmp/jt1-python.tgz -C "$mnt/opt"   # -> /opt/python
   mkdir -p "$mnt/opt/loom/bin" "$mnt/opt/loom/fixture" "$mnt/etc/ssl/certs"
   install -m 0755 "$JT_DIR"/bin/*.py "$mnt/opt/loom/bin/"
+  # python-build-standalone's OpenSSL looks in /etc/ssl/cert.pem (openssldir=/etc/ssl);
+  # found live: without it every HTTPS search failed "self-signed certificate in chain".
   cp /etc/ssl/certs/ca-certificates.crt "$mnt/etc/ssl/certs/ca-certificates.crt"
+  cp /etc/ssl/certs/ca-certificates.crt "$mnt/etc/ssl/cert.pem"
   {
     echo "127.0.0.1 localhost"
     for h in html.duckduckgo.com search.yahoo.com search.brave.com www.bing.com example.org; do
@@ -105,8 +111,8 @@ Build it.
 MD
   printf 'https://cloudmersive.com/convert/validate-csv-api\nhttps://flatfile.com/pricing\n' > "$mnt/opt/loom/fixture/ledger.txt"
   cat "$mnt/etc/hosts"
-  umount "$mnt"; rmdir "$mnt"
-  echo "  rootfs prepared: $ROOTFS"
+  umount "$mnt"; rmdir "$mnt"; trap - EXIT
+  echo "  rootfs prepared: $ROOTFS ($(du -h "$ROOTFS" | cut -f1) sparse file, 2G fs)"
 else
   echo "  reusing $ROOTFS (FRESH_ROOTFS=1 to rebuild)"
 fi
@@ -132,11 +138,14 @@ run_leg model "$MANIFEST" -- curl -sS --max-time 20 "http://$MODEL_HOST/v1/model
 if is_ok && field stdout | command grep -q '"id"'; then ok "MODEL: $(field stdout | python3 -c 'import sys,json; print([m["id"] for m in json.load(sys.stdin)["data"]][:3])' 2>/dev/null) from inside the microVM"; else bad "MODEL: $ENVELOPE"; fi
 
 echo "== 4. COMPLETION: a real chat completion from inside the box"
-run_leg completion "$MANIFEST" -- curl -sS --max-time 240 -H 'Content-Type: application/json' -d "{\"model\":\"$MODEL_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: ready\"}],\"max_tokens\":16}" "http://$MODEL_HOST/v1/chat/completions"
-if is_ok && field stdout | command grep -q '"choices"'; then ok "COMPLETION: $(field stdout | python3 -c 'import sys,json; print(repr(json.load(sys.stdin)["choices"][0]["message"]["content"][:60]))' 2>/dev/null)"; else bad "COMPLETION: $ENVELOPE"; fi
+# A thinking model spends its budget on reasoning first (16 tokens gave an
+# empty message): give it room and require a non-empty answer.
+run_leg completion "$MANIFEST" -- curl -sS --max-time 300 -H 'Content-Type: application/json' -d "{\"model\":\"$MODEL_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: ready\"}],\"max_tokens\":600}" "http://$MODEL_HOST/v1/chat/completions"
+content=$(field stdout | python3 -c 'import sys,json; print((json.load(sys.stdin)["choices"][0]["message"].get("content") or "").strip()[:60])' 2>/dev/null || true)
+if is_ok && [ -n "$content" ]; then ok "COMPLETION: model said '$content' from inside the microVM"; else bad "COMPLETION: empty or no answer: $(field stdout | cut -c1-200)"; fi
 
 echo "== 5. SEARCH: loom's web_search.py runs inside the box and reaches an allowlisted engine"
-run_leg search "$MANIFEST" -- /opt/python/bin/python3 /opt/loom/bin/web_search.py "phone number validation API pricing"
+run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem /opt/python/bin/python3 /opt/loom/bin/web_search.py "phone number validation API pricing"'
 if is_ok && field stdout | command grep -q ' -- http' && ! field stdout | command grep -q '^ERROR\|NO_RESULTS'; then ok "SEARCH: $(field stdout | head -1 | cut -c1-110)"; else bad "SEARCH: $(field stdout | head -2 | tr '\n' ' ' | cut -c1-200) $(field stderr | tail -2 | tr '\n' ' ' | cut -c1-200)"; fi
 
 echo "== 6. CHECK: the report gate verifies a report against its ledger inside the box (ReadWrite fs, sandboxed exec)"

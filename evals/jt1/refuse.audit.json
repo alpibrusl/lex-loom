@@ -1,0 +1,43 @@
+[
+  {
+    "seq": 0,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "event": {
+      "kind": "provisioned",
+      "manifest_id": "accee4cded1a0f3e303d87bd815cac59d86240f3fa3e3c182ecd5ff13ab31c24",
+      "backend": "firecracker",
+      "reprovision": false
+    },
+    "hash": "54d871a0507ebd1a8706389564b53e842940b19ff366e40c27ea21b26a8f1ce3"
+  },
+  {
+    "seq": 1,
+    "prev_hash": "54d871a0507ebd1a8706389564b53e842940b19ff366e40c27ea21b26a8f1ce3",
+    "event": {
+      "kind": "command_requested",
+      "seq": 0,
+      "command": "proc.exec",
+      "reversibility": "irreversible-bounded"
+    },
+    "hash": "a4568c6f519838ca628a9f423cda053bcae2855ed81b024d209902a5ffb54e55"
+  },
+  {
+    "seq": 2,
+    "prev_hash": "a4568c6f519838ca628a9f423cda053bcae2855ed81b024d209902a5ffb54e55",
+    "event": {
+      "kind": "command_denied",
+      "command": "proc.exec",
+      "reason": "blocked by perimeter: operation blocked by perimeter: exec ≥ sandboxed not permitted by sandbox policy"
+    },
+    "hash": "e58e67514dbaa9efa98a8684cb4765836782dda7d8bf83b140d2882a68449c73"
+  },
+  {
+    "seq": 3,
+    "prev_hash": "e58e67514dbaa9efa98a8684cb4765836782dda7d8bf83b140d2882a68449c73",
+    "event": {
+      "kind": "session_ended",
+      "outcome": "goal_met"
+    },
+    "hash": "34d91487dfb42195110ea38fba4fcad4165e1c0e44e642c83566bbbf61847a2b"
+  }
+]

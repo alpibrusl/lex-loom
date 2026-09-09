@@ -1,0 +1,64 @@
+[
+  {
+    "seq": 0,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "event": {
+      "kind": "provisioned",
+      "manifest_id": "9508fec0fbb0e474a66e93553ea9b98fa5e4b2f0db1c8eef7bc981c87cfdb727",
+      "backend": "firecracker",
+      "reprovision": false
+    },
+    "hash": "e9cd2305857b895168642dddb5817dae3355a975e8dbcebcc8901564bac09ba7"
+  },
+  {
+    "seq": 1,
+    "prev_hash": "e9cd2305857b895168642dddb5817dae3355a975e8dbcebcc8901564bac09ba7",
+    "event": {
+      "kind": "command_requested",
+      "seq": 0,
+      "command": "proc.exec",
+      "reversibility": "irreversible-bounded"
+    },
+    "hash": "ce3f61378a6b00224865aec9511e796a280aeafcfbc180be42ea9704547468d5"
+  },
+  {
+    "seq": 2,
+    "prev_hash": "ce3f61378a6b00224865aec9511e796a280aeafcfbc180be42ea9704547468d5",
+    "event": {
+      "kind": "budget_charged",
+      "commands": 1,
+      "money_cents": 0,
+      "api_calls": 0,
+      "elapsed_secs": 2
+    },
+    "hash": "36aca4097534c18a3152bf1b5d9b8ccee9f3f9922f6cf8828109409a715751dc"
+  },
+  {
+    "seq": 3,
+    "prev_hash": "36aca4097534c18a3152bf1b5d9b8ccee9f3f9922f6cf8828109409a715751dc",
+    "event": {
+      "kind": "command_allowed",
+      "command": "proc.exec"
+    },
+    "hash": "914e47d398f0dd0a5d85cfffe701154f5cf9f914db4cc32feac2fffa57cf3dbb"
+  },
+  {
+    "seq": 4,
+    "prev_hash": "914e47d398f0dd0a5d85cfffe701154f5cf9f914db4cc32feac2fffa57cf3dbb",
+    "event": {
+      "kind": "exec_classified",
+      "class": "exited_in_guest",
+      "detail": "ExitedInGuest { code: 0 }"
+    },
+    "hash": "ed2edd9ee4604a5ccabd82667011065dbe48034abfb99934df20b2b29866cddb"
+  },
+  {
+    "seq": 5,
+    "prev_hash": "ed2edd9ee4604a5ccabd82667011065dbe48034abfb99934df20b2b29866cddb",
+    "event": {
+      "kind": "session_ended",
+      "outcome": "exec_result exit_code=Some(0) timed_out=false"
+    },
+    "hash": "a7f692afb1b8bdf3f32c84843974d073933111ecf910662b167b418f7e1dce85"
+  }
+]

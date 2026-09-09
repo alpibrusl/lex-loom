@@ -1,6 +1,6 @@
-# Consortium first run — freeze document (DRAFT for agreement)
+# Consortium first run — freeze document
 
-Status: draft, 2026-09-08. This is the Phase 0 document the strategy requires
+Status: **frozen 2026-09-09** (the four decisions settled by the founder, below). This is the Phase 0 document the strategy requires
 before the first consortium implementation grows further: one page fixing
 the companies, capital, capabilities, contract schemas, success and failure
 criteria, maximum spend and termination. Items marked **DECISION** are the
@@ -48,8 +48,8 @@ result carries its URL). DuckDuckGo has bot-blocked this host since
 Rail: `Simulated` (treasury moves cents between companies; no x402, no real
 money). Loom's per-company spend estimate keeps counting tokens as today.
 
-**DECISION 1:** the amounts above, or different ones. They only need to make
-one contract affordable and two unaffordable.
+**DECISION 1 (settled 2026-09-09):** the amounts above. They make one
+contract affordable and two unaffordable.
 
 ## 4. Capabilities (versioned, machine-discoverable)
 
@@ -101,9 +101,12 @@ Criteria:
   the founder; until then the verdict is `Ambiguous`.
 
 Settlement rule: 100% on `Fulfilled`, 50% on `PartiallyFulfilled`, 0% on
-`Rejected`; `Ambiguous` holds the commitment until the human answers.
-Failure rule: release funds. Dispute rule: **DECISION 2** — the founder as
-arbiter (proposed) or a second verifier company (adds a third company).
+`Rejected`; `Ambiguous` holds the commitment until the human answers. A
+delivery meeting **no** checkable criterion is `Rejected` on that half alone
+and the founder is not asked: the human criterion stays unassessed, never
+answered by the machine (`src/consortium.lex` `deliver`).
+Failure rule: release funds. Dispute rule (**DECISION 2, settled**): the
+founder is the arbiter in run 1; a verifier company is run-2 scope.
 
 Second contract (same run): **Software Delivery** — SoftwareCo executes
 internally (build, not buy); the contract exists so the artifact goes through
@@ -143,13 +146,17 @@ is pure and testable on those four conditions.
 ## 8. What is deliberately out of scope for run 1
 
 MarketCo; negotiation; real money (x402); reputation thresholds
-(`min_trust` = 0, every company starts empty — **DECISION 3**: confirm);
+(`min_trust` = 0, every company starts empty — **DECISION 3, settled**);
 lex-code behind a capability boundary; deploy to a host; publishing.
 
-## 9. Open decisions
+## 9. Decisions (settled by the founder, 2026-09-09)
 
-1. Capital amounts (§3).
-2. Dispute arbiter: founder or second verifier company (§5).
+1. Capital amounts: as in §3.
+2. Dispute arbiter: the founder (§5).
 3. `min_trust` = 0 for run 1 (§8).
-4. The problem space handed to ResearchCo for the first request (one sentence;
-   something other than timestamps, to avoid re-solving tzconvert).
+4. Problem space for the first request: **paid micro-APIs for solo developers
+   who need to validate and normalise user-submitted data (addresses, phone
+   numbers, CSV uploads, free-text dates)**. Not timestamps, so the run does
+   not re-solve tzconvert.
+
+No scope growth from here until the first run has ended.

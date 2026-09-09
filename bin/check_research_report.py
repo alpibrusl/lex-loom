@@ -8,8 +8,9 @@ and named by the attr lex-economy's evidence items will carry. The human's
 criterion ("would you fund it?") is deliberately NOT here: the machine never
 answers it.
 
-Exit 0 and print the verified attrs on success; exit 1 naming every unmet
-criterion otherwise.
+Always prints `RESEARCH_REPORT_VERIFIED <attrs met>`; on success also
+`RESEARCH_REPORT_OK <attrs>` and exit 0, otherwise exit 1 naming every unmet
+criterion.
 """
 import os
 import re
@@ -94,18 +95,24 @@ def main() -> int:
             print("check_research_report: no report.md on disk (write the report as a fenced block labelled report.md)")
             return 1
     text = report.read_text()
-    unmet = []
+    unmet, met = [], []
     for attr, heading, kind in CRITERIA:
         why = check(kind, section(text, heading))
         if why:
             unmet.append((attr, heading, why))
+        else:
+            met.append(attr)
+    # The verified line is printed on BOTH paths: a buyer building evidence
+    # from this output needs to know which criteria a refused report still
+    # met (one unmet criterion is a 50% settlement, not a rejection).
+    print("RESEARCH_REPORT_VERIFIED " + " ".join(met))
     if unmet:
         print("check_research_report: the report does not meet these checkable criteria:\n")
         for attr, heading, why in unmet:
             print(f"  {attr}  ({heading}): {why}")
         print("\nEach section above is required, with the content named. The human's question is not yours to answer.")
         return 1
-    print("RESEARCH_REPORT_OK " + " ".join(a for a, _, _ in CRITERIA))
+    print("RESEARCH_REPORT_OK " + " ".join(met))
     return 0
 
 

@@ -22,6 +22,14 @@ import "../src/budget" as budget
 
 import "lex-economy/src/capability" as capability
 
+import "lex-economy/src/contract" as contract
+
+import "lex-economy/src/request_bid" as request_bid
+
+import "lex-economy/src/settlement" as settlement
+
+import "../src/economy_contract" as ec
+
 import "std.int" as int
 
 fn with_db(f :: (conn.ConnDb) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str]) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
@@ -151,8 +159,118 @@ fn test_declared_capabilities_are_findable() -> [sql, fs_read, fs_write, time, r
   })
 }
 
+# NEGATIVE CONTROL for lex-economy#3: settlement debits the buyer but credits
+# nobody (no treasury credit exists at 2673b8b), so the supplier's balance
+# after a fulfilled 40 000c contract is 0 today. When lex-economy conserves
+# money this returns 40000 and this pin must change -- that flip is the
+# point of pinning it.
+fn supplier_balance_lex_economy_gives_today() -> Int {
+  0
+}
+
+fn crit(attr :: Str, d :: Str) -> request_bid.Criterion {
+  { attr: attr, description: d }
+}
+
+# Runs the whole loop through lex-economy: request -> bid -> award ->
+# contract (commitment) -> sprint outcome -> evidence -> verdict -> settle.
+fn run_contract(db :: conn.ConnDb, log :: tlog.Log, tag :: Str, criteria :: List[request_bid.Criterion], success :: Bool) -> [sql, fs_read, fs_write, time, random, crypto] Result[(contract.Contract, treasury.Treasury, treasury.Treasury), Str] {
+  let buyer := str.concat("buyer-", tag)
+  let supplier := str.concat("supplier-", tag)
+  match eb.ensure_treasury(db, buyer, "EUR", 100000) {
+    Err(e) => Err(e),
+    Ok(_) => match eb.ensure_treasury(db, supplier, "EUR", 0) {
+      Err(e) => Err(e),
+      Ok(_) => {
+        let req := request_bid.post_request(str.concat("req-", tag), buyer, "opportunity-research/v1", "Find one micro-product opportunity", { cents: 50000, currency: "EUR" }, criteria, 9999999999999)
+        match request_bid.submit_bid(req, str.concat("bid-", tag), supplier, { cents: 40000, currency: "EUR" }, "report in 90 minutes", 1) {
+          Err(e) => Err(str.concat("bid: ", e)),
+          Ok(bid) => match request_bid.award(req, [bid], bid.id) {
+            Err(e) => Err(str.concat("award: ", e)),
+            Ok((req2, bids)) => match list.head(bids) {
+              None => Err("no bids after award"),
+              Some(won) => match settlement.open_contract(db.handle, log, req2, won, str.concat("c-", tag), str.concat("commit-", tag)) {
+                Err(e) => Err(str.concat("open_contract: ", e)),
+                Ok(c) => match ec.deliver_and_verify(c, criteria, success, "loom acceptance re-executed the sealed artifact") {
+                  Err(e) => Err(str.concat("deliver: ", e)),
+                  Ok(verified) => match ec.settle_if_decided(db, log, verified, str.concat("commit-", tag)) {
+                    Err(e) => Err(str.concat("settle: ", e)),
+                    Ok(final) => match treasury.get_treasury(db.handle, buyer) {
+                      Ok(Some(b)) => match treasury.get_treasury(db.handle, supplier) {
+                        Ok(Some(sp)) => Ok((final, b, sp)),
+                        _ => Err("supplier treasury vanished"),
+                      },
+                      _ => Err("buyer treasury vanished"),
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }
+      },
+    },
+  }
+}
+
+fn test_a_human_criterion_holds_the_contract_ambiguous() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match tlog.open_memory() {
+      Err(e) => Err(e),
+      Ok(log) => match run_contract(db, log, "amb", [crit("checkable:report-present", "the report exists"), crit("human:would-fund", "would you fund it?")], true) {
+        Err(e) => Err(e),
+        Ok((c, buyer, supplier)) => match c.state {
+          Verified(Ambiguous(names)) => if names == ["human:would-fund"] and buyer.committed_cents == 40000 and supplier.balance_cents == 0 {
+            Ok(())
+          } else {
+            Err(str.join(["ambiguous, but the funds moved or the wrong criterion was unassessed: committed=", int.to_str(buyer.committed_cents), " supplier=", int.to_str(supplier.balance_cents)], ""))
+          },
+          _ => Err("a contract with an unanswered human criterion was not held Ambiguous -- the machine filled in the human's half"),
+        },
+      },
+    }
+  })
+}
+
+fn test_checkable_criteria_settle_on_looms_verdict() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match tlog.open_memory() {
+      Err(e) => Err(e),
+      Ok(log) => match run_contract(db, log, "ok", [crit("checkable:report-present", "the report exists"), crit("checkable:three-alternatives", "at least three alternatives")], true) {
+        Err(e) => Err(e),
+        Ok((c, buyer, supplier)) => if c.state == contract.Settled and buyer.committed_cents == 0 and buyer.balance_cents == 60000 and supplier.balance_cents == supplier_balance_lex_economy_gives_today() {
+          match run_contract(db, log, "rej", [crit("checkable:report-present", "the report exists")], false) {
+            Err(e) => Err(str.concat("rejected flow: ", e)),
+            Ok((c2, b2, s2)) => if s2.balance_cents == 0 and b2.committed_cents == 0 and b2.balance_cents == 100000 {
+              Ok(())
+            } else {
+              Err("a rejected delivery moved money or kept the commitment")
+            },
+          }
+        } else {
+          Err(str.join(["a fulfilled contract did not settle: state ok=", if c.state == contract.Settled {
+            "yes"
+          } else {
+            "no"
+          }, " supplier=", int.to_str(supplier.balance_cents), " buyer_committed=", int.to_str(buyer.committed_cents)], ""))
+        },
+      },
+    }
+  })
+}
+
+fn test_the_goal_carries_the_criteria_and_marks_the_human_ones() -> Result[Unit, Str] {
+  let req := request_bid.post_request("r", "b", "opportunity-research/v1", "Find an opportunity", { cents: 1, currency: "EUR" }, [crit("checkable:report-present", "the report exists"), crit("human:would-fund", "would you fund it?")], 1)
+  let g := ec.goal_from_request(req)
+  if str.starts_with(g, "Find an opportunity") and str.contains(g, "- checkable:report-present: the report exists") and str.contains(g, "[answered by a human, not by you] human:would-fund") {
+    Ok(())
+  } else {
+    Err(str.concat("the sprint goal does not carry the contract's criteria as agreed: ", g))
+  }
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, random, crypto] List[Result[Unit, Str]] {
-  [test_a_company_gets_a_treasury_on_looms_own_handle(), test_ensure_treasury_is_idempotent(), test_a_commitment_reserves_and_an_overcommit_is_refused(), test_company_start_funds_the_treasury_from_the_total_envelope(), test_offers_follow_packs_and_path(), test_declared_capabilities_are_findable()]
+  [test_a_company_gets_a_treasury_on_looms_own_handle(), test_ensure_treasury_is_idempotent(), test_a_commitment_reserves_and_an_overcommit_is_refused(), test_company_start_funds_the_treasury_from_the_total_envelope(), test_offers_follow_packs_and_path(), test_declared_capabilities_are_findable(), test_a_human_criterion_holds_the_contract_ambiguous(), test_checkable_criteria_settle_on_looms_verdict(), test_the_goal_carries_the_criteria_and_marks_the_human_ones()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, random, crypto] Unit {

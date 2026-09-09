@@ -81,7 +81,7 @@ echo "[box] run-company exited" > $CON
 grep -v "^null$" /tmp/company.log | grep "\[company\]\|\[run-company\]\|\[loom\]\|FATAL\|error" | tail -40
 echo "== BOX_REPORT =="; cat /opt/loom-ws/'"$CID"'/report.md 2>/dev/null || echo "(no report synced)"
 echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true
-echo "== BOX_TAR_B64 =="; cd / && tar -czf - opt/loom/company-box.db opt/loom-ws/'"$CID"'/report.md tmp/loom-search-ledger-'"$CID"'.txt 2>/dev/null | base64 -w0; echo; echo "== BOX_TAR_END =="'
+echo "== BOX_END =="'
 started=$(date +%s)
 # The jailer stages a COPY of the rootfs per box, so nothing the company
 # writes reaches the image file: the box ships its outputs back over stdout
@@ -105,22 +105,22 @@ if isinstance(d, dict) and d.get("stderr"): print("  stderr tail:", d["stderr"][
 PY
 sed -n '1,60p' "$JT_DIR/company.stdout.txt" | cut -c1-180
 
-echo "== 4. what the box wrote, shipped back over stdout"
+echo "== 4. what the box wrote, read from the jailer's copy of the rootfs"
+# lex-os-guest drains the command's stdout only after it exits, so anything
+# past the pipe buffer deadlocks the box (lex-os#108): outputs stay on the
+# box's disk. The jailer stages a per-box COPY of the image and leaves it
+# behind after teardown; that copy holds what the company wrote.
 OUTD="$JT_DIR/out"; rm -rf "$OUTD"; mkdir -p "$OUTD"
-python3 - "$JT_DIR/company.stdout.txt" "$OUTD" <<'PY'
-import sys, base64, io, tarfile, pathlib
-out = open(sys.argv[1]).read(); dst = pathlib.Path(sys.argv[2])
-if "== BOX_TAR_B64 ==" in out and "== BOX_TAR_END ==" in out:
-    b64 = out.split("== BOX_TAR_B64 ==", 1)[1].split("== BOX_TAR_END ==", 1)[0].strip()
-    if b64:
-        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(b64)), mode="r:gz") as t:
-            for m in t.getmembers():
-                if m.isfile():
-                    name = {"company-box.db": "company.db", "report.md": "report.md"}.get(pathlib.Path(m.name).name, "ledger.txt" if "ledger" in m.name else pathlib.Path(m.name).name)
-                    (dst / name).write_bytes(t.extractfile(m).read())
-print("  recovered:", sorted(p.name for p in dst.iterdir()))
-PY
-sed -i '/== BOX_TAR_B64 ==/,/== BOX_TAR_END ==/d' "$JT_DIR/company.stdout.txt"
+JCOPY=$(ls -t /srv/jailer/firecracker/*/root/rootfs.ext4 2>/dev/null | head -1)
+if [ -n "$JCOPY" ]; then
+  mnt="$(mktemp -d)"; mount -o loop "$JCOPY" "$mnt" 2>/dev/null || mount -o loop,noload "$JCOPY" "$mnt"
+  cp "$mnt/opt/loom/company-box.db" "$OUTD/company.db" 2>/dev/null || true
+  cp "$mnt/opt/loom-ws/$CID/report.md" "$OUTD/report.md" 2>/dev/null || true
+  cp "$mnt/tmp/loom-search-ledger-$CID.txt" "$OUTD/ledger.txt" 2>/dev/null || true
+  cp "$mnt/tmp/company.log" "$OUTD/company.log" 2>/dev/null || true
+  umount "$mnt"; rmdir "$mnt"
+fi
+echo "  recovered: $(ls "$OUTD" | tr '\n' ' ')"
 
 echo "== 5. assertions"
 if command grep -q '\[company\] done .*last_verdict=passed' "$JT_DIR/company.stdout.txt"; then ok "the company finished inside the box with verdict passed"; else bad "no passed verdict from the box: $(command grep '\[company\] done\|FATAL' "$JT_DIR/company.stdout.txt" | tail -1 | cut -c1-160)"; fi

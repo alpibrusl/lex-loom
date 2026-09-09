@@ -81,6 +81,10 @@ import "./role_registry" as registry
 
 import "./budget" as budget
 
+import "./economy_binding" as eb
+
+import "lex-economy/src/capability" as capability
+
 import "./board" as board
 
 import "./events" as events
@@ -893,6 +897,12 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
             let __seed := pool_seed.seed(db)
             let ccfg := { id: company_id, goal: goal, model: model, max_iterations: max_iterations, stop_when: stop_when, pmf_when: pmf_when, maintenance_when: maintenance_when, wake_when: wake_when, soft_mesh_url: soft_mesh_url, soft_org_id: soft_org_id, soft_roles: soft_roles, soft_settlement: soft_settlement, policy_isolation: policy_isolation }
             let __save := company.save_company(db, ccfg)
+            let __caps := match eb.declare_capabilities(db, company_id, packs, get_env("COMPANY_PATH", "")) {
+              Err(e) => io.print(str.concat("[company] economy: capabilities NOT declared: ", e)),
+              Ok(offers) => io.print(str.join(["[company] economy: capabilities declared: ", str.join(list.map(offers, fn (o :: capability.Offer) -> Str {
+                o.capability
+              }), ", ")], "")),
+            }
             let __packs := if list.is_empty(packs) {
               Ok(())
             } else {

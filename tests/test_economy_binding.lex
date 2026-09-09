@@ -20,6 +20,10 @@ import "../src/economy_binding" as eb
 
 import "../src/budget" as budget
 
+import "lex-economy/src/capability" as capability
+
+import "std.int" as int
+
 fn with_db(f :: (conn.ConnDb) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str]) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
   match conn.open(str.join(["/tmp/loom-t-", crypto.random_str_hex(8), ".db"], "")) {
     Err(_) => Err("open db failed"),
@@ -105,8 +109,50 @@ fn test_company_start_funds_the_treasury_from_the_total_envelope() -> [sql, fs_r
   })
 }
 
+fn has_capability(offers :: List[capability.Offer], name :: Str) -> Bool {
+  list.fold(offers, false, fn (f :: Bool, o :: capability.Offer) -> Bool {
+    f or o.capability == name
+  })
+}
+
+fn test_offers_follow_packs_and_path() -> Result[Unit, Str] {
+  let py := eb.offers_for(["core"], "python-fastapi")
+  let lx := eb.offers_for(["core", "content", "finance"], "lex-x402-api")
+  let none := eb.offers_for(["core"], "")
+  if has_capability(py, "software-delivery/v1") and list.len(py) == 1 and has_capability(lx, "software-delivery/v1") and has_capability(lx, "content-drafting/v1") and has_capability(lx, "pricing-and-economics/v1") and list.is_empty(none) {
+    Ok(())
+  } else {
+    Err(str.join(["capability mapping is off: py=", int.to_str(list.len(py)), " lex=", int.to_str(list.len(lx)), " none=", int.to_str(list.len(none))], ""))
+  }
+}
+
+fn test_declared_capabilities_are_findable() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match eb.declare_capabilities(db, "softwareco", ["core"], "python-fastapi") {
+      Err(e) => Err(e),
+      Ok(_) => match eb.declare_capabilities(db, "softwareco", ["core"], "python-fastapi") {
+        Err(e) => Err(str.concat("declaring twice failed: ", e)),
+        Ok(_) => match eb.declare_capabilities(db, "researchco", ["core", "content"], "") {
+          Err(e) => Err(e),
+          Ok(_) => {
+            let matches := capability.find(eb.company_offers(db), capability.exact_query("software-delivery/v1"))
+            let names := list.map(matches, fn (m :: capability.Match) -> Str {
+              m.company
+            })
+            if names == ["softwareco"] {
+              Ok(())
+            } else {
+              Err(str.concat("find did not return exactly softwareco for software-delivery/v1: ", str.join(names, ",")))
+            }
+          },
+        },
+      },
+    }
+  })
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, random, crypto] List[Result[Unit, Str]] {
-  [test_a_company_gets_a_treasury_on_looms_own_handle(), test_ensure_treasury_is_idempotent(), test_a_commitment_reserves_and_an_overcommit_is_refused(), test_company_start_funds_the_treasury_from_the_total_envelope()]
+  [test_a_company_gets_a_treasury_on_looms_own_handle(), test_ensure_treasury_is_idempotent(), test_a_commitment_reserves_and_an_overcommit_is_refused(), test_company_start_funds_the_treasury_from_the_total_envelope(), test_offers_follow_packs_and_path(), test_declared_capabilities_are_findable()]
 }
 
 fn run_all() -> [sql, fs_read, fs_write, time, random, crypto] Unit {

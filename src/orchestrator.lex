@@ -1439,6 +1439,36 @@ fn acceptance_build_role(g :: graph.SprintGraph) -> Str {
 # command means this stack has no acceptance runner yet, and the check abstains
 # rather than inventing a pass -- abstaining is visible in the trail, a fake
 # pass is not.
+# Acceptance for a document sprint: the sealed report is re-checked in a
+# clean directory by the same checker its node's gate ran -- the document
+# equivalent of re-executing a sealed build's own suite. Found live
+# (consortium run 1): the code acceptance tried to find a build work dir
+# for a sprint that has none and failed a report that met every criterion.
+fn run_document_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, outcomes :: List[NodeOutcome]) -> [io, proc, sql, fs_read, fs_write, time, random, crypto, vcs] Result[Unit, Str] {
+  let research := list.filter(outcomes, fn (o :: NodeOutcome) -> Bool {
+    o.attested and role_of_node(g, o.node_id) == "opportunity_research"
+  })
+  match list.head(research) {
+    None => {
+      let __te := tr.trail(cfg.db, cfg.id, "acceptance_failed", "{\"reason\":\"document sprint: no accepted opportunity_research artifact to re-check\"}")
+      Err("acceptance: no accepted opportunity_research artifact to re-check")
+    },
+    Some(o) => {
+      let content := resolve_input(cfg.db, o.artifact)
+      match runner.verify_shell_on_output_from("python3 $LOOM_ROOT/bin/check_research_report.py .", content, str.join([sanitize_id(cfg.id), "-acceptance"], ""), "") {
+        Ok(_) => {
+          let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed report re-checked in a clean dir by check_research_report\"}")
+          Ok(())
+        },
+        Err(e) => {
+          let __td := tr.trail(cfg.db, cfg.id, "acceptance_failed", str.join(["{\"reason\":", jv.stringify(JStr(str.slice(e, 0, 400))), "}"], ""))
+          Err(str.concat("acceptance: the sealed report does not pass its own checker: ", str.slice(e, 0, 300)))
+        },
+      }
+    },
+  }
+}
+
 fn run_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, artifact_ref :: Str) -> [io, proc, sql, fs_read, fs_write, time, random, crypto, vcs] Result[Unit, Str] {
   let cmd := acceptance_command(g)
   if str.is_empty(cmd) {
@@ -1974,7 +2004,11 @@ fn run_sprint(cfg :: SprintCfg) -> [env, io, time, crypto, random, sql, fs_read,
         }
       })
       let acceptance := if phases_ok {
-        run_acceptance(cfg, sprint_graph, impl_ref)
+        if graph.is_document_sprint(sprint_graph) {
+          run_document_acceptance(cfg, sprint_graph, impl_result2.outcomes)
+        } else {
+          run_acceptance(cfg, sprint_graph, impl_ref)
+        }
       } else {
         Ok(())
       }

@@ -89,10 +89,12 @@ c.execute("INSERT INTO company_iterations VALUES ('softwareco', 1, 'softwareco/i
 c.execute("INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('softwareco/iter-1', 'orch', 'acceptance_passed', '{}', '2026-09-09T00:00:00Z')")
 c.commit()
 PY
-printf 'from fastapi import FastAPI\napp = FastAPI()\n\n@app.post("/validate")\ndef validate(row: dict):\n    return {"ok": True}\n' > "$SW/app.py"
+# Run 1 live: the product landed in main.py, app.py stayed the skeleton's.
+cp paths/python-fastapi/app.py "$SW/app.py"
+printf 'from fastapi import FastAPI\napp = FastAPI()\n\n@app.post("/validate")\ndef validate(row: dict):\n    return {"ok": True}\n' > "$SW/main.py"
 printf 'def test_validate_rejects_bad_row():\n    assert True\n' > "$SW/tests/test_validate.py"
 out=$(bin/consortium-run.sh deliver-software 2>&1) || true
-if [[ "$out" == *"SOFTWARE_DELIVERY_OK"* ]] && [[ "$out" == *"c-software-1 settled: fulfilled"* ]] && [[ "$out" == *"softwareco: balance=100000c committed=0c"* ]] && [[ "$out" == *"objective met=yes; should terminate=yes"* ]]; then ok "delivery verified from the trail; settled in full; run 1 terminal"; else bad "deliver-software did not settle: $out"; fi
+if [[ "$out" == *"SOFTWARE_DELIVERY_OK"* ]] && [[ "$out" == *"c-software-1 settled: fulfilled"* ]] && [[ "$out" == *"softwareco: balance=100000c committed=0c"* ]] && [[ "$out" == *"objective met=yes; should terminate=yes"* ]]; then ok "delivery verified from the trail (product in main.py, not app.py); settled in full; run 1 terminal"; else bad "deliver-software did not settle: $out"; fi
 
 echo "== 4d. sabotage: a workspace still holding the skeleton's app.py is half a delivery"
 rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"

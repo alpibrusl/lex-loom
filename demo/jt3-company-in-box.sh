@@ -7,6 +7,13 @@
 # report.md, the search ledger), the way the consortium buyer does.
 #
 # Inputs in JT_DIR (/tmp/jt3): research-manifest.json (loom's), goal.txt.
+# Found live (run 5): the company finished in 7 minutes inside the box and
+# the exec then hung 42 minutes until the host timeout -- after
+# "[company] done", run-company.sh's exit trap waits on the queue worker,
+# which does not die on SIGTERM in the guest. The box script now supervises
+# run-company.sh: streams its [company] lines to the serial console (so a
+# hang is visible live and survives a kill), and on "[company] done" kills
+# the worker and the runner itself, then ships the outputs.
 # The box runs bin/run-company.sh, not run_company_cmd directly: EXEC_MODE=queue
 # needs the worker process that script starts (found live: a company with no
 # worker sits idle forever -- 0% CPU, no packets). The guest init exports
@@ -31,6 +38,7 @@ echo "== 1. grant: loom's research manifest, model egress -> $MODEL_HOST"
 python3 - "$JT_DIR/research-manifest.json" "$MODEL_HOST" "$JT_DIR/research-manifest.effective.json" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1])); m["egress"] = [sys.argv[2] if e.endswith(":4000") else e for e in m["egress"]]
+m["budget"]["wall_clock_secs"] = 7200
 json.dump(m, open(sys.argv[3], "w"), indent=2); print(json.dumps(m["egress"]))
 PY
 MANIFEST="$JT_DIR/research-manifest.effective.json"
@@ -61,7 +69,18 @@ export LITELLM_BASE_URL=http://'"$MODEL_HOST"' MODEL='"$MODEL_NAME"' COMPANY_ID=
 export ROLE_PACKS=core,research COMPANY_PATH=research-report STOP_WHEN=verdict-passed MAX_ITERATIONS='"${MAX_ITERATIONS:-2}"' MAX_API_CALLS=200 LOOM_WORKSPACE=/opt/loom-ws BUDGET_ENVELOPES=total:100
 export GOAL="$(cat /opt/loom/jt3-goal.txt)"
 unset OLLAMA_HOST OLLAMA_MODEL; export LOOM_PROVIDER=litellm
-cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" && bash bin/run-company.sh 2>&1 | grep -v "^null$" | grep "\[company\]\|\[run-company\]\|\[loom\]\|FATAL\|error" | tail -40
+CON=/dev/console; [ -w /dev/console ] || CON=/dev/ttyS0
+cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" | tee $CON
+bash bin/run-company.sh > /tmp/company.log 2>&1 &
+RC=$!
+tail -n0 -F /tmp/company.log 2>/dev/null | grep --line-buffered "\[company\]\|\[run-company\]\|FATAL" > $CON &
+TL=$!
+while kill -0 $RC 2>/dev/null; do
+  if grep -q "\[company\] done" /tmp/company.log; then sleep 3; echo "[box] company done; stopping worker" > $CON; pkill -9 -f "src/worker.lex" 2>/dev/null; sleep 1; kill -9 $RC 2>/dev/null; break; fi
+  sleep 5
+done
+kill $TL 2>/dev/null
+grep -v "^null$" /tmp/company.log | grep "\[company\]\|\[run-company\]\|\[loom\]\|FATAL\|error" | tail -40
 echo "== BOX_REPORT =="; cat /opt/loom-ws/'"$CID"'/report.md 2>/dev/null || echo "(no report synced)"
 echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true
 echo "== BOX_TAR_B64 =="; cd / && tar -czf - opt/loom/company-box.db opt/loom-ws/'"$CID"'/report.md tmp/loom-search-ledger-'"$CID"'.txt 2>/dev/null | base64 -w0; echo; echo "== BOX_TAR_END =="'
@@ -71,7 +90,7 @@ started=$(date +%s)
 # (BOX_TAR_B64). Provisioning has raced once right after the API server
 # came up ("Connection refused" within 3 s); one retry.
 for attempt in 1 2; do
-  ( cd "$LEX_OS_ROOT" && LEX_OS_VM_VCPUS="${VM_VCPUS:-2}" LEX_OS_VM_MEM_MIB="${VM_MEM_MIB:-3072}" timeout 3000 "$LEXOS" --output json exec --manifest "$MANIFEST" --rootfs "$ROOTFS" \
+  ( cd "$LEX_OS_ROOT" && LEX_OS_VM_VCPUS="${VM_VCPUS:-2}" LEX_OS_VM_MEM_MIB="${VM_MEM_MIB:-3072}" timeout 5400 "$LEXOS" --output json exec --manifest "$MANIFEST" --rootfs "$ROOTFS" \
       --jail-uid "$JAIL_UID" --jail-gid "$JAIL_GID" --audit-out "$JT_DIR/company.audit.json" -- /bin/sh -c "$SCRIPT" ) > "$JT_DIR/company.json" 2> "$JT_DIR/company.err" || true
   if command grep -q 'could not provision the box' "$JT_DIR/company.json"; then echo "  provisioning raced (attempt $attempt); cleaning and retrying in 10s"; sleep 10; preflight_clean; else break; fi
 done

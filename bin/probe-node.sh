@@ -45,8 +45,11 @@ echo
 for i in $(seq 1 "$N"); do
   SPRINT_ID="probe-$ROLE-$i"
   started=$(date +%s)
+  # One search ledger per attempt: the report gate grounds every cited URL
+  # in what web_search returned, and an attempt must not cite what an
+  # earlier attempt found.
   OUT=$(DB_PATH="$WORK/attempt-$i.db" MODEL="$MODEL" ROLE="$ROLE" GATE="$GATE" \
-        TASK="$TASK" SPRINT_ID="$SPRINT_ID" MAX_API_CALLS=60 \
+        TASK="$TASK" SPRINT_ID="$SPRINT_ID" MAX_API_CALLS=60 LOOM_SEARCH_LEDGER="$WORK/ledger-$i.txt" \
         lex run --allow-effects "$EFFECTS" src/main.lex run_node_cmd 2>&1 | tee "$WORK/attempt-$i.log") || true
   elapsed=$(( $(date +%s) - started ))
   line=$(echo "$OUT" | grep '^\[probe\] role=' | tail -1 || true)

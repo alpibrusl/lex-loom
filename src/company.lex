@@ -1034,10 +1034,11 @@ fn parse_strategist_decision(reply :: Str) -> StrategistDecision {
 # Maintenance and Sunset are terminal from this FSM's perspective (no more
 # auto-advance) — Maintenance is where a dormant/event-triggered loom (C10)
 # would live.
-type LifecycleStage = Ideation | Validation | Growth | Maintenance | Sunset
+type LifecycleStage = Founding | Ideation | Validation | Growth | Maintenance | Sunset
 
 fn stage_to_str(s :: LifecycleStage) -> Str {
   match s {
+    Founding => "founding",
     Ideation => "ideation",
     Validation => "validation",
     Growth => "growth",
@@ -1047,19 +1048,23 @@ fn stage_to_str(s :: LifecycleStage) -> Str {
 }
 
 fn stage_from_str(s :: Str) -> LifecycleStage {
-  if s == "validation" {
-    Validation
+  if s == "founding" {
+    Founding
   } else {
-    if s == "growth" {
-      Growth
+    if s == "validation" {
+      Validation
     } else {
-      if s == "maintenance" {
-        Maintenance
+      if s == "growth" {
+        Growth
       } else {
-        if s == "sunset" {
-          Sunset
+        if s == "maintenance" {
+          Maintenance
         } else {
-          Ideation
+          if s == "sunset" {
+            Sunset
+          } else {
+            Ideation
+          }
         }
       }
     }
@@ -1075,6 +1080,7 @@ fn next_stage(current :: LifecycleStage, ctx :: IterCtx, cfg :: CompanyCfg, suns
     Sunset
   } else {
     match current {
+      Founding => Ideation,
       Sunset => Sunset,
       Maintenance => Maintenance,
       Growth => if str.is_empty(str.trim(cfg.maintenance_when)) {

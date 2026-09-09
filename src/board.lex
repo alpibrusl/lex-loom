@@ -65,7 +65,11 @@ fn decision_type(sprint_id :: Str, gate :: Str) -> Str {
             if str.ends_with(sprint_id, "/scheduler") {
               "config"
             } else {
-              "gate"
+              if str.ends_with(sprint_id, "/founding") {
+                "founding"
+              } else {
+                "gate"
+              }
             }
           }
         }
@@ -107,7 +111,7 @@ fn oldest_age_hours(ds :: List[Decision]) -> Int {
 }
 
 fn known_types() -> List[Str] {
-  ["gate", "budget", "allocation", "strategy", "role", "operate", "config"]
+  ["gate", "budget", "allocation", "strategy", "role", "operate", "config", "founding"]
 }
 
 fn decision_line(d :: Decision) -> Str {

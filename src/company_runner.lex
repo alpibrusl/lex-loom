@@ -20,6 +20,12 @@ import "lex-trail/src/log" as tlog
 
 import "./orchestrator" as orch
 
+import "./graph" as graph_sprint
+
+import "lex-schema/json_value" as jv
+
+import "std.list" as list
+
 import "./cast" as cast
 
 import "./defaults" as defaults
@@ -230,7 +236,230 @@ fn iteration_goal(goal :: Str, k :: Int, carried :: Str) -> Str {
   }
 }
 
+# ── Founding stage: the plan-approval gate ───────────────────────────────────
+# A company whose manifest says [policy] founding = true (env FOUNDING=1)
+# builds nothing until the founder has approved a plan. Iteration 1 is a
+# fixed one-node sprint (no architect): the `founder` role writes plan.md,
+# gated by bin/check_founding_plan.py (sections by name, the budget Total
+# recomputed). A passing plan becomes an attention item for the oracle
+# `founder` and the company PARKS. The board decides through the one decide
+# path (board.decide / attention_resolve_cmd / loom-cloud): approved -> the
+# plan's Total (or a `budget_eur=N` override in the reason) becomes the
+# company's `total` spend envelope, stage -> Ideation, and the product
+# iterations begin; rejected -> Sunset. Nothing here is offered to the
+# Architect: the founding graph is drawn by this file, not by a model.
+fn founding_enabled() -> [env] Bool {
+  match env.get("FOUNDING") {
+    None => false,
+    Some(v) => {
+      let t := str.to_lower(str.trim(v))
+      t == "1" or t == "true" or t == "yes"
+    },
+  }
+}
+
+fn founding_sprint_id(company_id :: Str) -> Str {
+  str.concat(company_id, "/founding")
+}
+
+# Founding applies while the stage says so, or on a fresh company that asked
+# for it (no iteration has run yet).
+fn in_founding(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, prev_ctx :: company.IterCtx) -> [env, sql] Bool {
+  match company.load_stage(db, ccfg.id) {
+    Founding => true,
+    Ideation => founding_enabled() and k == 1 and str.is_empty(prev_ctx.last_verdict),
+    _ => false,
+  }
+}
+
+fn founding_graph(sprint_id :: Str) -> graph_sprint.SprintGraph {
+  { id: sprint_id, phase: Implementation, nodes: [{ id: "plan", role: "founder", gate: "spec sh \"python3 $LOOM_ROOT/bin/check_founding_plan.py .\"", expand: None, activate_when: "" }], edges: [] }
+}
+
+fn founding_request(ccfg :: company.CompanyCfg) -> Str {
+  str.join(["MISSION: ", ccfg.goal, "\n\nWrite the founding plan the founder must approve before any work starts (plan.md: Idea, Budget in EUR per month with a recomputed Total, Resources, Human actions, Success metric, Timeline)."], "")
+}
+
+# The plan's monthly Total in cents, from its Budget table; 0 when absent.
+fn plan_total_cents(plan :: Str) -> Int {
+  list.fold(str.split(plan, "\n"), 0, fn (acc :: Int, line :: Str) -> Int {
+    if acc > 0 {
+      acc
+    } else {
+      let t := str.trim(line)
+      let rest := match str.strip_prefix(t, "|") {
+        None => "",
+        Some(r) => str.to_lower(str.trim(r)),
+      }
+      if str.starts_with(rest, "total") {
+        let cells := str.split(t, "|")
+        match list.head(list.tail(list.tail(cells))) {
+          None => acc,
+          Some(c) => euros_to_cents(c),
+        }
+      } else {
+        acc
+      }
+    }
+  })
+}
+
+# "1 250", "1,250.50", "€250" -> cents; 0 when no digits.
+fn euros_to_cents(cell :: Str) -> Int {
+  let digits := str.join(list.filter(list.map(str.split(str.replace(str.replace(str.trim(cell), ",", ""), "€", ""), "."), fn (p :: Str) -> Str {
+    str.replace(p, " ", "")
+  }), fn (p :: Str) -> Bool {
+    not str.is_empty(p)
+  }), ".")
+  let parts := str.split(digits, ".")
+  let whole := match list.head(parts) {
+    None => 0,
+    Some(w) => match str.to_int(w) {
+      Some(v) => v,
+      None => 0,
+    },
+  }
+  let frac := match list.head(list.tail(parts)) {
+    None => 0,
+    Some(f) => match str.to_int(str.slice(str.concat(f, "00"), 0, 2)) {
+      Some(v) => v,
+      None => 0,
+    },
+  }
+  whole * 100 + frac
+}
+
+# `budget_eur=250` anywhere in the board's reason overrides the plan's Total.
+fn budget_override_cents(reason :: Str) -> Int {
+  list.fold(str.split(reason, " "), 0, fn (acc :: Int, tok :: Str) -> Int {
+    if acc > 0 {
+      acc
+    } else {
+      match str.strip_prefix(str.trim(tok), "budget_eur=") {
+        None => acc,
+        Some(n) => match str.to_int(str.trim(n)) {
+          Some(v) => v * 100,
+          None => acc,
+        },
+      }
+    }
+  })
+}
+
+fn run_founding(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, api_max :: Int, prev_ctx :: company.IterCtx, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  let sid := founding_sprint_id(ccfg.id)
+  let __st := if company.load_stage(db, ccfg.id) == Founding {
+    ()
+  } else {
+    let __sv := company.save_stage(db, ccfg.id, Founding)
+    let __tr := tr.trail(db, ccfg.id, "stage_transition", str.join(["{\"iter\":", int.to_str(k), ",\"from\":\"ideation\",\"to\":\"founding\"}"], ""))
+    ()
+  }
+  match tr.attention_for_node(db, sid, "plan") {
+    Some(item) => if item.verdict == "approved" {
+      founding_approved(db, ccfg, k, api_max, prev_ctx, evolve, item)
+    } else {
+      if item.verdict == "rejected" {
+        let __sv := company.save_stage(db, ccfg.id, Sunset)
+        let __fi := company.finish_iteration(db, ccfg.id, k, "failed")
+        let __t := tr.trail(db, ccfg.id, "founding_rejected", str.join(["{\"attention\":\"", item.id, "\",\"by\":\"", item.resolved_by, "\",\"reason\":", jv.stringify(JStr(item.rejection_reason)), "}"], ""))
+        let __p := io.print(str.join(["[company] founding plan REJECTED by ", item.resolved_by, ": ", item.rejection_reason, " -- company sunset"], ""))
+        { company_id: ccfg.id, iterations: k, last_verdict: "founding_rejected", stopped_by: "founding_rejected" }
+      } else {
+        let __p := io.print(str.join(["[company] PARKED: founding plan awaits the board (attention ", item.id, "; approve with VERDICT=approved [REASON='budget_eur=N'], or reject)"], ""))
+        { company_id: ccfg.id, iterations: k, last_verdict: prev_ctx.last_verdict, stopped_by: "parked" }
+      }
+    },
+    None => founding_plan_sprint(db, ccfg, k, api_max, prev_ctx, sid),
+  }
+}
+
+fn founding_plan_sprint(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, api_max :: Int, prev_ctx :: company.IterCtx, sid :: Str) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  let request := founding_request(ccfg)
+  let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sid, parent_sprint_id: "", status: "running", goal: request })
+  let __p1 := io.print(str.join(["[company] founding: writing the plan for the founder's approval (sprint ", sid, ")"], ""))
+  let g := founding_graph(sid)
+  let roster := cast.select_roster(db, g, request, ccfg.model, sid)
+  let trail_none :: Option[tlog.Log] := None
+  let scfg := { id: sid, request: request, model: ccfg.model, db: db, api_calls_max: api_max, roster: roster, trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: defaults.resolved_exec_mode(), policy_isolation: ccfg.policy_isolation }
+  let pr := orch.run_phase(g, Implementation, "", [], scfg)
+  let plan := list.fold(pr.outcomes, None, fn (acc :: Option[orch.NodeOutcome], o :: orch.NodeOutcome) -> Option[orch.NodeOutcome] {
+    match acc {
+      Some(_) => acc,
+      None => if o.node_id == "plan" and o.attested {
+        Some(o)
+      } else {
+        None
+      },
+    }
+  })
+  match plan {
+    None => {
+      let __fi := company.finish_iteration(db, ccfg.id, k, "failed")
+      let __t := tr.trail(db, ccfg.id, "founding_plan_denied", str.join(["{\"iter\":", int.to_str(k), "}"], ""))
+      let __p := io.print("[company] founding: the plan did not pass its checker; nothing to approve -- company stops")
+      { company_id: ccfg.id, iterations: k, last_verdict: "founding_failed", stopped_by: "founding_failed" }
+    },
+    Some(o) => match tr.push_attention(db, sid, "plan", "human founder blocking", "founder", o.artifact) {
+      Err(e) => {
+        let __fi := company.finish_iteration(db, ccfg.id, k, "failed")
+        let __p := io.print(str.concat("[company] founding: could not queue the plan for approval: ", e))
+        { company_id: ccfg.id, iterations: k, last_verdict: "founding_failed", stopped_by: "founding_failed" }
+      },
+      Ok(aid) => {
+        let __fi := company.finish_iteration(db, ccfg.id, k, "parked")
+        let __t := tr.trail(db, ccfg.id, "founding_plan_ready", str.join(["{\"attention\":\"", aid, "\",\"artifact\":\"", o.artifact, "\"}"], ""))
+        let __pt := tr.trail(db, ccfg.id, "company_parked", str.join(["{\"iter\":", int.to_str(k), ",\"sprint\":\"", sid, "\"}"], ""))
+        let __p := io.print(str.join(["[company] PARKED: founding plan ready for the board (attention ", aid, ", artifact ", str.slice(o.artifact, 0, 12), "). Approve: ATTENTION_ID=", aid, " VERDICT=approved [REASON='budget_eur=N'] RESOLVER_ID=<you> attention_resolve_cmd"], ""))
+        { company_id: ccfg.id, iterations: k, last_verdict: prev_ctx.last_verdict, stopped_by: "parked" }
+      },
+    },
+  }
+}
+
+fn founding_approved(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, api_max :: Int, prev_ctx :: company.IterCtx, evolve :: Bool, item :: tr.AttentionRow) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  let plan := match tr.artifact_get(db, item.artifact_hash) {
+    Ok(c) => c,
+    Err(_) => "",
+  }
+  let override := budget_override_cents(item.rejection_reason)
+  let cents := if override > 0 {
+    override
+  } else {
+    plan_total_cents(plan)
+  }
+  let __env := if cents > 0 {
+    match budget.set_envelope(db, ccfg.id, "total", cents, item.resolved_by) {
+      Ok(_) => io.print(str.join(["[company] founding approved by ", item.resolved_by, ": total envelope set to ", int.to_str(cents), "c", if override > 0 {
+        " (board override)"
+      } else {
+        " (the plan's Total)"
+      }], "")),
+      Err(m) => io.print(str.concat("[company] founding approved, but the envelope could not be set: ", m)),
+    }
+  } else {
+    io.print(str.join(["[company] founding approved by ", item.resolved_by, " (no budget figure found; envelope unchanged)"], ""))
+  }
+  let __sv := company.save_stage(db, ccfg.id, Ideation)
+  let __st := tr.trail(db, ccfg.id, "stage_transition", str.join(["{\"iter\":", int.to_str(k), ",\"from\":\"founding\",\"to\":\"ideation\"}"], ""))
+  let __ta := tr.trail(db, ccfg.id, "founding_approved", str.join(["{\"attention\":\"", item.id, "\",\"by\":\"", item.resolved_by, "\",\"envelope_cents\":", int.to_str(cents), "}"], ""))
+  let __fi := company.finish_iteration(db, ccfg.id, k, "success")
+  if k >= ccfg.max_iterations {
+    { company_id: ccfg.id, iterations: k, last_verdict: "founding_approved", stopped_by: "max_iterations" }
+  } else {
+    run_iterations(db, ccfg, k + 1, "", api_max, prev_ctx, ccfg.goal, evolve)
+  }
+}
+
 fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
+  if in_founding(db, ccfg, k, prev_ctx) {
+    run_founding(db, ccfg, k, api_max, prev_ctx, evolve)
+  } else {
+    run_iterations_budgeted(db, ccfg, k, parent_sprint, api_max, prev_ctx, current_goal, evolve)
+  }
+}
+
+fn run_iterations_budgeted(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   match budget.check_scope(db, ccfg.id, "total") {
     Exhausted => {
       let __esc := budget.escalate_exhausted(db, ccfg.id, "total", "pm")

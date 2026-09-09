@@ -53,14 +53,24 @@ fn evidence_from_sprint(criteria :: List[request_bid.Criterion], success :: Bool
   })
 }
 
-# Evidence from a checker's own output: bin/check_research_report.py prints
-# `RESEARCH_REPORT_VERIFIED <attr> ...` naming every criterion it verified
-# (on a refusal too), so a checkable criterion is satisfied exactly when its
-# attr is on that line; `RESEARCH_REPORT_OK ...` on a full pass counts the
-# same way. No line means nothing verified. Human criteria get nothing here.
+# Evidence from a checker's own output: bin/check_research_report.py and
+# bin/check_software_delivery.py print `<NAME>_VERIFIED <attr> ...` naming
+# every criterion they verified (on a refusal too), so a checkable criterion
+# is satisfied exactly when its attr is on such a line; `<NAME>_OK ...` on a
+# full pass counts the same way. No line means nothing verified. Human
+# criteria get nothing here.
+# A checker's verified line: its first token ends in _VERIFIED or _OK
+# (RESEARCH_REPORT_VERIFIED, SOFTWARE_DELIVERY_OK, ...).
+fn is_checker_line(line :: Str) -> Bool {
+  match list.head(str.split(line, " ")) {
+    None => false,
+    Some(tok) => str.ends_with(tok, "_VERIFIED") or str.ends_with(tok, "_OK"),
+  }
+}
+
 fn evidence_from_checker(criteria :: List[request_bid.Criterion], checker_output :: Str) -> List[evidence.EvidenceItem] {
   let verified := list.fold(str.split(checker_output, "\n"), [], fn (acc :: List[Str], line :: Str) -> List[Str] {
-    if str.starts_with(str.trim(line), "RESEARCH_REPORT_OK") or str.starts_with(str.trim(line), "RESEARCH_REPORT_VERIFIED") {
+    if is_checker_line(str.trim(line)) {
       list.concat(acc, str.split(str.trim(line), " "))
     } else {
       acc

@@ -232,8 +232,87 @@ fn test_checker_output_becomes_one_item_per_checkable_criterion() -> Result[Unit
   }
 }
 
+fn sw_ok() -> Str {
+  "SOFTWARE_DELIVERY_VERIFIED checkable:iteration-passed checkable:acceptance-passed checkable:app-present checkable:tests-present\nSOFTWARE_DELIVERY_OK checkable:iteration-passed checkable:acceptance-passed checkable:app-present checkable:tests-present\n"
+}
+
+fn sw_half() -> Str {
+  "SOFTWARE_DELIVERY_VERIFIED checkable:iteration-passed checkable:acceptance-passed\ncheck_software_delivery: the delivery does not meet these checkable criteria:\n  checkable:app-present: app.py missing\n"
+}
+
+fn settled_research(db :: conn.ConnDb, log :: tlog.Log) -> [sql, time, fs_read, fs_write] Result[Unit, Str] {
+  match open_ok(db, log) {
+    Err(e) => Err(e),
+    Ok(_) => match cs.deliver(db, log, cs.research_contract_id(), all_ok(), 2000) {
+      Err(e) => Err(e),
+      Ok(_) => match cs.answer(db, log, cs.research_contract_id(), true, "yes", 3000) {
+        Err(e) => Err(e),
+        Ok(_) => Ok(()),
+      },
+    },
+  }
+}
+
+fn test_software_contract_waits_for_the_settled_report() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb, log :: tlog.Log) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match open_ok(db, log) {
+      Err(e) => Err(e),
+      Ok(_) => match cs.open_software(db, log, "# report", 4000) {
+        Ok(_) => Err("the software contract opened before the research contract settled"),
+        Err(_) => if buyer(db).committed_cents == 40000 {
+          Ok(())
+        } else {
+          Err("the refused software open changed the commitments")
+        },
+      },
+    }
+  })
+}
+
+fn test_software_contract_is_an_internal_build_through_the_same_path() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb, log :: tlog.Log) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match settled_research(db, log) {
+      Err(e) => Err(e),
+      Ok(_) => match cs.open_software(db, log, "# Opportunity: phone validation API", 4000) {
+        Err(e) => Err(e),
+        Ok(o) => if o.contract.buyer == cs.softwareco() and o.contract.supplier == cs.softwareco() and o.contract.price.cents == 60000 and buyer(db).committed_cents == 60000 and buyer(db).balance_cents == 160000 and str.contains(o.reason, "internal capability") and str.contains(o.goal, "phone validation API") and str.contains(o.goal, "checkable:acceptance-passed") {
+          match cs.deliver(db, log, cs.software_contract_id(), sw_ok(), 5000) {
+            Err(e) => Err(e),
+            Ok(d) => if d.verdict == contract.Fulfilled and d.final.state == contract.Settled and buyer(db).committed_cents == 0 and buyer(db).balance_cents == 100000 and str.contains(cs.status_text(db, 6000), "objective met=yes; should terminate=yes") {
+              Ok(())
+            } else {
+              Err(str.join(["software delivery did not settle in full: state=", cs.state_str(d.final.state), " balance=", int.to_str(buyer(db).balance_cents), " committed=", int.to_str(buyer(db).committed_cents)], ""))
+            },
+          }
+        } else {
+          Err(str.join(["software contract not opened as an internal build with 60000c reserved: reason=", o.reason, " committed=", int.to_str(buyer(db).committed_cents)], ""))
+        },
+      },
+    }
+  })
+}
+
+fn test_software_half_delivered_pays_half_with_no_human_to_ask() -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+  with_db(fn (db :: conn.ConnDb, log :: tlog.Log) -> [sql, fs_read, fs_write, time, random, crypto] Result[Unit, Str] {
+    match settled_research(db, log) {
+      Err(e) => Err(e),
+      Ok(_) => match cs.open_software(db, log, "# report", 4000) {
+        Err(e) => Err(e),
+        Ok(_) => match cs.deliver(db, log, cs.software_contract_id(), sw_half(), 5000) {
+          Err(e) => Err(e),
+          Ok(d) => if d.verdict == contract.PartiallyFulfilled(["checkable:app-present", "checkable:tests-present"]) and d.final.state == contract.Settled and buyer(db).balance_cents == 130000 {
+            Ok(())
+          } else {
+            Err(str.join(["two unmet delivery criteria did not settle at 50% immediately: state=", cs.state_str(d.final.state), " balance=", int.to_str(buyer(db).balance_cents)], ""))
+          },
+        },
+      },
+    }
+  })
+}
+
 fn suite() -> [sql, fs_read, fs_write, time, random, crypto] List[Result[Unit, Str]] {
-  [test_open_reserves_the_price_on_the_buyer(), test_open_twice_is_refused(), test_delivery_is_held_ambiguous_until_the_human_answers(), test_yes_settles_in_full(), test_a_partly_verified_report_pays_half(), test_a_denied_report_is_rejected_without_asking_the_human(), test_deliver_twice_is_refused(), test_status_reads_back_the_run(), test_checker_output_becomes_one_item_per_checkable_criterion()]
+  [test_open_reserves_the_price_on_the_buyer(), test_open_twice_is_refused(), test_delivery_is_held_ambiguous_until_the_human_answers(), test_yes_settles_in_full(), test_a_partly_verified_report_pays_half(), test_a_denied_report_is_rejected_without_asking_the_human(), test_deliver_twice_is_refused(), test_status_reads_back_the_run(), test_checker_output_becomes_one_item_per_checkable_criterion(), test_software_contract_waits_for_the_settled_report(), test_software_contract_is_an_internal_build_through_the_same_path(), test_software_half_delivered_pays_half_with_no_human_to_ask()]
 }
 
 fn run_all() -> [io, sql, fs_read, fs_write, time, random, crypto] Unit {
@@ -247,7 +326,7 @@ fn run_all() -> [io, sql, fs_read, fs_write, time, random, crypto] Unit {
     }
   })
   if failures == 0 {
-    io.print("ok   tests/test_consortium.lex (9 tests)")
+    io.print("ok   tests/test_consortium.lex (12 tests)")
   } else {
     let __force_fail := 1 / 0
     ()

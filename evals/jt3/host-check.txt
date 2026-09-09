@@ -1,0 +1,2 @@
+RESEARCH_REPORT_VERIFIED checkable:problem-statement checkable:target-user checkable:three-alternatives checkable:implementation-estimate checkable:dependencies checkable:two-sources checkable:sources-grounded checkable:confidence checkable:recommendation
+RESEARCH_REPORT_OK checkable:problem-statement checkable:target-user checkable:three-alternatives checkable:implementation-estimate checkable:dependencies checkable:two-sources checkable:sources-grounded checkable:confidence checkable:recommendation

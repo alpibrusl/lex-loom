@@ -18,10 +18,19 @@ to refuse, so a second backend is not optional, and every result carries the
 URL the report must cite.
 """
 import html
+import os
 import re
 import sys
 import urllib.parse
 import urllib.request
+
+def ledger_path() -> str:
+    """Where every URL this tool returned is recorded, so the report gate can
+    refuse a source the model never read (bin/check_research_report.py reads
+    the same path). Per company when COMPANY_ID is set, as it is in every
+    bootstrapped run; a probe shares one default file."""
+    return os.environ.get("LOOM_SEARCH_LEDGER") or "/tmp/loom-search-ledger-%s.txt" % (os.environ.get("COMPANY_ID") or "default")
+
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 MAX = 8
@@ -92,6 +101,9 @@ def main() -> int:
             errors.append(f"{name}: {e}")
             continue
         if results:
+            with open(ledger_path(), "a") as ledger:
+                for _, _, url in results[:MAX]:
+                    ledger.write(url + "\n")
             for i, (title, snip, url) in enumerate(results[:MAX], 1):
                 print(f"{i}. {title} -- {snip[:200]} -- {url}")
             return 0

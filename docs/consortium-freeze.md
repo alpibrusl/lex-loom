@@ -88,10 +88,13 @@ Criteria:
   `checkable:problem-statement`, `checkable:target-user`,
   `checkable:three-alternatives` (a comparison table with ≥ 3 rows),
   `checkable:implementation-estimate` (in hours), `checkable:dependencies`,
-  `checkable:two-sources` (≥ 2 distinct http(s) URLs), `checkable:confidence`
-  (0–100), `checkable:recommendation`. Source resolvability (HTTP 200) is
-  deliberately not checked in run 1: the search backend only returns URLs it
-  read, and a flaky remote must not fail a settled contract.
+  `checkable:two-sources` (≥ 2 distinct http(s) URLs),
+  `checkable:sources-grounded` (every cited URL is one `web_search` returned
+  in this run, from the search ledger the tool writes; the first live probe
+  cited 13 remembered URLs out of 21), `checkable:confidence` (0–100),
+  `checkable:recommendation`. Source resolvability (HTTP 200) is
+  deliberately not checked in run 1: a flaky remote must not fail a settled
+  contract.
 - AskHuman: "Is the recommended opportunity one you would fund?" — answered by
   the founder; until then the verdict is `Ambiguous`.
 

@@ -11,9 +11,11 @@ answers it.
 Exit 0 and print the verified attrs on success; exit 1 naming every unmet
 criterion otherwise.
 """
+import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 CRITERIA = [
     ("checkable:problem-statement", "## Problem", None),
@@ -22,9 +24,36 @@ CRITERIA = [
     ("checkable:implementation-estimate", "## Implementation estimate", "hours"),
     ("checkable:dependencies", "## Dependencies", "bullet"),
     ("checkable:two-sources", "## Sources", "urls2"),
+    ("checkable:sources-grounded", "## Sources", "grounded"),
     ("checkable:confidence", "## Confidence", "percent"),
     ("checkable:recommendation", "## Recommendation", None),
 ]
+
+
+def ledger_path() -> str:
+    return os.environ.get("LOOM_SEARCH_LEDGER") or "/tmp/loom-search-ledger-%s.txt" % (os.environ.get("COMPANY_ID") or "default")
+
+
+def norm(url: str) -> str:
+    p = urlparse(url.strip().rstrip(".,;)"))
+    return urlunparse((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), "", p.query, ""))
+
+
+def grounded(body: str) -> str:
+    """Every cited URL must be one web_search actually returned in this run.
+    The first live probe (2026-09-09) cited 21 sources of which 13 never
+    appeared in any result: real-looking products recalled from memory. The
+    tool records each URL it returns in the ledger; a citation outside it is
+    refused by name."""
+    cited = set(re.findall(r"https?://[^\s)>\]]+", body))
+    path = Path(ledger_path())
+    if not path.exists():
+        return "no search ledger at %s: web_search was never called in this run, so no source can be grounded" % path
+    seen = {norm(l) for l in path.read_text().splitlines() if l.strip()}
+    bad = sorted(u for u in cited if norm(u) not in seen)
+    if bad:
+        return "cited but never returned by web_search (copy URLs verbatim from the results): " + ", ".join(bad)
+    return ""
 
 
 def section(text: str, heading: str) -> str:
@@ -46,6 +75,8 @@ def check(kind, body: str) -> str:
     if kind == "urls2":
         urls = set(re.findall(r"https?://[^\s)>\]]+", body))
         return "" if len(urls) >= 2 else f"needs at least 2 distinct http(s) sources (found {len(urls)})"
+    if kind == "grounded":
+        return grounded(body)
     if kind == "percent":
         m = re.search(r"\b(\d{1,3})\s*%?", body)
         return "" if m and 0 <= int(m.group(1)) <= 100 else "needs a confidence figure between 0 and 100"

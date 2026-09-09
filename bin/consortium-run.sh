@@ -11,6 +11,13 @@
 #                                    delivered and record the evidence
 #   ANSWER=yes|no [NOTE=...] bin/consortium-run.sh answer
 #                                    the founder's answer; verdict + settlement
+#   bin/consortium-run.sh open-software
+#                                    SoftwareCo contracts itself to build the
+#                                    settled report's product; writes its manifest
+#   bin/consortium-run.sh software   bootstrap + run SoftwareCo on that manifest
+#   bin/consortium-run.sh deliver-software
+#                                    re-derive the evidence from SoftwareCo's
+#                                    trail + workspace; verdict + settlement
 #   bin/consortium-run.sh status
 #
 # Env: LOOM_WORKSPACE (default ~/loom-companies), CONSORTIUM_DB (default
@@ -23,6 +30,7 @@ WS="${LOOM_WORKSPACE:-$HOME/loom-companies}"
 export LOOM_WORKSPACE="$WS"
 export CONSORTIUM_DB="${CONSORTIUM_DB:-$WS/consortium.db}"
 MANIFEST="$WS/researchco.company.toml"
+SW_MANIFEST="$WS/softwareco.company.toml"
 LEDGER="/tmp/loom-search-ledger-researchco.txt"
 EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurrent,vcs,llm,approval,stream"
 mkdir -p "$WS"
@@ -60,10 +68,20 @@ PY
   answer)
     run_cmd consortium_answer_cmd
     ;;
+  open-software)
+    REPORT_PATH="${REPORT_PATH:-$WS/researchco/report.md}" SOFTWARECO_MANIFEST="$SW_MANIFEST" run_cmd consortium_open_software_cmd
+    ;;
+  software)
+    [ -f "$SW_MANIFEST" ] || { echo "no $SW_MANIFEST -- run 'open-software' first" >&2; exit 1; }
+    STOP_WHEN='verdict-passed' bin/bootstrap-company.sh "$SW_MANIFEST"
+    ;;
+  deliver-software)
+    COMPANY_DB="$WS/softwareco/company.db" WORKSPACE_DIR="$WS/softwareco" run_cmd consortium_deliver_software_cmd
+    ;;
   status)
     run_cmd consortium_status_cmd
     ;;
   *)
-    sed -n 2,20p "$0"; exit 2
+    sed -n 2,28p "$0"; exit 2
     ;;
 esac

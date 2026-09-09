@@ -104,6 +104,34 @@ fn research_contract_id() -> Str {
   "c-research-1"
 }
 
+fn software_capability() -> Str {
+  "software-delivery/v1"
+}
+
+fn software_price() -> Int {
+  60000
+}
+
+fn software_deadline_ms() -> Int {
+  10800000
+}
+
+fn software_contract_id() -> Str {
+  "c-software-1"
+}
+
+# The second contract's criteria: what loom's own trail and workspace show,
+# re-derived by bin/check_software_delivery.py. No human criterion: the
+# founder's judgement went into the research contract; delivery is
+# mechanical.
+fn run1_software_criteria() -> List[request_bid.Criterion] {
+  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:app-present", "the workspace holds an app.py that is not the path skeleton's"), crit("checkable:tests-present", "the workspace holds test files beyond the path skeleton's")]
+}
+
+fn software_request_description(report :: Str) -> Str {
+  str.join(["Build the micro-product the opportunity report below recommends, as a paid, hosted micro-API on the python-fastapi path: implement the endpoints the report implies, validate inputs and reject bad ones with a clear 400, and write tests for every endpoint including the invalid cases. Real payment or product creation stays a human step, never autonomous.\n\nOPPORTUNITY REPORT (delivered under contract ", research_contract_id(), "):\n", report], "")
+}
+
 fn crit(attr :: Str, description :: Str) -> request_bid.Criterion {
   { attr: attr, description: description }
 }
@@ -343,10 +371,6 @@ fn load_run(db :: conn.ConnDb) -> [sql] Option[RunRow] {
   }
 }
 
-fn int_to_str(n :: Int) -> Str {
-  int.to_str(n)
-}
-
 fn min_int(a :: Int, b :: Int) -> Int {
   if a < b {
     a
@@ -440,6 +464,55 @@ fn open_contract_phase(db :: conn.ConnDb, log :: tlog.Log, problem_space :: Str,
         }
       },
     }
+  }
+}
+
+# The second contract: SoftwareCo executes internally (procurement says
+# Build: it sells software-delivery/v1 and can afford its own estimate), and
+# the contract still exists, with SoftwareCo as both parties, so the artifact
+# goes through the same evidence -> verdict -> settlement path. Opens only
+# once the research contract has settled: the report is its input.
+fn open_software(db :: conn.ConnDb, log :: tlog.Log, report :: Str, now_ms :: Int) -> [sql, time, fs_read] Result[Opened, Str] {
+  match load_contract(db, research_contract_id()) {
+    Err(e) => Err(e),
+    Ok(rrow) => if rrow.state != "settled" {
+      Err(str.join(["consortium: the research contract is ", rrow.state, ", not settled; the software contract takes the settled report as input"], ""))
+    } else {
+      match load_contract(db, software_contract_id()) {
+        Ok(_) => Err("consortium: the software contract is already open; use status or deliver-software"),
+        Err(_) => match treasury.get_treasury(db.handle, softwareco()) {
+          Ok(Some(t)) => {
+            let own := offers_of(db, softwareco())
+            let available := min_int(treasury.available_cents(t), softwareco_policy_cap())
+            let decision := proc.decide(software_capability(), own, [], software_price(), available, 0, no_trust)
+            match decision.decision {
+              Build => {
+                let req := request_bid.post_request("req-software-1", softwareco(), software_capability(), software_request_description(report), { cents: softwareco_policy_cap(), currency: currency() }, run1_software_criteria(), now_ms + software_deadline_ms())
+                match request_bid.submit_bid(req, "bid-softwareco-1", softwareco(), { cents: software_price(), currency: currency() }, "internal build on the python-fastapi path, verified by loom acceptance", now_ms) {
+                  Err(e) => Err(str.concat("consortium: self-bid: ", e)),
+                  Ok(bid) => match request_bid.award(req, [bid], bid.id) {
+                    Err(e) => Err(str.concat("consortium: award: ", e)),
+                    Ok((req2, bids)) => match list.head(bids) {
+                      None => Err("consortium: no bid after award"),
+                      Some(won) => match settlement.open_contract(db.handle, log, req2, won, software_contract_id(), "commit-software-1") {
+                        Err(e) => Err(str.concat("consortium: open software contract: ", e)),
+                        Ok(c) => match save_contract(db, c, run1_software_criteria(), [], "commit-software-1", request_json_of(req2), bid_json_of(won), now_ms) {
+                          Err(e) => Err(e),
+                          Ok(_) => Ok({ contract: c, goal: ec.goal_from_request(req2), reason: decision.reason, commitment_id: "commit-software-1" }),
+                        },
+                      },
+                    },
+                  },
+                }
+              },
+              Buy(_) => Err(str.concat("consortium: procurement chose Buy for a capability SoftwareCo sells: ", decision.reason)),
+              Defer => Err(str.concat("consortium: procurement deferred the software build: ", decision.reason)),
+            }
+          },
+          _ => Err("consortium: softwareco has no treasury (run open first)"),
+        },
+      }
+    },
   }
 }
 

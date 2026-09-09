@@ -73,6 +73,44 @@ if [[ "$out" == *"c-research-1 settled"* ]] && [[ "$out" == *"softwareco: balanc
 out=$(ANSWER=no bin/consortium-run.sh answer 2>&1) || true
 case "$out" in *"answer FAILED"*) ok "a second answer on a settled contract is refused" ;; *) bad "a settled contract took another answer: $out" ;; esac
 
+echo "== 4b. SoftwareCo contracts itself to build the settled report's product"
+out=$(bin/consortium-run.sh open-software 2>&1) || true
+if [[ "$out" == *"c-software-1 awarded: softwareco builds software-delivery/v1 itself for 60000c"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=60000c available=100000c"* ]]; then ok "software contract awarded as an internal build; 60000c reserved"; else bad "open-software did not award/reserve: $out"; fi
+python3 -c 'import tomllib,sys; m=tomllib.load(open(sys.argv[1],"rb")); assert m["stack"]["path"]=="python-fastapi" and "CSV schema validation API" in m["identity"]["mission"] and "checkable:acceptance-passed" in m["identity"]["mission"]' "$LOOM_WORKSPACE/softwareco.company.toml" && ok "SoftwareCo manifest carries the report and the delivery criteria" || bad "SoftwareCo manifest missing or without the report"
+
+echo "== 4c. deliver-software re-derives the evidence from the company's trail and workspace"
+SW="$LOOM_WORKSPACE/softwareco"; mkdir -p "$SW/tests"
+python3 - "$SW/company.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE company_iterations (company_id TEXT, idx INTEGER, sprint_id TEXT, parent_sprint_id TEXT DEFAULT '', status TEXT, started_at TEXT DEFAULT '', ended_at TEXT DEFAULT '')")
+c.execute("CREATE TABLE traces (id INTEGER PRIMARY KEY, run_id TEXT, agent_id TEXT, event_kind TEXT, data_json TEXT, ts TEXT)")
+c.execute("INSERT INTO company_iterations VALUES ('softwareco', 1, 'softwareco/iter-1', '', 'success', '', '')")
+c.execute("INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('softwareco/iter-1', 'orch', 'acceptance_passed', '{}', '2026-09-09T00:00:00Z')")
+c.commit()
+PY
+printf 'from fastapi import FastAPI\napp = FastAPI()\n\n@app.post("/validate")\ndef validate(row: dict):\n    return {"ok": True}\n' > "$SW/app.py"
+printf 'def test_validate_rejects_bad_row():\n    assert True\n' > "$SW/tests/test_validate.py"
+out=$(bin/consortium-run.sh deliver-software 2>&1) || true
+if [[ "$out" == *"SOFTWARE_DELIVERY_OK"* ]] && [[ "$out" == *"c-software-1 settled: fulfilled"* ]] && [[ "$out" == *"softwareco: balance=100000c committed=0c"* ]] && [[ "$out" == *"objective met=yes; should terminate=yes"* ]]; then ok "delivery verified from the trail; settled in full; run 1 terminal"; else bad "deliver-software did not settle: $out"; fi
+
+echo "== 4d. sabotage: a workspace still holding the skeleton's app.py is half a delivery"
+rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"
+bin/consortium-run.sh open >/dev/null 2>&1; report > "$LOOM_WORKSPACE/researchco/report.md"; bin/consortium-run.sh deliver >/dev/null 2>&1; ANSWER=yes bin/consortium-run.sh answer >/dev/null 2>&1; bin/consortium-run.sh open-software >/dev/null 2>&1
+SW="$LOOM_WORKSPACE/softwareco"; mkdir -p "$SW/tests"
+python3 - "$SW/company.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE company_iterations (company_id TEXT, idx INTEGER, sprint_id TEXT, parent_sprint_id TEXT DEFAULT '', status TEXT, started_at TEXT DEFAULT '', ended_at TEXT DEFAULT '')")
+c.execute("CREATE TABLE traces (id INTEGER PRIMARY KEY, run_id TEXT, agent_id TEXT, event_kind TEXT, data_json TEXT, ts TEXT)")
+c.execute("INSERT INTO company_iterations VALUES ('softwareco', 1, 'softwareco/iter-1', '', 'success', '', '')")
+c.execute("INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('softwareco/iter-1', 'orch', 'acceptance_passed', '{}', '2026-09-09T00:00:00Z')")
+c.commit()
+PY
+cp paths/python-fastapi/app.py "$SW/app.py"; cp paths/python-fastapi/tests/test_app.py "$SW/tests/test_app.py"
+out=$(bin/consortium-run.sh deliver-software 2>&1) || true
+if [[ "$out" == *"partially fulfilled; unmet: checkable:app-present, checkable:tests-present"* ]] && [[ "$out" == *"softwareco: balance=130000c committed=0c"* ]]; then ok "skeleton-only workspace pays 50%: the trail said passed, the workspace says nothing was built"; else bad "a skeleton-only workspace was paid in full: $out"; fi
+
 echo "== 5. a report the gate refuses (sabotage: sources outside the ledger) pays nothing"
 rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"
 bin/consortium-run.sh open >/dev/null 2>&1

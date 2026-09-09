@@ -8,8 +8,15 @@ Reads the query from argv (or stdin), prints one line per result:
 and exits 0. Prints NO_RESULTS or ERROR:<why> on its own (still exit 0) so the
 caller distinguishes an empty answer from a broken backend.
 
-Backends, in order: DuckDuckGo's html endpoint, Brave's html search, then
-Bing (its redirect links are decoded back to the real URL).
+Backends, in order: the Brave Search API when BRAVE_SEARCH_API_KEY is set
+(a key is a reference, never stored here), DuckDuckGo's html endpoint,
+Yahoo's html search (redirect links decoded back to the real URL), Brave's
+html search, then Bing. Found live in consortium run 1: Bing's html page
+answers a bot with results for the FIRST WORD of the query only ("free text
+date parsing API" -> free online games), and Brave's html endpoint returns
+429 for hours after a burst, so a run that fell through to Bing wrote an
+honest but worthless report. Yahoo answered the same query with the right
+products.
 DuckDuckGo started answering every request from this host with a bot-check
 page on 2026-09-09 (47 occurrences of "anomaly" in the body, no results);
 the research role had silently been getting "no results found" for every
@@ -67,6 +74,32 @@ def brave(q: str):
     return out
 
 
+def yahoo(q: str):
+    body = fetch("https://search.yahoo.com/search?" + urllib.parse.urlencode({"p": q}))
+    out = []
+    for block in re.split(r'<div class="dd algo', body)[1:]:
+        a = re.search(r'<a[^>]*href="([^"]+)"[^>]*>.*?<h3[^>]*class="title[^"]*"[^>]*>(.*?)</h3>', block, re.S)
+        if not a:
+            continue
+        href = html.unescape(a.group(1))
+        m = re.search(r"/RU=([^/]+)/", href)
+        url = urllib.parse.unquote(m.group(1)) if m else href
+        p = re.search(r'<div class="compText[^"]*"[^>]*>\s*<p[^>]*>(.*?)</p>', block, re.S)
+        out.append((clean(a.group(2)), clean(p.group(1)) if p else "", url))
+    return out
+
+
+def brave_api(q: str):
+    key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
+    if not key:
+        raise RuntimeError("BRAVE_SEARCH_API_KEY not set")
+    import json
+    req = urllib.request.Request("https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": q, "count": MAX}), headers={"Accept": "application/json", "X-Subscription-Token": key})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    return [(clean(x.get("title", "")), clean(x.get("description", "")), x.get("url", "")) for x in (data.get("web") or {}).get("results", [])]
+
+
 def bing(q: str):
     body = fetch("https://www.bing.com/search?" + urllib.parse.urlencode({"q": q, "setlang": "en", "cc": "US"}))
     out = []
@@ -93,7 +126,9 @@ def main() -> int:
         return 0
     errors = []
     wanted = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].startswith("--backend=") else ""
-    backends = [b for b in (("duckduckgo", duckduckgo), ("brave", brave), ("bing", bing)) if not wanted or b[0] == wanted[10:]]
+    chain = [("brave_api", brave_api)] if os.environ.get("BRAVE_SEARCH_API_KEY") else []
+    chain += [("duckduckgo", duckduckgo), ("yahoo", yahoo), ("brave", brave), ("bing", bing)]
+    backends = [b for b in chain if not wanted or b[0] == wanted[10:]]
     for name, backend in backends:
         try:
             results = backend(q)

@@ -7,6 +7,10 @@
 # report.md, the search ledger), the way the consortium buyer does.
 #
 # Inputs in JT_DIR (/tmp/jt3): research-manifest.json (loom's), goal.txt.
+# Found live (run 6): a background `tail | grep` inherited the guest's stderr
+# pipe, so the guest never saw EOF and the exec hung after the company was
+# done; and `pkill -f src/worker.lex` matched this very script. Background
+# processes get every fd redirected; processes are killed by exact name.
 # Found live (run 5): the company finished in 7 minutes inside the box and
 # the exec then hung 42 minutes until the host timeout -- after
 # "[company] done", run-company.sh's exit trap waits on the queue worker,
@@ -71,15 +75,15 @@ export GOAL="$(cat /opt/loom/jt3-goal.txt)"
 unset OLLAMA_HOST OLLAMA_MODEL; export LOOM_PROVIDER=litellm
 CON=/dev/console; [ -w /dev/console ] || CON=/dev/ttyS0
 cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" | tee $CON
-bash bin/run-company.sh > /tmp/company.log 2>&1 &
+bash bin/run-company.sh > /tmp/company.log 2>&1 < /dev/null &
 RC=$!
-tail -n0 -F /tmp/company.log 2>/dev/null | grep --line-buffered "\[company\]\|\[run-company\]\|FATAL" > $CON &
+( tail -n0 -F /tmp/company.log 2>/dev/null | grep --line-buffered "\[company\]\|\[run-company\]\|FATAL" > $CON 2>/dev/null ) < /dev/null &
 TL=$!
 while kill -0 $RC 2>/dev/null; do
-  if grep -q "\[company\] done" /tmp/company.log; then sleep 3; echo "[box] company done; stopping worker" > $CON; pkill -9 -f "src/worker.lex" 2>/dev/null; sleep 1; kill -9 $RC 2>/dev/null; break; fi
+  if grep -q "\[company\] done" /tmp/company.log; then sleep 3; echo "[box] company done; stopping worker + runner" > $CON; pkill -9 -x lex 2>/dev/null; sleep 1; kill -9 $RC 2>/dev/null; break; fi
   sleep 5
 done
-kill $TL 2>/dev/null
+pkill -9 -P $TL 2>/dev/null; kill -9 $TL 2>/dev/null; pkill -9 -x tail 2>/dev/null
 grep -v "^null$" /tmp/company.log | grep "\[company\]\|\[run-company\]\|\[loom\]\|FATAL\|error" | tail -40
 echo "== BOX_REPORT =="; cat /opt/loom-ws/'"$CID"'/report.md 2>/dev/null || echo "(no report synced)"
 echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true

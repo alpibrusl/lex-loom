@@ -64,7 +64,11 @@ fn tools_for(role :: Str) -> List[Str] {
                               if role == "research" or role == "opportunity_research" {
                                 ["web_search"]
                               } else {
-                                []
+                                if role == "founder" {
+                                  []
+                                } else {
+                                  []
+                                }
                               }
                             }
                           }

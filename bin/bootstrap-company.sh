@@ -61,6 +61,7 @@ path  = get("stack", "path", required=True)
 model = get("stack", "model", "glm-5.2")
 maxit = get("policy", "max_iterations", 12)
 budg  = get("policy", "budget_eur", None)
+founding = "1" if get("policy", "founding", False) else ""
 repo  = get("infra", "repo", "")
 revenue_url = get("finance", "revenue_url", "")
 
@@ -129,6 +130,7 @@ out = {
     "CID": cid, "CNAME": name, "CGOAL": goal, "CPATH": path,
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
     "CBUDGET": "" if budg is None else str(budg),
+    "CFOUNDING": founding,
     "CREVENUE_URL": revenue_url,
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
     "CSOFT_SETTLEMENT": soft_settlement,
@@ -326,6 +328,6 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" COMPANY_PATH="$CPATH" \
-  MODEL_OVERRIDES="$CMODEL_OVERRIDES" \
+  MODEL_OVERRIDES="$CMODEL_OVERRIDES" FOUNDING="$CFOUNDING" \
   bin/run-company.sh
 

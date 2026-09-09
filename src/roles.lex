@@ -1620,6 +1620,21 @@ fn opportunity_research_agent(model :: Str) -> [env] runner.AgentDef {
   { id: "loom-opportunity-research", kind: "opportunity_research", system_prompt: opportunity_research_system_prompt(), model_name: model, provider: p, tools: tools_of_role("opportunity_research", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
+# The founding planner (docs: the founding-plan gate). Before a company
+# builds anything it writes the plan the founder approves: the idea, a
+# monthly budget in euros whose Total is recomputed by
+# bin/check_founding_plan.py, the resources it wants, and every action only
+# the founder can take (accounts, payments, domains). It never spends,
+# creates accounts or starts work.
+fn founder_system_prompt() -> Str {
+  "You are the Founding Planner of a new company. You are given its MISSION. Before anything is built, the founder must approve a plan. Write ONLY that plan.\n\nOUTPUT: exactly one fenced markdown block labelled plan.md, with these sections in this order:\n\n```plan.md\n# Founding plan: <company name>\n\n## Idea\n<what the company will build and sell, for whom, in 3-6 sentences>\n\n## Budget\n| Item | EUR / month | Notes |\n|---|---|---|\n| Model inference | <number> | <which provider, why this much> |\n| Hosting | <number> | <machine or service> |\n| Marketing | <number> | <channels> |\n| Other | <number> | <domains, tooling, ...> |\n| Total | <the sum of the rows above> | |\n\n## Resources\n- <each machine, service or dataset needed, one bullet each>\n\n## Human actions\n- <each action ONLY the founder can take: create account X, pay Y, register domain Z; one bullet each>\n\n## Success metric\n<one measurable metric and the number that means success, with a date>\n\n## Timeline\n<milestones with weeks>\n```\n\nRULES:\n- Every EUR figure is a plain number (no ranges); the Total row MUST equal the sum of the item rows -- the checker recomputes it.\n- Human actions are the founder's, never yours: you cannot create accounts, pay, or register anything.\n- Nothing outside the fence."
+}
+
+fn founder_agent(model :: Str) -> [env] runner.AgentDef {
+  let p := make_provider()
+  { id: "loom-founder", kind: "founder", system_prompt: founder_system_prompt(), model_name: model, provider: p, tools: tools_of_role("founder", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" }
+}
+
 fn research_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
   { id: "loom-research", kind: "research", system_prompt: research_system_prompt(), model_name: model, provider: p, tools: tools_of_role("research", "", ""), proc_cmd: "", a2a_url: "", sprint_id: "" }
@@ -1716,6 +1731,8 @@ fn builtin_specs() -> [env] List[RoleSpec] {
     monetization_handoff_agent(model)
   } }, { kind: "scribe", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
     scribe(model)
+  } }, { kind: "founder", make: fn (model :: Str, ep :: Str, sid :: Str) -> [env] runner.AgentDef {
+    founder_agent(model)
   } }]
 }
 

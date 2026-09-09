@@ -139,7 +139,11 @@ fn preset_name_for_kind(kind :: Str) -> Str {
                     if kind == "research" or kind == "opportunity_research" {
                       "Research"
                     } else {
-                      "Demo"
+                      if kind == "founder" {
+                        "Design"
+                      } else {
+                        "Demo"
+                      }
                     }
                   }
                 }

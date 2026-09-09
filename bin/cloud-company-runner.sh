@@ -89,13 +89,50 @@ PY
   report_from_db "$uuid" "$ws/researchco/company.db" "done" "$(command grep -o 'last_verdict=[a-z]*' "$ws/research.log" | tail -1 | cut -d= -f2)" "${settled:-settled}"
 }
 
+# A company with [policy] founding = true parks after writing its plan: the
+# attention item becomes a board decision here, the founder answers in the
+# dashboard (yes, optionally "budget_eur=N" in the reason), the runner
+# resolves it through loom's one decide path and resumes the company.
 run_plain_company() { # uuid manifest-file stop_when
   local uuid="$1" manifest="$2" ws="$WS_ROOT/cloud-$1"; mkdir -p "$ws"
   export LOOM_WORKSPACE="$ws"
+  local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
   report "$uuid" '{"status":"running"}'
   STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
-  local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
-  local v; v=$(command grep -o 'last_verdict=[a-z]*' "$ws/company.log" | tail -1 | cut -d= -f2)
+  if command grep -q 'founding plan ready for the board' "$ws/company.log"; then
+    local aid; aid=$(command grep -o 'attention [0-9a-f]*' "$ws/company.log" | head -1 | awk '{print $2}')
+    local body; body=$(python3 - "$ws/$cid/company.db" "$aid" <<'PY'
+import sqlite3, sys, json
+db, aid = sys.argv[1:3]
+c = sqlite3.connect(db)
+row = c.execute("select artifact_hash from attention_queue where id=?", (aid,)).fetchone()
+plan = c.execute("select content from artifacts where hash=?", (row[0],)).fetchone()[0] if row else "(plan unavailable)"
+total = ""
+for line in plan.splitlines():
+    t = line.strip().lower()
+    if t.startswith("| total"):
+        total = line.split("|")[2].strip()
+print(json.dumps({"item_id": aid, "kind": "board", "question": "Approve the founding plan? (monthly budget %s EUR; answer with an optional budget_eur=N in the reason to change it)" % (total or "?"), "context_md": plan}))
+PY
+)
+    local f; f=$(mktemp); with_token "$body" > "$f"; jpost "/api/companies/$uuid/decisions" "$f" >/dev/null; rm -f "$f"
+    report_from_db "$uuid" "$ws/$cid/company.db" "awaiting-decision" "" "founding plan ready; awaiting the founder's approval"
+    echo "[runner] waiting for the founder's approval of the founding plan..."
+    local verdict="" reason=""
+    while [ -z "$verdict" ]; do
+      sleep 10
+      f=$(mktemp); with_token "$(python3 -c 'import json,sys; print(json.dumps({"item_id": sys.argv[1]}))' "$aid")" > "$f"
+      local resp; resp=$(jpost "/api/companies/$uuid/decisions/poll" "$f" || echo '{}'); rm -f "$f"
+      verdict=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print(ds[0]["verdict"] if ds else "")' "$resp")
+      reason=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print((ds[0].get("reason") or "") if ds else "")' "$resp")
+    done
+    local lv; lv=$([ "$verdict" = yes ] && echo approved || echo rejected)
+    echo "[runner] founder: $lv ($reason)"
+    DB_PATH="$ws/$cid/company.db" ATTENTION_ID="$aid" VERDICT="$lv" REASON="$reason" RESOLVER_ID="founder-via-loom-cloud" lex run --allow-effects env,io,sql,fs_read,fs_write,time,random,crypto src/main.lex attention_resolve_cmd > "$ws/resolve.log" 2>&1 || true
+    report "$uuid" '{"status":"running","summary":"founding plan decided; company resuming"}'
+    STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
+  fi
+  local v; v=$(command grep -o 'last_verdict=[a-z_]*' "$ws/company.log" | tail -1 | cut -d= -f2)
   report_from_db "$uuid" "$ws/$cid/company.db" "$([ "$v" = passed ] && echo done || echo failed)" "$v" "$(command grep '\[company\] done' "$ws/company.log" | tail -1 | cut -c1-200)"
 }
 

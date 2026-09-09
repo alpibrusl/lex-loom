@@ -29,36 +29,36 @@
       "commands": 1,
       "money_cents": 0,
       "api_calls": 0,
-      "elapsed_secs": 1
+      "elapsed_secs": 2
     },
-    "hash": "801f9efa7c05bc9ec4657737afd69659be03b06a436342e35dfb4cb78cf03bba"
+    "hash": "186f3f3b4321c1beb4d561dc4d0dc3eab38af14a8d06595be65442bf2994069e"
   },
   {
     "seq": 3,
-    "prev_hash": "801f9efa7c05bc9ec4657737afd69659be03b06a436342e35dfb4cb78cf03bba",
+    "prev_hash": "186f3f3b4321c1beb4d561dc4d0dc3eab38af14a8d06595be65442bf2994069e",
     "event": {
       "kind": "command_allowed",
       "command": "proc.exec"
     },
-    "hash": "9660bddcdb1c46e3b52168a99c2654855879f1112204209ca10698d80953a85d"
+    "hash": "eb4ea8f63fc965956c80e22afcb6f7c203b642e7753ff796442d65eaf702932e"
   },
   {
     "seq": 4,
-    "prev_hash": "9660bddcdb1c46e3b52168a99c2654855879f1112204209ca10698d80953a85d",
+    "prev_hash": "eb4ea8f63fc965956c80e22afcb6f7c203b642e7753ff796442d65eaf702932e",
     "event": {
       "kind": "exec_classified",
       "class": "exited_in_guest",
       "detail": "ExitedInGuest { code: 0 }"
     },
-    "hash": "a273e182aaa099a39aec1a491c0b3755a94bc8346b5a921e2fcb57b9bfe06abc"
+    "hash": "c68ce462ebdcd1f2db7ea7c24f2dd2100166ddd88797f84119f261c5f4e03a97"
   },
   {
     "seq": 5,
-    "prev_hash": "a273e182aaa099a39aec1a491c0b3755a94bc8346b5a921e2fcb57b9bfe06abc",
+    "prev_hash": "c68ce462ebdcd1f2db7ea7c24f2dd2100166ddd88797f84119f261c5f4e03a97",
     "event": {
       "kind": "session_ended",
       "outcome": "exec_result exit_code=Some(0) timed_out=false"
     },
-    "hash": "af5ffbaf1ba1582f53ee574197a85d1a4cb871d7fe20e233a18bc2f1d41298b2"
+    "hash": "1563ba0a18785f05f7b55bff271183dd196f415ca9294f318d738e77c37bcb39"
   }
 ]

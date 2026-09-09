@@ -36,6 +36,20 @@ install -m 0644 "$JT_DIR/goal.txt" "$mnt/opt/loom/jt3-goal.txt"
 rm -rf "$mnt/opt/loom/company-box.db" "$mnt/opt/loom-ws" "$mnt/tmp/loom-search-ledger-$CID.txt"; mkdir -p "$mnt/opt/loom-ws/$CID"; cp "$mnt/opt/loom/paths/research-report/README.md" "$mnt/opt/loom-ws/$CID/" 2>/dev/null || true
 umount "$mnt"; rmdir "$mnt"
 
+# Found live: a box provisioned while a previous attempt's tap was still
+# being torn down came up with a broken tap and a wall holding no allow
+# rules -- every packet dropped, the company hung on its first model call.
+# Never start beside another box; clear what a dead one left behind.
+preflight_clean() {
+  if pgrep -x firecracker >/dev/null; then echo "another firecracker box is running on this host; refusing to start beside it" >&2; exit 2; fi
+  for t in $(ip -br link | awk '/tap-lex/{print $1}' | cut -d@ -f1); do ip link del "$t" && echo "  cleared stale tap $t"; done
+  if iptables -t mangle -S LEX_OS_EGRESS >/dev/null 2>&1; then
+    # the hook is `-A PREROUTING -i <tap> -j LEX_OS_EGRESS`: delete it as written
+    iptables -t mangle -S PREROUTING | command grep -- '-j LEX_OS_EGRESS' | sed 's/^-A //' | while read -r rule; do iptables -t mangle -D $rule 2>/dev/null || true; done
+    iptables -t mangle -F LEX_OS_EGRESS; iptables -t mangle -X LEX_OS_EGRESS && echo "  cleared stale egress chain"
+  fi
+}
+preflight_clean
 echo "== 3. the company runs inside the box (vm: ${VM_VCPUS:-2} vcpu, ${VM_MEM_MIB:-3072} MiB; up to ${MAX_ITERATIONS:-2} iterations)"
 SCRIPT='export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LEX_PACKAGES_DIR=/root/.lex/packages
 export LITELLM_BASE_URL=http://'"$MODEL_HOST"' MODEL='"$MODEL_NAME"' COMPANY_ID='"$CID"' DB_PATH=/opt/loom/company-box.db EXEC_MODE=queue WORKER_COUNT=1 POLL_MS=500 RECLAIM_LEASE_SECONDS=300
@@ -43,10 +57,18 @@ export ROLE_PACKS=core,research COMPANY_PATH=research-report STOP_WHEN=verdict-p
 export GOAL="$(cat /opt/loom/jt3-goal.txt)"
 cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" && lex run --max-steps 0 --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream src/main.lex run_company_cmd 2>&1 | grep -v "^null$" | grep "\[company\]\|\[bootstrap\]\|\[loom\]\|FATAL\|error" | tail -40
 echo "== BOX_REPORT =="; cat /opt/loom-ws/'"$CID"'/report.md 2>/dev/null || echo "(no report synced)"
-echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true'
+echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true
+echo "== BOX_TAR_B64 =="; cd / && tar -czf - opt/loom/company-box.db opt/loom-ws/'"$CID"'/report.md tmp/loom-search-ledger-'"$CID"'.txt 2>/dev/null | base64 -w0; echo; echo "== BOX_TAR_END =="'
 started=$(date +%s)
-( cd "$LEX_OS_ROOT" && LEX_OS_VM_VCPUS="${VM_VCPUS:-2}" LEX_OS_VM_MEM_MIB="${VM_MEM_MIB:-3072}" timeout 3000 "$LEXOS" --output json exec --manifest "$MANIFEST" --rootfs "$ROOTFS" \
-    --jail-uid "$JAIL_UID" --jail-gid "$JAIL_GID" --audit-out "$JT_DIR/company.audit.json" -- /bin/sh -c "$SCRIPT" ) > "$JT_DIR/company.json" 2> "$JT_DIR/company.err" || true
+# The jailer stages a COPY of the rootfs per box, so nothing the company
+# writes reaches the image file: the box ships its outputs back over stdout
+# (BOX_TAR_B64). Provisioning has raced once right after the API server
+# came up ("Connection refused" within 3 s); one retry.
+for attempt in 1 2; do
+  ( cd "$LEX_OS_ROOT" && LEX_OS_VM_VCPUS="${VM_VCPUS:-2}" LEX_OS_VM_MEM_MIB="${VM_MEM_MIB:-3072}" timeout 3000 "$LEXOS" --output json exec --manifest "$MANIFEST" --rootfs "$ROOTFS" \
+      --jail-uid "$JAIL_UID" --jail-gid "$JAIL_GID" --audit-out "$JT_DIR/company.audit.json" -- /bin/sh -c "$SCRIPT" ) > "$JT_DIR/company.json" 2> "$JT_DIR/company.err" || true
+  if command grep -q 'could not provision the box' "$JT_DIR/company.json"; then echo "  provisioning raced (attempt $attempt); cleaning and retrying in 10s"; sleep 10; preflight_clean; else break; fi
+done
 echo "  box finished in $(( $(date +%s) - started ))s"
 python3 - "$JT_DIR/company.json" "$JT_DIR/company.stdout.txt" <<'PY'
 import json, sys
@@ -60,13 +82,22 @@ if isinstance(d, dict) and d.get("stderr"): print("  stderr tail:", d["stderr"][
 PY
 sed -n '1,60p' "$JT_DIR/company.stdout.txt" | cut -c1-180
 
-echo "== 4. what the box wrote, pulled out of the image"
+echo "== 4. what the box wrote, shipped back over stdout"
 OUTD="$JT_DIR/out"; rm -rf "$OUTD"; mkdir -p "$OUTD"
-mnt="$(mktemp -d)"; mount -o loop "$ROOTFS" "$mnt"
-cp "$mnt/opt/loom/company-box.db" "$OUTD/company.db" 2>/dev/null || true
-cp "$mnt/opt/loom-ws/$CID/report.md" "$OUTD/report.md" 2>/dev/null || true
-cp "$mnt/tmp/loom-search-ledger-$CID.txt" "$OUTD/ledger.txt" 2>/dev/null || true
-umount "$mnt"; rmdir "$mnt"; ls -la "$OUTD" | tail -n +2 | awk '{print "  " $5 "  " $9}'
+python3 - "$JT_DIR/company.stdout.txt" "$OUTD" <<'PY'
+import sys, base64, io, tarfile, pathlib
+out = open(sys.argv[1]).read(); dst = pathlib.Path(sys.argv[2])
+if "== BOX_TAR_B64 ==" in out and "== BOX_TAR_END ==" in out:
+    b64 = out.split("== BOX_TAR_B64 ==", 1)[1].split("== BOX_TAR_END ==", 1)[0].strip()
+    if b64:
+        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(b64)), mode="r:gz") as t:
+            for m in t.getmembers():
+                if m.isfile():
+                    name = {"company-box.db": "company.db", "report.md": "report.md"}.get(pathlib.Path(m.name).name, "ledger.txt" if "ledger" in m.name else pathlib.Path(m.name).name)
+                    (dst / name).write_bytes(t.extractfile(m).read())
+print("  recovered:", sorted(p.name for p in dst.iterdir()))
+PY
+sed -i '/== BOX_TAR_B64 ==/,/== BOX_TAR_END ==/d' "$JT_DIR/company.stdout.txt"
 
 echo "== 5. assertions"
 if command grep -q '\[company\] done .*last_verdict=passed' "$JT_DIR/company.stdout.txt"; then ok "the company finished inside the box with verdict passed"; else bad "no passed verdict from the box: $(command grep '\[company\] done\|FATAL' "$JT_DIR/company.stdout.txt" | tail -1 | cut -c1-160)"; fi

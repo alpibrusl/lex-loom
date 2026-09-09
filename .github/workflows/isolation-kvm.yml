@@ -121,3 +121,124 @@ jobs:
             test -s "$f" || { echo "missing audit log $f"; exit 1; }
             echo "== $f (tail)"; tail -c 800 "$f"; echo
           done
+
+  # Joint loom + lex-os test, step 1 of lex-loom#415: the grant loom ships for
+  # the consortium's research role, enforced by a real Firecracker perimeter.
+  # Three legs, all inside the microVM under loom's OWN manifest:
+  #   ALLOW  an allowlisted search host answers (positive control: the wall
+  #          permits what the grant lists);
+  #   DROP   a host the grant does not list is unreachable (negative control);
+  #   REFUSE the pre-#415 shape of that grant (exec: None -- the Demo preset
+  #          research used to fall back to) is refused before spawn.
+  # A wall that only proves denials proves nothing (lex-os#79), so the ALLOW
+  # leg must carry a real HTTP status from the search host.
+  joint-consortium-research-egress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lex
+        run: |
+          set -euo pipefail
+          V=0.10.15; T=x86_64-unknown-linux-gnu
+          curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
+          tar -xzf /tmp/lex.tgz -C /tmp
+          echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
+      - name: KVM prerequisites
+        run: |
+          ls -la /dev/kvm
+          sudo modprobe vhost_vsock
+          ls -la /dev/vhost-vsock
+      - name: Clone lex-os
+        run: git clone --depth 1 https://github.com/alpibrusl/lex-os /tmp/lex-os
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: /tmp/lex-os
+      - name: Build lex-os + the in-VM guest
+        run: |
+          cd /tmp/lex-os
+          cargo build -p lex-os
+          cargo build --release --target x86_64-unknown-linux-musl -p lex-os-guest --features vsock
+      - name: Fetch microVM assets + inject the guest
+        run: |
+          cd /tmp/lex-os
+          bash demo/setup-assets.sh
+          sudo bash demo/setup-assets.sh
+      - name: Generate the research grant loom ships (and the pre-#415 shape)
+        run: |
+          set -euo pipefail
+          unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
+          lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt/iter-1"' | unquote > /tmp/research-manifest.json
+          lex run src/manifests.lex manifest_json_for_kind '"demo"' '"jt/iter-1"' | unquote > /tmp/old-shape-manifest.json
+          echo "== research grant:"; cat /tmp/research-manifest.json
+          python3 -c 'import json; m=json.load(open("/tmp/research-manifest.json")); assert m["grant"]["exec"]=="Sandboxed" and "search.yahoo.com:443" in m["egress"], m'
+      - name: Resolve the probe hosts on the host (the guest has no resolver; the wall pins host-resolved IPs)
+        run: |
+          set -euo pipefail
+          echo "YAHOO_IP=$(getent ahostsv4 search.yahoo.com | awk '{print $1; exit}')" >> "$GITHUB_ENV"
+          echo "EXAMPLE_IP=$(getent ahostsv4 example.org | awk '{print $1; exit}')" >> "$GITHUB_ENV"
+          getent ahostsv4 search.yahoo.com | head -3; getent ahostsv4 example.org | head -1
+      - name: "ALLOW: under loom's research grant, the allowlisted search host answers from inside the microVM"
+        run: |
+          set -euo pipefail
+          cd /tmp/lex-os
+          KVM_GID=$(getent group kvm | cut -d: -f3)
+          sudo timeout 300 ./target/debug/lex-os --output json exec \
+            --manifest /tmp/research-manifest.json \
+            --jail-uid "$(id -u)" --jail-gid "$KVM_GID" \
+            --audit-out /tmp/allow-audit.json \
+            -- curl -k -sS --max-time 20 --resolve "search.yahoo.com:443:$YAHOO_IP" -o /dev/null -w 'HTTP_STATUS=%{http_code}' https://search.yahoo.com/ | tee /tmp/allow.json
+          python3 - <<'PY'
+          import json, re
+          raw = open('/tmp/allow.json').read()
+          env = json.loads(raw[raw.rindex('{\n  "ok"'):])
+          assert env.get("ok") is True, env
+          out = env["data"].get("stdout", "")
+          m = re.search(r"HTTP_STATUS=(\d{3})", out)
+          assert m and m.group(1) != "000", ("no HTTP status from the allowlisted host", env)
+          print("ALLOW: search.yahoo.com answered", m.group(1), "from inside the microVM under loom's research grant")
+          PY
+      - name: "DROP: a host the grant does not list is unreachable from the same box"
+        run: |
+          set -euo pipefail
+          cd /tmp/lex-os
+          KVM_GID=$(getent group kvm | cut -d: -f3)
+          sudo timeout 300 ./target/debug/lex-os --output json exec \
+            --manifest /tmp/research-manifest.json \
+            --jail-uid "$(id -u)" --jail-gid "$KVM_GID" \
+            --audit-out /tmp/drop-audit.json \
+            -- curl -k -sS --max-time 15 --resolve "example.org:443:$EXAMPLE_IP" -o /dev/null -w 'HTTP_STATUS=%{http_code}' https://example.org/ | tee /tmp/drop.json || true
+          python3 - <<'PY'
+          import json, re
+          raw = open('/tmp/drop.json').read()
+          env = json.loads(raw[raw.rindex('{\n  "ok"'):])
+          out = json.dumps(env.get("data", {}))
+          m = re.search(r"HTTP_STATUS=(\d{3})", out)
+          assert not m or m.group(1) == "000", ("the wall let an unlisted host through", env)
+          print("DROP: example.org unreachable under loom's research grant (exit", env.get("data", {}).get("exit_code"), ")")
+          PY
+      - name: "REFUSE: the pre-#415 research grant shape (exec: None) never spawns the search"
+        run: |
+          set -euo pipefail
+          cd /tmp/lex-os
+          KVM_GID=$(getent group kvm | cut -d: -f3)
+          sudo timeout 300 ./target/debug/lex-os --output json exec \
+            --manifest /tmp/old-shape-manifest.json \
+            --jail-uid "$(id -u)" --jail-gid "$KVM_GID" \
+            --audit-out /tmp/refuse-audit.json \
+            -- curl -k -sS --max-time 15 --resolve "search.yahoo.com:443:$YAHOO_IP" https://search.yahoo.com/ | tee /tmp/refuse.json || true
+          python3 - <<'PY'
+          import json
+          raw = open('/tmp/refuse.json').read()
+          env = json.loads(raw[raw.rindex('{\n  "ok"'):])
+          assert env.get("ok") is False, env
+          print("REFUSE: refused before spawn:", json.dumps(env.get("error", {}))[:200])
+          PY
+      - name: Audit evidence for all three legs
+        run: |
+          for f in /tmp/allow-audit.json /tmp/drop-audit.json /tmp/refuse-audit.json; do
+            test -s "$f" || { echo "missing audit log $f"; exit 1; }
+            echo "== $f (tail)"; tail -c 600 "$f"; echo
+          done

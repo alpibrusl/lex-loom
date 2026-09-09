@@ -7,6 +7,11 @@
 # report.md, the search ledger), the way the consortium buyer does.
 #
 # Inputs in JT_DIR (/tmp/jt3): research-manifest.json (loom's), goal.txt.
+# The box runs bin/run-company.sh, not run_company_cmd directly: EXEC_MODE=queue
+# needs the worker process that script starts (found live: a company with no
+# worker sits idle forever -- 0% CPU, no packets). The guest init exports
+# OLLAMA_HOST for lex-os's own agent; it is unset so loom's provider choice
+# is LiteLLM, the host the grant lists.
 # Env: LEX_OS_ROOT, MODEL_HOST (host:port of LiteLLM), MODEL_NAME,
 # VM_MEM_MIB (default 3072), VM_VCPUS (default 2), MAX_ITERATIONS (default 2).
 set -euo pipefail
@@ -55,7 +60,8 @@ SCRIPT='export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export LITELLM_BASE_URL=http://'"$MODEL_HOST"' MODEL='"$MODEL_NAME"' COMPANY_ID='"$CID"' DB_PATH=/opt/loom/company-box.db EXEC_MODE=queue WORKER_COUNT=1 POLL_MS=500 RECLAIM_LEASE_SECONDS=300
 export ROLE_PACKS=core,research COMPANY_PATH=research-report STOP_WHEN=verdict-passed MAX_ITERATIONS='"${MAX_ITERATIONS:-2}"' MAX_API_CALLS=200 LOOM_WORKSPACE=/opt/loom-ws BUDGET_ENVELOPES=total:100
 export GOAL="$(cat /opt/loom/jt3-goal.txt)"
-cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" && lex run --max-steps 0 --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream src/main.lex run_company_cmd 2>&1 | grep -v "^null$" | grep "\[company\]\|\[bootstrap\]\|\[loom\]\|FATAL\|error" | tail -40
+unset OLLAMA_HOST OLLAMA_MODEL; export LOOM_PROVIDER=litellm
+cd /opt/loom && echo "[box] lex $(lex --version 2>&1 | head -1); python $(python3 --version)" && bash bin/run-company.sh 2>&1 | grep -v "^null$" | grep "\[company\]\|\[run-company\]\|\[loom\]\|FATAL\|error" | tail -40
 echo "== BOX_REPORT =="; cat /opt/loom-ws/'"$CID"'/report.md 2>/dev/null || echo "(no report synced)"
 echo "== BOX_ITERATIONS =="; sqlite3 /opt/loom/company-box.db "select idx, sprint_id, status from company_iterations" 2>/dev/null || true
 echo "== BOX_TAR_B64 =="; cd / && tar -czf - opt/loom/company-box.db opt/loom-ws/'"$CID"'/report.md tmp/loom-search-ledger-'"$CID"'.txt 2>/dev/null | base64 -w0; echo; echo "== BOX_TAR_END =="'

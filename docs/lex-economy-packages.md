@@ -58,7 +58,7 @@ Rules that apply to the whole package:
   controls, and at least one "sabotage" test documented in the test file
   (disable the invariant → the test fails). CI runs `lex ci`; comments go
   above functions, never inside bodies (`lex fmt` deletes them).
-- Toolchain: lex 0.10.18. Dependencies unpinned; ship `deps.lock` and the
+- Toolchain: lex 0.11.5. Dependencies unpinned; ship `deps.lock` and the
   drift guard as in `lex-loom/bin/check-dep-drift.sh`.
 
 ### 2.1 `identity` — CompanyId and keys

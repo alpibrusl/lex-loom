@@ -20,7 +20,10 @@ cd "$(dirname "$0")/.."
 
 N="${1:-5}"
 ROLE="${2:-py_test_author}"
-MODEL="${3:-${MODEL:-qwen3.8:27b-mlx}}"
+MODEL="${3:-${MODEL:-}}"
+if [ -z "$MODEL" ]; then
+  echo "FATAL: no model. Pass one as \$3 or set MODEL= (there is no default)." >&2; exit 2
+fi
 EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,vcs,approval,stream"
 
 case "$ROLE" in

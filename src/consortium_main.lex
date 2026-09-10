@@ -83,24 +83,35 @@ fn consortium_open_cmd() -> [env, io, sql, time, fs_read, fs_write] Unit {
   let db_path := get_env("CONSORTIUM_DB", "consortium.db")
   let problem := get_env("PROBLEM_SPACE", default_problem_space())
   let manifest_path := get_env("RESEARCHCO_MANIFEST", "")
-  let model := get_env("MODEL", "qwen3.8:27b-mlx")
-  match open_db(db_path) {
-    Err(e) => io.print(str.concat("[consortium] FATAL: ", e)),
-    Ok((db, log)) => match cs.open_run(db, log, problem, time.now_ms()) {
-      Err(e) => io.print(str.concat("[consortium] open FAILED: ", e)),
-      Ok(o) => {
-        let __p := io.print(str.join(["[consortium] contract ", o.contract.id, " awarded: ", o.contract.buyer, " buys ", cs.research_capability(), " from ", o.contract.supplier, " for ", int_str(o.contract.price.cents), "c (", o.reason, ")"], ""))
-        let __m := if str.is_empty(manifest_path) {
-          ()
-        } else {
-          let __w := io.write(manifest_path, researchco_manifest(o.goal, model))
-          io.print(str.concat("[consortium] ResearchCo manifest written: ", manifest_path))
-        }
-        let __g := io.print(str.concat("[consortium] goal for ResearchCo:\n", o.goal))
-        io.print(cs.status_text(db, time.now_ms()))
+  let model := get_env("MODEL", "")
+  if str.is_empty(model) {
+    io.print(model_required_msg())
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[consortium] FATAL: ", e)),
+      Ok((db, log)) => match cs.open_run(db, log, problem, time.now_ms()) {
+        Err(e) => io.print(str.concat("[consortium] open FAILED: ", e)),
+        Ok(o) => {
+          let __p := io.print(str.join(["[consortium] contract ", o.contract.id, " awarded: ", o.contract.buyer, " buys ", cs.research_capability(), " from ", o.contract.supplier, " for ", int_str(o.contract.price.cents), "c (", o.reason, ")"], ""))
+          let __m := if str.is_empty(manifest_path) {
+            ()
+          } else {
+            let __w := io.write(manifest_path, researchco_manifest(o.goal, model))
+            io.print(str.concat("[consortium] ResearchCo manifest written: ", manifest_path))
+          }
+          let __g := io.print(str.concat("[consortium] goal for ResearchCo:\n", o.goal))
+          io.print(cs.status_text(db, time.now_ms()))
+        },
       },
-    },
+    }
   }
+}
+
+# There is no default model anywhere in loom any more. Forgetting to name
+# one used to run somebody else's model on somebody's key, under a name the
+# operator never chose -- the same failure #427 removed for providers.
+fn model_required_msg() -> Str {
+  "[consortium] FATAL: MODEL is not set, and there is no default model. Name it explicitly, e.g. MODEL=kimi-k2.7-code"
 }
 
 fn int_str(n :: Int) -> Str {
@@ -117,28 +128,32 @@ fn consortium_open_software_cmd() -> [env, io, sql, time, fs_read, fs_write] Uni
   let db_path := get_env("CONSORTIUM_DB", "consortium.db")
   let report_path := get_env("REPORT_PATH", "")
   let manifest_path := get_env("SOFTWARECO_MANIFEST", "")
-  let model := get_env("MODEL", "qwen3.8:27b-mlx")
-  if str.is_empty(report_path) {
-    io.print("[consortium] FATAL: REPORT_PATH is required (the settled report.md)")
+  let model := get_env("MODEL", "")
+  if str.is_empty(model) {
+    io.print(model_required_msg())
   } else {
-    match io.read(report_path) {
-      Err(_) => io.print(str.concat("[consortium] FATAL: cannot read ", report_path)),
-      Ok(report) => match open_db(db_path) {
-        Err(e) => io.print(str.concat("[consortium] FATAL: ", e)),
-        Ok((db, log)) => match cs.open_software(db, log, report, time.now_ms()) {
-          Err(e) => io.print(str.concat("[consortium] open-software FAILED: ", e)),
-          Ok(o) => {
-            let __p := io.print(str.join(["[consortium] contract ", o.contract.id, " awarded: ", o.contract.buyer, " builds ", cs.software_capability(), " itself for ", int_str(o.contract.price.cents), "c (", o.reason, ")"], ""))
-            let __m := if str.is_empty(manifest_path) {
-              ()
-            } else {
-              let __w := io.write(manifest_path, softwareco_manifest(o.goal, model))
-              io.print(str.concat("[consortium] SoftwareCo manifest written: ", manifest_path))
-            }
-            io.print(cs.status_text(db, time.now_ms()))
+    if str.is_empty(report_path) {
+      io.print("[consortium] FATAL: REPORT_PATH is required (the settled report.md)")
+    } else {
+      match io.read(report_path) {
+        Err(_) => io.print(str.concat("[consortium] FATAL: cannot read ", report_path)),
+        Ok(report) => match open_db(db_path) {
+          Err(e) => io.print(str.concat("[consortium] FATAL: ", e)),
+          Ok((db, log)) => match cs.open_software(db, log, report, time.now_ms()) {
+            Err(e) => io.print(str.concat("[consortium] open-software FAILED: ", e)),
+            Ok(o) => {
+              let __p := io.print(str.join(["[consortium] contract ", o.contract.id, " awarded: ", o.contract.buyer, " builds ", cs.software_capability(), " itself for ", int_str(o.contract.price.cents), "c (", o.reason, ")"], ""))
+              let __m := if str.is_empty(manifest_path) {
+                ()
+              } else {
+                let __w := io.write(manifest_path, softwareco_manifest(o.goal, model))
+                io.print(str.concat("[consortium] SoftwareCo manifest written: ", manifest_path))
+              }
+              io.print(cs.status_text(db, time.now_ms()))
+            },
           },
         },
-      },
+      }
     }
   }
 }

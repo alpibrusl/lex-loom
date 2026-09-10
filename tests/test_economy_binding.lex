@@ -159,13 +159,14 @@ fn test_declared_capabilities_are_findable() -> [sql, fs_read, fs_write, time, r
   })
 }
 
-# NEGATIVE CONTROL for lex-economy#3: settlement debits the buyer but credits
-# nobody (no treasury credit exists at 2673b8b), so the supplier's balance
-# after a fulfilled 40 000c contract is 0 today. When lex-economy conserves
-# money this returns 40000 and this pin must change -- that flip is the
-# point of pinning it.
+# THE PIN FLIPPED (lex-economy#4, 7df40f4). It used to read 0: settlement
+# debited the buyer and credited nobody, so a fulfilled 40 000c contract left
+# the supplier with nothing and the money simply stopped existing. Settlement
+# now pays the supplier in the same transaction, so this is 40000 and money is
+# conserved across the pair. Flipping this pin was the whole point of pinning
+# it; it stays here as the assertion that the credit leg still exists.
 fn supplier_balance_lex_economy_gives_today() -> Int {
-  0
+  40000
 }
 
 fn crit(attr :: Str, d :: Str) -> request_bid.Criterion {

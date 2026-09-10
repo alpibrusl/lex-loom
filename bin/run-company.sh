@@ -56,7 +56,18 @@ if [ "${LOOM_PROVIDER:-}" = "opencode" ] && [ -z "${OPENCODE_API_KEY:-}" ] && [ 
 fi
 
 : "${COMPANY_ID:=acme}"
-: "${MODEL:=qwen3.8:27b-mlx}"  # keep in sync with src/defaults.lex (the one place the fallback model lives)
+# MODEL is REQUIRED and has no default anywhere -- not here, not in
+# src/defaults.lex, not in bootstrap-company.sh. A default meant that
+# forgetting to set it quietly ran somebody else's model on somebody's key,
+# under a name the operator never chose; #427 removed exactly that for
+# providers, and the model gets the same rule. Refuse here, before any Lex
+# starts and before a single token is spent.
+if [ -z "${MODEL:-}" ]; then
+  echo "[run-company] FATAL: MODEL is not set, and there is no default model." >&2
+  echo "[run-company]   Name it explicitly, e.g. MODEL=kimi-k2.7-code bin/run-company.sh" >&2
+  echo "[run-company]   (bootstrap-company.sh passes [stack].model from the manifest.)" >&2
+  exit 2
+fi
 : "${MAX_ITERATIONS:=3}"
 : "${STOP_WHEN:=}"
 : "${MAX_API_CALLS:=200}"

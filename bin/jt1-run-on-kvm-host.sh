@@ -10,7 +10,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 HOST="${HOST:?HOST is required: the ssh alias of your KVM host}"
 MODEL_HOST="${MODEL_HOST:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1):4000}"
-MODEL_NAME="${MODEL_NAME:-qwen3.8:27b-mlx}"
+MODEL_NAME="${MODEL_NAME:-}"
+if [ -z "$MODEL_NAME" ]; then
+  echo "FATAL: MODEL_NAME is required (there is no default model)." >&2; exit 2
+fi
 W="$(mktemp -d "${TMPDIR:-/tmp}/loom-jt1.XXXXXX")"; trap 'rm -rf "$W"' EXIT
 unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
 lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt1/iter-1"' | unquote > "$W/research-manifest.json"

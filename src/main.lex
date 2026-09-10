@@ -19,7 +19,7 @@
 #
 # Environment:
 #   DB_PATH       — SQLite file path         (default: loom.db)
-#   MODEL         — LLM model name           (default: defaults.model())
+#   MODEL         — LLM model name           (REQUIRED; no default)
 #   REQUEST       — project request text     (default: built-in toy request)
 #   SPRINT_ID     — sprint identifier        (default: sprint-1)
 #   MAX_API_CALLS — max LLM node invocations (default: 200; matches sprint manifest budget)

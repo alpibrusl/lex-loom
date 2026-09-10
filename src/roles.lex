@@ -42,6 +42,8 @@ import "./role_tools" as rt
 
 import "./deploy_scaffold" as scaffold
 
+import "./manifests" as manifests
+
 # ── run_code tool (inline — avoids cross-file lex-llm import resolution) ──────
 #
 # Gives QA the ability to *execute* the implementation it received.
@@ -338,6 +340,12 @@ fn make_deploy_hetzner_tool(evidence_path :: Str, sprint_id :: Str) -> [env] t.T
     Some(v) => v,
     None => "",
   }
+  let iac_allow := match env.get("LOOM_IAC_ALLOW") {
+    Some(v) => v,
+    None => "",
+  }
+  let iac_grant := manifests.deploy_grant_json(sprint_id, iac_allow, host)
+  let iac_dir := str.join(["/tmp/loom-iac-", str.replace(sprint_id, "/", "-")], "")
   let params := { title: "DeployHetzner", description: "rsync + build + run the project on a real Hetzner server, then health-check it", fields: [s.required_str("work_dir", []), s.required_str("service_name", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", []))] }
   t.define("deploy_hetzner", "Deploy `work_dir` (an already-built project directory with a Dockerfile) to the Hetzner server named by HETZNER_HOST. Builds and runs the container for real, waits for it to respond, then fetches `endpoint`. When DEPLOY_DOMAIN is set the deploy runs docker compose behind Caddy with automatic HTTPS and the health check hits https://<domain><endpoint>. Returns {ok, url, response, error}.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let work_dir_arg := match jv.get_field(args, "work_dir") {
@@ -385,23 +393,38 @@ fn make_deploy_hetzner_tool(evidence_path :: Str, sprint_id :: Str) -> [env] t.T
         } else {
           scaffold.remote_up_command(remote_dir)
         }
-        let script := str.join(["set -e\n", scaffold_prelude, "ssh ", ssh_opts, " ", ssh_user, "@", host, " 'mkdir -p ", remote_dir, "'\n", "rsync -az --delete -e \"ssh ", ssh_opts, "\" '", work_dir, "/' '", ssh_user, "@", host, ":", remote_dir, "/'\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " '", run_cmd, "'\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 5 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "exit 1"], "")
-        match proc.run("bash", ["-c", script]) {
-          Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("deploy failed to run: ", msg))), ("url", JStr(url)), ("response", JStr(""))])),
-          Ok(r) => {
-            let combined := str.concat(r.stdout, r.stderr)
-            let ok := str.contains(combined, "READY")
-            let __ev := record_launch_evidence(evidence_path, ok)
-            let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
-              None => "",
-              Some(s) => str.trim(s),
-            }
-            if ok {
-              Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("response", JStr(str.slice(resp_part, 0, 500))), ("error", JStr("")), ("service_name", JStr(service_name))]))
-            } else {
-              Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("error", JStr(str.join(["deploy ran but the server did not respond within ", int.to_str(timeout_s), "s: ", str.slice(combined, 0, 800)], "")))]))
-            }
-          },
+        let __gd := io.write(str.concat(iac_dir, "/grant.json"), iac_grant)
+        let gate_args := list.concat(["bin/iac-gate.sh", str.concat(iac_dir, "/grant.json"), iac_dir, "--host", host, "--service", service_name, "--port", port_str], if str.is_empty(deploy_domain) {
+          []
+        } else {
+          ["--domain", deploy_domain]
+        })
+        let gate := match proc.run("bash", gate_args) {
+          Err(m) => str.concat("IAC_UNAVAILABLE ", m),
+          Ok(g) => str.trim(str.concat(g.stdout, g.stderr)),
+        }
+        let __gp := io.write(str.concat(iac_dir, "/gate.txt"), gate)
+        if not str.starts_with(gate, "IAC_ADMITTED") {
+          Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("deploy refused by the plan gate (lex-iac): ", str.slice(gate, 0, 600)))), ("url", JStr(url)), ("response", JStr(""))]))
+        } else {
+          let script := str.join(["set -e\n", scaffold_prelude, "ssh ", ssh_opts, " ", ssh_user, "@", host, " 'mkdir -p ", remote_dir, "'\n", "rsync -az --delete -e \"ssh ", ssh_opts, "\" '", work_dir, "/' '", ssh_user, "@", host, ":", remote_dir, "/'\n", "ssh ", ssh_opts, " ", ssh_user, "@", host, " '", run_cmd, "'\n", "OK=0\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 5 '", url, "' 2>/dev/null) && [ -n \"$RESP\" ] && { OK=1; break; }\n", "done\n", "if [ \"$OK\" = \"1\" ]; then\n", "  echo \"READY\"\n", "  echo \"RESPONSE:$RESP\"\n", "  exit 0\n", "fi\n", "echo \"TIMEOUT\"\n", "exit 1"], "")
+          match proc.run("bash", ["-c", script]) {
+            Err(msg) => Ok(JObj([("ok", JBool(false)), ("error", JStr(str.concat("deploy failed to run: ", msg))), ("url", JStr(url)), ("response", JStr(""))])),
+            Ok(r) => {
+              let combined := str.concat(r.stdout, r.stderr)
+              let ok := str.contains(combined, "READY")
+              let __ev := record_launch_evidence(evidence_path, ok)
+              let resp_part := match list.head(list.tail(str.split(combined, "RESPONSE:"))) {
+                None => "",
+                Some(s) => str.trim(s),
+              }
+              if ok {
+                Ok(JObj([("ok", JBool(true)), ("url", JStr(url)), ("response", JStr(str.slice(resp_part, 0, 500))), ("error", JStr("")), ("service_name", JStr(service_name))]))
+              } else {
+                Ok(JObj([("ok", JBool(false)), ("url", JStr(url)), ("response", JStr("")), ("error", JStr(str.join(["deploy ran but the server did not respond within ", int.to_str(timeout_s), "s: ", str.slice(combined, 0, 800)], "")))]))
+              }
+            },
+          }
         }
       }
     }

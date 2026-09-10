@@ -30,7 +30,7 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)" >&2; exit 2; }
 LEX_OS_ROOT="${LEX_OS_ROOT:-/home/${SUDO_USER:-$USER}/Workspace/alpibrusl/lex-os}"
 JT_DIR="${JT_DIR:-/tmp/jt3}"
-MODEL_HOST="${MODEL_HOST:-192.168.1.165:4000}"
+MODEL_HOST="${MODEL_HOST:?MODEL_HOST is required: host:port of the LiteLLM the box may reach}"
 MODEL_NAME="${MODEL_NAME:-qwen3.8:27b-mlx}"
 ASSETS="$LEX_OS_ROOT/demo/assets"; ROOTFS="$ASSETS/loom-company-rootfs.ext4"; LEXOS="$LEX_OS_ROOT/target/debug/lex-os"
 JAIL_UID="${JAIL_UID:-${SUDO_UID:-$(id -u)}}"; JAIL_GID="${JAIL_GID:-$(getent group kvm | cut -d: -f3)}"

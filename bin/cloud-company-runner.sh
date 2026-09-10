@@ -136,10 +136,22 @@ PY
   report_from_db "$uuid" "$ws/$cid/company.db" "$([ "$v" = passed ] && echo done || echo failed)" "$v" "$(command grep '\[company\] done' "$ws/company.log" | tail -1 | cut -c1-200)"
 }
 
+# Say what is happening: the first poll reports whether the key was
+# accepted and where; then one line every ten idle polls, so a runner left
+# running is never silent for more than a couple of minutes.
+polls=0
 while :; do
-  f=$(mktemp); with_token '{}' > "$f"; resp=$(jpost /api/runners/poll-company "$f" || echo '{"company":null}'); rm -f "$f"
+  f=$(mktemp); with_token '{}' > "$f"
+  if ! resp=$(jpost /api/runners/poll-company "$f"); then rm -f "$f"; echo "[runner] poll failed against $LOOM_SERVER (see above); retrying in 15s"; sleep 15; continue; fi
+  rm -f "$f"
   uuid=$(python3 -c 'import sys,json; c=json.loads(sys.argv[1]).get("company"); print(c["id"] if c else "")' "$resp")
-  if [ -z "$uuid" ]; then [ "$ONCE" = "--once" ] && { echo "[runner] nothing queued"; exit 0; }; sleep 15; continue; fi
+  if [ "$polls" = 0 ]; then echo "[runner] connected to $LOOM_SERVER: runner key accepted; waiting for a queued company (queue one under Companies -> New company)"; fi
+  polls=$((polls+1))
+  if [ -z "$uuid" ]; then
+    [ "$ONCE" = "--once" ] && { echo "[runner] nothing queued"; exit 0; }
+    [ $((polls % 10)) = 0 ] && echo "[runner] $(date +%H:%M:%S) still connected, nothing queued ($polls polls)"
+    sleep 15; continue
+  fi
   kind=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"]["kind"])' "$resp")
   stop=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"].get("stop_when") or "verdict-passed")' "$resp")
   mf=$(mktemp "${TMPDIR:-/tmp}/cloud-company.XXXXXX.toml"); python3 -c 'import sys,json; sys.stdout.write(json.loads(sys.argv[1])["company"]["manifest_toml"])' "$resp" > "$mf"

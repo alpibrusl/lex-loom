@@ -37,6 +37,12 @@ with_token() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["runner
 report() { # company-uuid json-fields
   local f; f=$(mktemp); with_token "$2" > "$f"; jpost "/api/companies/$1/report" "$f" >/dev/null; rm -f "$f"
 }
+# `backlog` carries what the company proposes to do NEXT: loom's own
+# company_backlog, which the strategist appends to as work surfaces. Those
+# proposals are the company's next iterations, and until now they existed only
+# in a company.db on the runner -- the founder could not see, let alone weigh,
+# what their own company thought it should do next.
+#
 # `nodes` carries each iteration's gate results (loom's node_results): which
 # node its gate accepted, and the gate's own words when it refused. The cloud
 # used to be told only THAT iteration 1 failed, so the reason -- `launch`
@@ -58,11 +64,13 @@ report_from_db() { # company-uuid company.db status last_verdict summary
 import sqlite3, json, sys, os, datetime, time
 db, status, verdict, summary, tok = sys.argv[1:6]
 ioff, soff = int(os.environ.get("IDX_OFFSET") or 0), int(os.environ.get("SEQ_OFFSET") or 0)
-its, evs, nodes = [], [], []
+its, evs, nodes, backlog = [], [], [], []
 try:
     c = sqlite3.connect(db)
     its = [dict(idx=r[0] + ioff, sprint_id=r[1], status=r[2], started_at=r[3], ended_at=r[4]) for r in c.execute("select idx, sprint_id, status, started_at, ended_at from company_iterations order by idx")]
     sprint_idx = {r[1]: r[0] + ioff for r in c.execute("select idx, sprint_id from company_iterations")}
+    for r in c.execute("select idx, goal, status from company_backlog order by idx"):
+        backlog.append(dict(idx=r[0], goal=(r[1] or "")[:2000], status=r[2] or ""))
     for r in c.execute("select sprint_id, node_id, phase, accepted, reason from node_results order by created_at"):
         idx = sprint_idx.get(r[0])
         if idx is not None:
@@ -77,7 +85,7 @@ except Exception as e:
 now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 for j, e in enumerate(json.loads(os.environ.get("EXTRA_EVENTS_JSON") or "[]")):
     evs.append(dict(seq=1000000 + int(time.time()) % 100000000 + j, kind=e["kind"], data=e.get("data", {}), ts=now))
-print(json.dumps(dict(runner_token=tok, status=status, last_verdict=verdict, summary=summary, iterations=its, events=evs, nodes=nodes)))
+print(json.dumps(dict(runner_token=tok, status=status, last_verdict=verdict, summary=summary, iterations=its, events=evs, nodes=nodes, backlog=backlog)))
 PY
   jpost "/api/companies/$1/report" "$f" >/dev/null; rm -f "$f"
 }

@@ -12,26 +12,29 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Check if version changed
-        id: ver
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            OLD=$(git show HEAD~1:lex.toml 2>/dev/null | grep '^version' | head -1 || echo "")
-            NEW=$(grep '^version' lex.toml | head -1)
-            [ "$OLD" != "$NEW" ] && echo "changed=true" >> $GITHUB_OUTPUT \
-                                  || echo "changed=false" >> $GITHUB_OUTPUT
-          fi
+      # No version-string gate here on purpose. There used to be one, keyed off
+      # whether lex.toml's `version` changed between commits, and it silently
+      # no-op'd every push: real commits land without touching `version`, so it
+      # always evaluated false while the job still reported success in under
+      # 10s. lex-schema#38 removed the identical gate first; this is the
+      # follow-up that PR called for.
+      #
+      # Note what removing it actually buys, measured on lex-schema's runs
+      # rather than assumed: a publish of an ALREADY-published version does not
+      # no-op, it returns 409 after roughly an hour, and every publish run --
+      # success or failure -- takes 26 to 62 minutes. So this workflow is now
+      # honest but slow, and it will go red on any push to main that does not
+      # bump the version. Bump `version` in the same PR as any change you want
+      # published. (lex-schema#38 claimed republishing was "safe and
+      # idempotent" because the store is content-addressed; the 409s show that
+      # is not what the registry does.)
 
       - name: Install lex
-        if: steps.ver.outputs.changed == 'true'
         run: |
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v0.11.5/lex-v0.11.5-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin
 
       - name: Mint JWT + publish
-        if: steps.ver.outputs.changed == 'true'
         env:
           LEXHUB_ADMIN_SECRET: ${{ secrets.LEXHUB_ADMIN_SECRET }}
         run: |
@@ -42,7 +45,6 @@ jobs:
           lex pkg publish --registry https://vcs.lexlang.org --token "$JWT"
 
       - name: Set visibility public
-        if: steps.ver.outputs.changed == 'true'
         env:
           LEXHUB_ADMIN_SECRET: ${{ secrets.LEXHUB_ADMIN_SECRET }}
         run: |

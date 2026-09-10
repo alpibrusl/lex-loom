@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# jt3-run-on-gram.sh -- drive lex-loom#415 step 3 on the KVM host (`gram`):
+# jt3-run-on-kvm-host.sh -- drive lex-loom#415 step 3 on a KVM host (ssh alias in HOST):
 # a whole ResearchCo company inside one lex-os box.
 #   1. (optional) check out and build a lex-os ref there (LEXOS_REF; the
 #      machine-config knob landed in lex-os#107)
@@ -7,10 +7,10 @@
 #      loom's research manifest and the contract goal
 #   3. build the company rootfs once (FRESH_ROOTFS=1 to rebuild)
 #   4. run the company in the box and bring back what it wrote (evals/jt3/)
-#   HOST=gram MODEL_HOST=<mac>:4000 LEXOS_REF=main bin/jt3-run-on-gram.sh
+#   HOST=<kvm-host> MODEL_HOST=<mac>:4000 LEXOS_REF=main bin/jt3-run-on-kvm-host.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-HOST="${HOST:-gram}"
+HOST="${HOST:?HOST is required: the ssh alias of your KVM host}"
 MODEL_HOST="${MODEL_HOST:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1):4000}"
 MODEL_NAME="${MODEL_NAME:-qwen3.8:27b-mlx}"
 GOAL_TOML="${GOAL_TOML:-$HOME/loom-companies/run2-awaiting-answer-archive/researchco.company.toml}"

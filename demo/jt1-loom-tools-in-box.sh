@@ -16,7 +16,7 @@
 #
 # Inputs (env): LEX_OS_ROOT (default ~/Workspace/alpibrusl/lex-os), JT_DIR (the
 # dir holding research-manifest.json, old-shape-manifest.json and bin/, default
-# /tmp/jt1), MODEL_HOST (host:port of LiteLLM, default 192.168.1.165:4000),
+# /tmp/jt1), MODEL_HOST (host:port of LiteLLM, required),
 # MODEL_NAME (default qwen3.8:27b-mlx), FRESH_ROOTFS=1 to rebuild the loom rootfs.
 #
 # The guest has no resolver: /etc/hosts in the loom rootfs carries the
@@ -27,7 +27,7 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo): the loop mount and the jailer need it" >&2; exit 2; }
 LEX_OS_ROOT="${LEX_OS_ROOT:-/home/${SUDO_USER:-$USER}/Workspace/alpibrusl/lex-os}"
 JT_DIR="${JT_DIR:-/tmp/jt1}"
-MODEL_HOST="${MODEL_HOST:-192.168.1.165:4000}"
+MODEL_HOST="${MODEL_HOST:?MODEL_HOST is required: host:port of the LiteLLM the box may reach}"
 MODEL_NAME="${MODEL_NAME:-qwen3.8:27b-mlx}"
 PY_URL="${PY_URL:-https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz}"
 ASSETS="$LEX_OS_ROOT/demo/assets"

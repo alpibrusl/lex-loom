@@ -10,7 +10,7 @@
 # then runs with no GitHub egress); lex-os's guest inits + agent; and
 # /etc/hosts pinned to the grant's hosts (the guest has no resolver).
 #
-# Inputs in JT_DIR (default /tmp/jt3), shipped by bin/jt3-run-on-gram.sh:
+# Inputs in JT_DIR (default /tmp/jt3), shipped by bin/jt3-run-on-kvm-host.sh:
 #   loom.tgz, packages.tgz. Env: LEX_OS_ROOT, LEX_VERSION (default 0.10.17),
 #   FRESH_ROOTFS=1 to rebuild.
 set -euo pipefail

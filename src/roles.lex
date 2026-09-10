@@ -871,7 +871,7 @@ fn ollama_url() -> [env] Str {
 # LOOM_PROVIDER wins; an MLX_URL selects the local MLX server; otherwise
 # LiteLLM. An unrecognised LOOM_PROVIDER value is not silently "something":
 # it defers to the default, and the startup line shows what was chosen.
-fn choose_provider(override :: Str, mlx_url :: Str) -> Str
+fn choose_provider(override :: Str, mlx_endpoint :: Str) -> Str
   examples {
     choose_provider("", "") => "litellm",
     choose_provider("ollama", "") => "ollama",
@@ -891,7 +891,7 @@ fn choose_provider(override :: Str, mlx_url :: Str) -> Str
     "openai" => "openai",
     "google" => "google",
     "mistral" => "mistral",
-    _ => if key_is_set(mlx_url) {
+    _ => if key_is_set(mlx_endpoint) {
       "mlx"
     } else {
       "litellm"

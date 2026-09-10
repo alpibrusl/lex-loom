@@ -63,6 +63,8 @@ maxit = get("policy", "max_iterations", 12)
 budg  = get("policy", "budget_eur", None)
 founding = "1" if get("policy", "founding", False) else ""
 repo  = get("infra", "repo", "")
+iac_allow_list = get("infra", "iac_allow", [])
+iac_allow = ",".join(str(x) for x in iac_allow_list) if isinstance(iac_allow_list, list) else str(iac_allow_list)
 revenue_url = get("finance", "revenue_url", "")
 
 # [soft] (SA1, lex-loom#178): declarative only -- a mesh node URL, this
@@ -131,6 +133,7 @@ out = {
     "CMODEL": model, "CMAXIT": str(maxit), "CREPO": repo,
     "CBUDGET": "" if budg is None else str(budg),
     "CFOUNDING": founding,
+    "CIAC_ALLOW": iac_allow,
     "CREVENUE_URL": revenue_url,
     "CSOFT_MESH_URL": soft_mesh_url, "CSOFT_ORG_ID": soft_org_id, "CSOFT_ROLES": soft_roles,
     "CSOFT_SETTLEMENT": soft_settlement,
@@ -328,6 +331,6 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" COMPANY_PATH="$CPATH" \
-  MODEL_OVERRIDES="$CMODEL_OVERRIDES" FOUNDING="$CFOUNDING" \
+  MODEL_OVERRIDES="$CMODEL_OVERRIDES" FOUNDING="$CFOUNDING" LOOM_IAC_ALLOW="$CIAC_ALLOW" \
   bin/run-company.sh
 

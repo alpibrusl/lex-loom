@@ -60,6 +60,19 @@ fn test_every_grant_reaches_the_model_and_nothing_else_by_default() -> Result[Un
   }
 }
 
+# The deploy grant (lex-iac plan gate): facets.infra names the verbs, the
+# provider and the host; the default never admits a delete or replace; an
+# override CSV replaces the list.
+fn test_deploy_grant_carries_the_infra_facet() -> Result[Unit, Str] {
+  let g := manifests.deploy_grant_json("s1", "", "203.0.113.9")
+  let narrow := manifests.deploy_grant_json("s1", "hetzner.host.update, docker.compose.create", "203.0.113.9")
+  if str.contains(g, "\"facets\":{\"infra\":{\"allow\":[\"hetzner.host.update\",\"docker.compose.create\",\"host.port.create\",\"caddy.site.create\"]") and str.contains(g, "\"providers\":[\"alpibrusl/loom\"]") and str.contains(g, "\"scope\":{\"host\":\"203.0.113.9\"}") and not str.contains(g, "delete") and not str.contains(g, "replace") and str.contains(narrow, "\"allow\":[\"hetzner.host.update\",\"docker.compose.create\"]") and not str.contains(narrow, "caddy") {
+    Ok(())
+  } else {
+    Err(str.concat("deploy grant facet wrong: ", g))
+  }
+}
+
 fn test_scribe_gets_no_exec() -> Result[Unit, Str] {
   has_exec("scribe", "scribe", "None")
 }
@@ -202,7 +215,7 @@ fn test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo
 }
 
 fn suite() -> List[Result[Unit, Str]] {
-  [test_build_gets_sandboxed_exec(), test_py_build_gets_sandboxed_exec(), test_fe_build_gets_sandboxed_exec(), test_qa_gets_sandboxed_exec(), test_py_qa_gets_sandboxed_exec(), test_security_gets_sandboxed_exec(), test_scribe_gets_no_exec(), test_research_roles_get_search_egress_and_sandboxed_exec(), test_every_grant_reaches_the_model_and_nothing_else_by_default(), test_unmapped_role_defaults_to_no_exec(), test_unmapped_role_defaults_to_readonly_fs(), test_build_gets_readwrite_fs(), test_qa_gets_readonly_fs(), test_preset_name_for_kind_matches_build(), test_preset_name_for_kind_matches_qa(), test_preset_name_for_kind_unmapped_falls_back_to_demo(), test_manifest_json_for_kind_matches_preset_composition(), test_parse_isolation_overrides_empty_string(), test_parse_isolation_overrides_parses_pairs(), test_parse_isolation_overrides_skips_malformed_segments(), test_preset_for_kind_with_overrides_honors_override(), test_preset_for_kind_with_overrides_falls_back_without_override(), test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo()]
+  [test_build_gets_sandboxed_exec(), test_py_build_gets_sandboxed_exec(), test_fe_build_gets_sandboxed_exec(), test_qa_gets_sandboxed_exec(), test_py_qa_gets_sandboxed_exec(), test_security_gets_sandboxed_exec(), test_scribe_gets_no_exec(), test_deploy_grant_carries_the_infra_facet(), test_research_roles_get_search_egress_and_sandboxed_exec(), test_every_grant_reaches_the_model_and_nothing_else_by_default(), test_unmapped_role_defaults_to_no_exec(), test_unmapped_role_defaults_to_readonly_fs(), test_build_gets_readwrite_fs(), test_qa_gets_readonly_fs(), test_preset_name_for_kind_matches_build(), test_preset_name_for_kind_matches_qa(), test_preset_name_for_kind_unmapped_falls_back_to_demo(), test_manifest_json_for_kind_matches_preset_composition(), test_parse_isolation_overrides_empty_string(), test_parse_isolation_overrides_parses_pairs(), test_parse_isolation_overrides_skips_malformed_segments(), test_preset_for_kind_with_overrides_honors_override(), test_preset_for_kind_with_overrides_falls_back_without_override(), test_manifest_json_for_kind_with_overrides_mistyped_preset_falls_back_to_demo()]
 }
 
 fn run_all() -> Unit {

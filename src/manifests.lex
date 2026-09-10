@@ -49,7 +49,49 @@ fn manifest_json(goal :: Str, filesystem :: Str, network :: Str, exec_level :: S
 }
 
 fn manifest_json_with_egress(goal :: Str, filesystem :: Str, network :: Str, exec_level :: Str, floor :: Str, wall :: Int, cmds :: Int, money :: Int, api_calls :: Int, egress :: List[Str]) -> Str {
-  str.join(["{\"goal\":{\"description\":\"", goal, "\"},", "\"grant\":{\"filesystem\":\"", filesystem, "\",\"network\":\"", network, "\",\"exec\":\"", exec_level, "\"},", "\"budget\":{\"wall_clock_secs\":", int.to_str(wall), ",", "\"max_commands\":", int.to_str(cmds), ",", "\"max_money_cents\":", int.to_str(money), ",", "\"max_api_calls\":", int.to_str(api_calls), "},", "\"isolation_floor\":\"", floor, "\",\"egress\":", egress_json(egress), "}"], "")
+  manifest_json_full(goal, filesystem, network, exec_level, floor, wall, cmds, money, api_calls, egress, "")
+}
+
+# `facets_json` is an optional extra top-level facet block (lex-iac reads
+# `facets.infra`); empty means none.
+fn manifest_json_full(goal :: Str, filesystem :: Str, network :: Str, exec_level :: Str, floor :: Str, wall :: Int, cmds :: Int, money :: Int, api_calls :: Int, egress :: List[Str], facets_json :: Str) -> Str {
+  str.join(["{\"goal\":{\"description\":\"", goal, "\"},", "\"grant\":{\"filesystem\":\"", filesystem, "\",\"network\":\"", network, "\",\"exec\":\"", exec_level, "\"},", "\"budget\":{\"wall_clock_secs\":", int.to_str(wall), ",", "\"max_commands\":", int.to_str(cmds), ",", "\"max_money_cents\":", int.to_str(money), ",", "\"max_api_calls\":", int.to_str(api_calls), "},", "\"isolation_floor\":\"", floor, "\",\"egress\":", egress_json(egress), if str.is_empty(facets_json) {
+    ""
+  } else {
+    str.concat(",\"facets\":", facets_json)
+  }, "}"], "")
+}
+
+# ── The deploy grant: what a company's deploy may do to its host ─────────────
+# lex-iac holds the deploy's plan (bin/deploy_plan.py) against this grant
+# before anything reaches the server. The default ceiling for the Hetzner
+# path: update the one host, create the compose service, open its port,
+# and create a Caddy site when a domain is declared. Every verb is named
+# because lex-iac makes creates name their verb; nothing here admits a
+# delete or a replace of the host -- a deploy that would tear something
+# down is refused unless the company's manifest widened the list
+# ([infra] iac_allow, env LOOM_IAC_ALLOW).
+fn deploy_iac_allow_default() -> List[Str] {
+  ["hetzner.host.update", "docker.compose.create", "host.port.create", "caddy.site.create"]
+}
+
+fn deploy_iac_provider() -> Str {
+  "alpibrusl/loom"
+}
+
+# allow_csv: a comma-separated override of the allow list; empty = default.
+fn deploy_grant_json(sprint_id :: Str, allow_csv :: Str, host :: Str) -> Str {
+  let allow := if str.is_empty(str.trim(allow_csv)) {
+    deploy_iac_allow_default()
+  } else {
+    list.filter(list.map(str.split(allow_csv, ","), fn (a :: Str) -> Str {
+      str.trim(a)
+    }), fn (a :: Str) -> Bool {
+      not str.is_empty(a)
+    })
+  }
+  let facets := str.join(["{\"infra\":{\"allow\":", egress_json(allow), ",\"providers\":[\"", deploy_iac_provider(), "\"],\"scope\":{\"host\":\"", host, "\"}}}"], "")
+  manifest_json_full(str.concat("loom sprint ", str.concat(sprint_id, " — deploy to the company's host (Implementation grant)")), "ReadWrite", "Allowlist", "Sandboxed", "Gvisor", 3600, 500, 5000, 200, [litellm_egress()], facets)
 }
 
 fn design_manifest_json(sprint_id :: Str) -> Str {

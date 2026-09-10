@@ -58,7 +58,7 @@ cid   = get("identity", "id", required=True)
 name  = get("identity", "name", cid)
 goal  = get("identity", "mission", required=True)
 path  = get("stack", "path", required=True)
-model = get("stack", "model", "glm-5.2")
+model = get("stack", "model", required=True)
 maxit = get("policy", "max_iterations", 12)
 budg  = get("policy", "budget_eur", None)
 founding = "1" if get("policy", "founding", False) else ""

@@ -21,7 +21,13 @@ cd "$(dirname "$0")/.."
 UPDATE=0
 [ "${1:-}" = "--update" ] && UPDATE=1
 
-MODEL="${MODEL:-qwen3.8:27b-mlx}"
+MODEL="${MODEL:-}"
+# No default model: naming one is the operator's decision. STUB_RATE mode never
+# reaches a model (demo/ev1-eval-suite-roundtrip.sh, which CI runs, uses it), so
+# only a real run has to name one.
+if [ -z "$MODEL" ] && [ -z "${STUB_RATE:-}" ]; then
+  echo "FATAL: MODEL is required for a real eval run (there is no default model)." >&2; exit 2
+fi
 TOLERANCE="${TOLERANCE:-1}"
 SUITE=evals/suite.tsv
 BASELINE=evals/baseline.tsv

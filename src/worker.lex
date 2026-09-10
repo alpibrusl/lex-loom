@@ -37,7 +37,7 @@
 #
 # Environment:
 #   DB_PATH      — SQLite / Postgres connection (default: loom.db)
-#   MODEL        — fallback LLM model name (default: defaults.model() — src/defaults.lex)
+#   MODEL        — LLM model name (REQUIRED; no default — src/defaults.lex)
 #   POLL_MS      — queue poll interval in ms (default: 500)
 #   WORKER_ID    — this worker's name in logs + trail attribution
 #                  (default: a fresh random "w-<hex>")
@@ -344,7 +344,7 @@ fn poll_loop(db :: conn.ConnDb, queue :: Str, poll_ms :: Int, model :: Str, prov
 
 fn run_worker() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := get_env("DB_PATH", "loom.db")
-  let model := get_env("MODEL", defaults.model())
+  let model := defaults.resolved_model()
   let poll_ms := match str.to_int(get_env("POLL_MS", "500")) {
     None => 500,
     Some(n) => n,

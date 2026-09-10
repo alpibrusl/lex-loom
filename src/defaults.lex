@@ -29,20 +29,28 @@ fn get_env(key :: Str, default :: Str) -> [env] Str {
   }
 }
 
-fn model() -> Str
-  examples {
-    model() => "qwen3.8:27b-mlx"
-  }
-{
-  "qwen3.8:27b-mlx"
+# The ONE resolution chain for a bare invocation's model: MODEL, then the
+# legacy OLLAMA_MODEL, then NOTHING. There is deliberately no fallback model
+# here any more. A default meant that forgetting to set MODEL did not fail --
+# it quietly ran somebody else's model, billed somebody's key, on a name the
+# operator never chose. That is the same failure #427 removed for providers
+# (an ambient MISTRAL_API_KEY sent prod ResearchCo to Mistral), and the model
+# deserves the same rule: it is a named decision or it is nothing.
+#
+# The empty string means "not chosen". Callers must refuse rather than
+# substitute; bin/run-company.sh and bin/bootstrap-company.sh refuse first,
+# before any Lex runs, so the usual paths never reach here unset.
+fn resolved_model() -> [env] Str {
+  get_env("MODEL", get_env("OLLAMA_MODEL", ""))
 }
 
-# The ONE resolution chain for a bare invocation's model: MODEL, then the
-# legacy OLLAMA_MODEL, then the fallback above. main.lex's three entry
-# points and dump-config (#247) all call this — the dump explains the very
-# resolution the runtime performs, because it IS the runtime's resolution.
-fn resolved_model() -> [env] Str {
-  get_env("MODEL", get_env("OLLAMA_MODEL", model()))
+fn model_is_set(m :: Str) -> Bool
+  examples {
+    model_is_set("kimi-k2.7-code") => true,
+    model_is_set("") => false
+  }
+{
+  not str.is_empty(m)
 }
 
 # The one resolution for EXEC_MODE ("inline" unless the environment says

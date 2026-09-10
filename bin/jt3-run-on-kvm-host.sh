@@ -12,7 +12,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 HOST="${HOST:?HOST is required: the ssh alias of your KVM host}"
 MODEL_HOST="${MODEL_HOST:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1):4000}"
-MODEL_NAME="${MODEL_NAME:-qwen3.8:27b-mlx}"
+MODEL_NAME="${MODEL_NAME:-}"
+if [ -z "$MODEL_NAME" ]; then
+  echo "FATAL: MODEL_NAME is required (there is no default model)." >&2; exit 2
+fi
 GOAL_TOML="${GOAL_TOML:-$HOME/loom-companies/run2-awaiting-answer-archive/researchco.company.toml}"
 W="$(mktemp -d "${TMPDIR:-/tmp}/loom-jt3.XXXXXX")"; trap 'rm -rf "$W"' EXIT
 unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }

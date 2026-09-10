@@ -25,10 +25,7 @@ import "lex-llm/src/delta" as d
 import "./defaults" as defaults
 
 fn check_model() -> [env, io, net, llm, proc, approval] Unit {
-  let model_name := match env.get("OLLAMA_MODEL") {
-    Some(m) => m,
-    None => defaults.model(),
-  }
+  let model_name := defaults.resolved_model()
   let __p0 := io.print(str.concat("[debug] testing model: ", model_name))
   let provider := providers.ollama_local()
   let model := prov.ollama(model_name)

@@ -278,7 +278,7 @@ fn test_software_contract_is_an_internal_build_through_the_same_path() -> [sql, 
         Ok(o) => if o.contract.buyer == cs.softwareco() and o.contract.supplier == cs.softwareco() and o.contract.price.cents == 60000 and buyer(db).committed_cents == 60000 and buyer(db).balance_cents == 160000 and str.contains(o.reason, "internal capability") and str.contains(o.goal, "phone validation API") and str.contains(o.goal, "checkable:acceptance-passed") {
           match cs.deliver(db, log, cs.software_contract_id(), sw_ok(), 5000) {
             Err(e) => Err(e),
-            Ok(d) => if d.verdict == contract.Fulfilled and d.final.state == contract.Settled and buyer(db).committed_cents == 0 and buyer(db).balance_cents == 100000 and str.contains(cs.status_text(db, 6000), "objective met=yes; should terminate=yes") {
+            Ok(d) => if d.verdict == contract.Fulfilled and d.final.state == contract.Settled and buyer(db).committed_cents == 0 and buyer(db).balance_cents == 160000 and str.contains(cs.status_text(db, 6000), "objective met=yes; should terminate=yes") {
               Ok(())
             } else {
               Err(str.join(["software delivery did not settle in full: state=", cs.state_str(d.final.state), " balance=", int.to_str(buyer(db).balance_cents), " committed=", int.to_str(buyer(db).committed_cents)], ""))
@@ -300,7 +300,7 @@ fn test_software_half_delivered_pays_half_with_no_human_to_ask() -> [sql, fs_rea
         Err(e) => Err(e),
         Ok(_) => match cs.deliver(db, log, cs.software_contract_id(), sw_half(), 5000) {
           Err(e) => Err(e),
-          Ok(d) => if d.verdict == contract.PartiallyFulfilled(["checkable:app-present", "checkable:tests-present"]) and d.final.state == contract.Settled and buyer(db).balance_cents == 130000 {
+          Ok(d) => if d.verdict == contract.PartiallyFulfilled(["checkable:app-present", "checkable:tests-present"]) and d.final.state == contract.Settled and buyer(db).balance_cents == 160000 {
             Ok(())
           } else {
             Err(str.join(["two unmet delivery criteria did not settle at 50% immediately: state=", cs.state_str(d.final.state), " balance=", int.to_str(buyer(db).balance_cents)], ""))

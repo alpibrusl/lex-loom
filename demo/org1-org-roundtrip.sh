@@ -16,6 +16,10 @@
 # Run from the repo root:  bash demo/org1-org-roundtrip.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# There is no default model any more, so this demo names one like any
+# operator would. Nothing here calls it: the model string only ends up in the
+# manifests/config this demo writes and checks.
+export MODEL="${MODEL:-kimi-k2.7-code}"
 
 EFFECTS="approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,time,vcs,stream"
 WS="$(mktemp -d "${TMPDIR:-/tmp}/loom-org1-demo.XXXXXX")"
@@ -36,6 +40,7 @@ mission = "Demonstrate reporting lines."
 
 [stack]
 path = "python-flask"
+model = "kimi-k2.7-code"
 
 [org]
 build = "eng_manager"

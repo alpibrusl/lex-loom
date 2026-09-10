@@ -7,6 +7,10 @@
 # human -> answer -> settlement by the 100/50/0 rule. No model, no network.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# There is no default model any more, so this demo names one like any
+# operator would. Nothing here calls it: the model string only ends up in the
+# manifests/config this demo writes and checks.
+export MODEL="${MODEL:-kimi-k2.7-code}"
 pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
@@ -69,7 +73,7 @@ if [[ "$out" == *"RESEARCH_REPORT_OK"* ]] && [[ "$out" == *"c-research-1 verifie
 
 echo "== 4. the founder says yes: settled in full by the freeze rule"
 out=$(ANSWER=yes NOTE='fund it' bin/consortium-run.sh answer 2>&1) || true
-if [[ "$out" == *"c-research-1 settled"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=0c"* ]] && [[ "$out" == *"should terminate=yes"* ]]; then ok "settled: 40000c paid, commitment cleared, run terminal"; else bad "yes did not settle 40000c: $out"; fi
+if [[ "$out" == *"c-research-1 settled"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=0c"* ]] && [[ "$out" == *"researchco: balance=140000c committed=0c"* ]] && [[ "$out" == *"should terminate=yes"* ]]; then ok "settled: 40000c left the buyer AND arrived at the supplier, commitment cleared, run terminal"; else bad "yes did not settle 40000c: $out"; fi
 out=$(ANSWER=no bin/consortium-run.sh answer 2>&1) || true
 case "$out" in *"answer FAILED"*) ok "a second answer on a settled contract is refused" ;; *) bad "a settled contract took another answer: $out" ;; esac
 
@@ -94,7 +98,7 @@ cp paths/python-fastapi/app.py "$SW/app.py"
 printf 'from fastapi import FastAPI\napp = FastAPI()\n\n@app.post("/validate")\ndef validate(row: dict):\n    return {"ok": True}\n' > "$SW/main.py"
 printf 'def test_validate_rejects_bad_row():\n    assert True\n' > "$SW/tests/test_validate.py"
 out=$(bin/consortium-run.sh deliver-software 2>&1) || true
-if [[ "$out" == *"SOFTWARE_DELIVERY_OK"* ]] && [[ "$out" == *"c-software-1 settled: fulfilled"* ]] && [[ "$out" == *"softwareco: balance=100000c committed=0c"* ]] && [[ "$out" == *"objective met=yes; should terminate=yes"* ]]; then ok "delivery verified from the trail (product in main.py, not app.py); settled in full; run 1 terminal"; else bad "deliver-software did not settle: $out"; fi
+if [[ "$out" == *"SOFTWARE_DELIVERY_OK"* ]] && [[ "$out" == *"c-software-1 settled: fulfilled"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=0c"* ]] && [[ "$out" == *"objective met=yes; should terminate=yes"* ]]; then ok "delivery verified from the trail (product in main.py, not app.py); settled in full; run 1 terminal"; else bad "deliver-software did not settle: $out"; fi
 
 echo "== 4d. sabotage: a workspace still holding the skeleton's app.py is half a delivery"
 rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"
@@ -111,7 +115,7 @@ c.commit()
 PY
 cp paths/python-fastapi/app.py "$SW/app.py"; cp paths/python-fastapi/tests/test_app.py "$SW/tests/test_app.py"
 out=$(bin/consortium-run.sh deliver-software 2>&1) || true
-if [[ "$out" == *"partially fulfilled; unmet: checkable:app-present, checkable:tests-present"* ]] && [[ "$out" == *"softwareco: balance=130000c committed=0c"* ]]; then ok "skeleton-only workspace pays 50%: the trail said passed, the workspace says nothing was built"; else bad "a skeleton-only workspace was paid in full: $out"; fi
+if [[ "$out" == *"partially fulfilled; unmet: checkable:app-present, checkable:tests-present"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=0c"* ]]; then ok "skeleton-only workspace pays 50%: the trail said passed, the workspace says nothing was built"; else bad "a skeleton-only workspace was paid in full: $out"; fi
 
 echo "== 5. a report the gate refuses (sabotage: sources outside the ledger) pays nothing"
 rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"

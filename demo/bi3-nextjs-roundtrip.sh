@@ -19,6 +19,10 @@
 # Run from the repo root:  bash demo/bi3-nextjs-roundtrip.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# There is no default model any more, so this demo names one like any
+# operator would. Nothing here calls it: the model string only ends up in the
+# manifests/config this demo writes and checks.
+export MODEL="${MODEL:-kimi-k2.7-code}"
 
 pass=0
 fail=0
@@ -46,6 +50,7 @@ mission = "Prove the Next.js bootstrap-install path end to end."
 
 [stack]
 path = "nextjs"
+model = "kimi-k2.7-code"
 
 [policy]
 max_iterations = 1

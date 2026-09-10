@@ -786,9 +786,78 @@ fn make_run_code_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   })
 }
 
-# ── Provider helpers ──────────────────────────────────────────────────────────
-fn make_ollama_provider() -> [env] prov.Provider {
-  let base := match env.get("OLLAMA_URL") {
+# ── Provider selection ──────────────────────────────────────────────────────
+#
+# ONE decision, made by `choose_provider` (pure, tested) and executed by
+# `make_provider`. The default is LiteLLM at LITELLM_BASE_URL (or
+# localhost:4000) in front of a local model; anything else must be NAMED
+# with LOOM_PROVIDER: ollama | opencode | litellm | mlx | vertex | anthropic |
+# openai | google | mistral.
+#
+# It used to be a fall-through over whatever vendor keys the environment
+# happened to carry (Vertex, Anthropic, OpenAI, Google, Mistral, in that
+# order). The production runner's shell exported MISTRAL_API_KEY for an
+# unrelated tool, so the company the founder queued for the local model
+# went to Mistral with a model id Mistral has never heard of, every call
+# returned HTTP 400, and the dashboard said "unparseable strategist reply"
+# three seconds in. An ambient credential must never decide where a
+# company's model calls go: the operator names the provider, or gets the
+# documented default and a preflight that proves it answers (#427).
+#
+# MLX_URL is kept as a selector because it names an endpoint, not a
+# credential: setting it is the operator saying "this local server".
+fn make_provider() -> [env] prov.Provider {
+  match provider_name() {
+    "ollama" => make_ollama_provider(),
+    "opencode" => providers.opencode_go(),
+    "mlx" => providers.mlx_at(mlx_url()),
+    "vertex" => make_vertex_provider(),
+    "anthropic" => providers.anthropic(),
+    "openai" => providers.openai(),
+    "google" => providers.google(),
+    "mistral" => providers.mistral(),
+    _ => providers.litellm(),
+  }
+}
+
+# The resolved provider name, for the startup line and the preflight — the
+# same call make_provider dispatches on, so what is printed is what runs.
+fn provider_name() -> [env] Str {
+  let override := match env.get("LOOM_PROVIDER") {
+    Some(v) => v,
+    None => "",
+  }
+  choose_provider(override, mlx_url())
+}
+
+# Where the resolved provider will be dialled, for the startup line and the
+# preflight. Only the local/proxy providers have an operator-visible
+# endpoint; a vendor provider is identified by its name alone.
+fn provider_endpoint() -> [env] Str {
+  match provider_name() {
+    "litellm" => match env.get("LITELLM_BASE_URL") {
+      Some(u) => if str.is_empty(u) {
+        "http://localhost:4000"
+      } else {
+        u
+      },
+      None => "http://localhost:4000",
+    },
+    "ollama" => ollama_url(),
+    "mlx" => mlx_url(),
+    _ => "",
+  }
+}
+
+fn mlx_url() -> [env] Str {
+  match env.get("MLX_URL") {
+    Some(u) => str.trim(u),
+    None => "",
+  }
+}
+
+fn ollama_url() -> [env] Str {
+  match env.get("OLLAMA_URL") {
     Some(u) => if str.is_empty(u) {
       "http://localhost:11434"
     } else {
@@ -796,7 +865,42 @@ fn make_ollama_provider() -> [env] prov.Provider {
     },
     None => "http://localhost:11434",
   }
-  providers.ollama_at(base)
+}
+
+# The decision, pure so it can be asserted on any machine: an explicit
+# LOOM_PROVIDER wins; an MLX_URL selects the local MLX server; otherwise
+# LiteLLM. An unrecognised LOOM_PROVIDER value is not silently "something":
+# it defers to the default, and the startup line shows what was chosen.
+fn choose_provider(override :: Str, mlx_url :: Str) -> Str
+  examples {
+    choose_provider("", "") => "litellm",
+    choose_provider("ollama", "") => "ollama",
+    choose_provider(" Mistral ", "") => "mistral",
+    choose_provider("", "http://localhost:8082") => "mlx",
+    choose_provider("litellm", "http://localhost:8082") => "litellm",
+    choose_provider("not-a-provider", "") => "litellm"
+  }
+{
+  match str.to_lower(str.trim(override)) {
+    "ollama" => "ollama",
+    "opencode" => "opencode",
+    "litellm" => "litellm",
+    "mlx" => "mlx",
+    "vertex" => "vertex",
+    "anthropic" => "anthropic",
+    "openai" => "openai",
+    "google" => "google",
+    "mistral" => "mistral",
+    _ => if key_is_set(mlx_url) {
+      "mlx"
+    } else {
+      "litellm"
+    },
+  }
+}
+
+fn make_ollama_provider() -> [env] prov.Provider {
+  providers.ollama_at(ollama_url())
 }
 
 fn make_vertex_provider() -> [env] prov.Provider {
@@ -819,76 +923,6 @@ fn make_vertex_provider() -> [env] prov.Provider {
   vtx.make_provider(vtx.config_at(api_key, project, location))
 }
 
-# Provider priority: MLX > LiteLLM > Vertex AI > Anthropic > OpenAI > Google > Mistral > Ollama
-# MLX (local, Apple Silicon via mlx_lm.server) is selected when MLX_URL is set,
-# e.g. http://localhost:8082 — or http://host.docker.internal:8082 from a container.
-# LiteLLM is selected when LITELLM_BASE_URL is set (default: http://localhost:4000).
-# Vertex AI is selected when VERTEX_ACCESS_TOKEN and VERTEX_PROJECT are both set.
-fn make_provider() -> [env] prov.Provider {
-  let override := match env.get("LOOM_PROVIDER") {
-    Some(v) => str.to_lower(str.trim(v)),
-    None => "",
-  }
-  match override {
-    "ollama" => make_ollama_provider(),
-    "opencode" => providers.opencode_go(),
-    "litellm" => providers.litellm(),
-    _ => make_provider_by_env(),
-  }
-}
-
-fn make_provider_by_env() -> [env] prov.Provider {
-  match env.get("MLX_URL") {
-    Some(u) => if str.is_empty(u) {
-      make_provider_no_mlx()
-    } else {
-      providers.mlx_at(u)
-    },
-    None => make_provider_no_mlx(),
-  }
-}
-
-fn make_provider_no_mlx() -> [env] prov.Provider {
-  match env.get("LITELLM_BASE_URL") {
-    Some(url) => if str.is_empty(url) {
-      make_provider_no_litellm()
-    } else {
-      providers.litellm()
-    },
-    None => make_provider_no_litellm(),
-  }
-}
-
-fn make_provider_no_litellm() -> [env] prov.Provider {
-  match env.get("VERTEX_ACCESS_TOKEN") {
-    Some(k) => if str.is_empty(k) {
-      make_provider_no_vertex()
-    } else {
-      match env.get("VERTEX_PROJECT") {
-        Some(p) => if str.is_empty(p) {
-          make_provider_no_vertex()
-        } else {
-          make_vertex_provider()
-        },
-        None => make_provider_no_vertex(),
-      }
-    },
-    None => make_provider_no_vertex(),
-  }
-}
-
-fn make_openai_provider() -> [env] prov.Provider {
-  providers.openai()
-}
-
-fn make_google_provider() -> [env] prov.Provider {
-  providers.google()
-}
-
-fn make_mistral_provider() -> [env] prov.Provider {
-  providers.mistral()
-}
-
 # Trimmed, because a credentials file holding only a newline is not a key.
 # run-company.sh pipes ~/.credentials/opencode/key through verbatim, so an
 # empty-but-not-zero-length file selected a provider that then returned an
@@ -896,93 +930,6 @@ fn make_mistral_provider() -> [env] prov.Provider {
 # "unparseable strategist reply" rather than as a missing credential.
 fn key_is_set(k :: Str) -> Bool {
   str.len(str.trim(k)) > 0
-}
-
-fn make_provider_no_vertex() -> [env] prov.Provider {
-  match env.get("ANTHROPIC_API_KEY") {
-    Some(k) => if key_is_set(k) {
-      providers.anthropic()
-    } else {
-      make_provider_no_anthropic()
-    },
-    None => make_provider_no_anthropic(),
-  }
-}
-
-fn make_provider_no_anthropic() -> [env] prov.Provider {
-  match env.get("OPENAI_API_KEY") {
-    Some(k) => if key_is_set(k) {
-      make_openai_provider()
-    } else {
-      make_provider_no_openai()
-    },
-    None => make_provider_no_openai(),
-  }
-}
-
-fn make_provider_no_openai() -> [env] prov.Provider {
-  match env.get("GOOGLE_API_KEY") {
-    Some(k) => if key_is_set(k) {
-      make_google_provider()
-    } else {
-      make_provider_no_google()
-    },
-    None => make_provider_no_google(),
-  }
-}
-
-fn make_provider_no_google() -> [env] prov.Provider {
-  match env.get("MISTRAL_API_KEY") {
-    Some(k) => if key_is_set(k) {
-      make_mistral_provider()
-    } else {
-      make_provider_no_mistral()
-    },
-    None => make_provider_no_mistral(),
-  }
-}
-
-# LOOM_PROVIDER names the provider outright. Without it, merely HAVING an
-# opencode key on disk made a local ollama run impossible: run-company.sh
-# loads ~/.credentials/opencode/key into OPENCODE_API_KEY whenever it is
-# unset, and this function then prefers opencode whenever that variable is
-# non-empty. There was no way to say "use the local model" short of moving
-# the operator's credential file.
-# The decision, separated from the effects so it can be tested without a
-# network call or a mutable environment: std.env is read-only, so a test that
-# went through make_provider could only observe whatever the machine happens
-# to have configured.
-fn choose_provider(override :: Str, opencode_key :: Str) -> Str {
-  match str.to_lower(str.trim(override)) {
-    "ollama" => "ollama",
-    "opencode" => "opencode",
-    "litellm" => "litellm",
-    _ => if key_is_set(opencode_key) {
-      "opencode"
-    } else {
-      "litellm"
-    },
-  }
-}
-
-# The DEFAULT is LiteLLM in front of ollama, and an unconfigured default is a
-# failure rather than a silent substitution. Falling back used to mean a run
-# quietly executed against a different model than the operator believed, which
-# is the same class of problem as a gate reporting a cause that is not true.
-#
-# An explicit LOOM_PROVIDER still wins -- including over LITELLM_BASE_URL,
-# which the previous placement of this check did not, because it sat at the end
-# of the provider chain rather than the front.
-fn make_provider_no_mistral() -> [env] prov.Provider {
-  let key := match env.get("OPENCODE_API_KEY") {
-    Some(v) => v,
-    None => "",
-  }
-  match choose_provider("", key) {
-    "opencode" => providers.opencode_go(),
-    "ollama" => make_ollama_provider(),
-    _ => providers.litellm(),
-  }
 }
 
 # Construct a tool from its canonical name. The inverse of `tool.name`; the only

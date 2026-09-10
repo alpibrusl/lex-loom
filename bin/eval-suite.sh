@@ -38,8 +38,9 @@ if [ "$busy" -gt 0 ]; then
   exit 1
 fi
 
-PROVIDER="${LOOM_PROVIDER:-${LITELLM_BASE_URL:+litellm}}"
-PROVIDER="${PROVIDER:-default}"
+# The label matches the runtime decision (#427): LiteLLM unless named.
+PROVIDER="${LOOM_PROVIDER:-${MLX_URL:+mlx}}"
+PROVIDER="${PROVIDER:-litellm}"
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="evals/results/$STAMP.tsv"

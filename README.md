@@ -66,6 +66,19 @@ git clone https://github.com/alpibrusl/lex-loom
 cd lex-loom
 ```
 
+### Which provider runs
+
+The provider is a named decision, never an ambient one. The default is
+LiteLLM at `LITELLM_BASE_URL` (or `http://localhost:4000`) in front of a local
+model; anything else is selected with `LOOM_PROVIDER=ollama|opencode|mlx|vertex|anthropic|openai|google|mistral`
+(`MLX_URL` alone also selects the local MLX server, since it names an
+endpoint). A vendor key in the environment selects nothing on its own: a
+shell that happened to export `MISTRAL_API_KEY` for another tool once sent a
+company queued for the local model to Mistral, where every call was HTTP 400.
+Every run prints `[company] provider=… endpoint=… model=…` first, and
+`bin/check-company-env.sh` (run by bootstrap) reads the same decision from
+`src/main.lex provider_cmd` and refuses to start unless that provider answers.
+
 ### With Vertex AI (Gemini 3.5 Flash)
 
 ```bash
@@ -74,6 +87,7 @@ gcloud auth login
 
 # Set up .env
 cat > .env <<EOF
+LOOM_PROVIDER=vertex
 VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
 VERTEX_PROJECT=your-gcp-project-id
 EOF
@@ -90,6 +104,7 @@ docker compose up -d
 
 ```bash
 cat > .env <<EOF
+LOOM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 EOF
 GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
@@ -180,12 +195,12 @@ LITELLM_BASE_URL=http://localhost:4000 MODEL=qwen3.8:27b-mlx \
 
 ### With Ollama (native API, fallback)
 
-The native Ollama adapter is used automatically when no cloud keys or `LITELLM_BASE_URL` are set. It uses the Ollama `/api/chat` wire format with an XML-based tool parser — functional but less reliable than LiteLLM for complex tool schemas.
+Name it with `LOOM_PROVIDER=ollama` (it is never selected by default). It uses the Ollama `/api/chat` wire format with an XML-based tool parser — functional but less reliable than LiteLLM for complex tool schemas.
 
 ```bash
 touch .env
 GITHUB_TOKEN=your-token docker build --secret id=github_token,env=GITHUB_TOKEN -t lex-loom .
-OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3.8:27b-mlx \
+LOOM_PROVIDER=ollama OLLAMA_URL=http://host.docker.internal:11434 OLLAMA_MODEL=qwen3.8:27b-mlx \
   docker compose up -d
 ```
 

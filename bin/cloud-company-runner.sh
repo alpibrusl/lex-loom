@@ -66,6 +66,15 @@ open(path, "w").write(toml)
 PY
   report "$uuid" '{"status":"running","summary":"research contract awarded; ResearchCo running"}'
   bin/consortium-run.sh research > "$ws/research.log" 2>&1 || true
+  # A company that never started (preflight refused it: no provider, model
+  # not routed, key unset) has no company.db to report from; say why here
+  # instead of "delivering" into a failure two steps later (#427).
+  if [ ! -f "$ws/researchco/company.db" ]; then
+    local why; why=$(command grep -E '^\s*FAIL |\[company\] FATAL|\[bootstrap\] preflight failed' "$ws/research.log" | head -3 | tr '\n' ' ' | cut -c1-300)
+    report "$uuid" "$(python3 -c 'import sys,json; print(json.dumps({"status":"failed","summary":"ResearchCo did not start: "+(sys.argv[1] or "see research.log")}))' "$why")"
+    echo "[runner] ResearchCo did not start: ${why:-see $ws/research.log}"
+    return
+  fi
   report_from_db "$uuid" "$ws/researchco/company.db" "running" "$(command grep -o 'last_verdict=[a-z]*' "$ws/research.log" | tail -1 | cut -d= -f2)" "ResearchCo finished; delivering"
   bin/consortium-run.sh deliver > "$ws/deliver.log" 2>&1 || true
   if ! command grep -q 'awaiting: human:would-fund' "$ws/deliver.log"; then

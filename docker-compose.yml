@@ -10,6 +10,8 @@ services:
       DB_PATH: /data/loom.db
       WEB_DIR: /app/src/web
       MODEL: "gemini-3.5-flash"
+      # Named, never inferred from which keys are present (#427).
+      LOOM_PROVIDER: "${LOOM_PROVIDER:-}"
       VERTEX_ACCESS_TOKEN: "${VERTEX_ACCESS_TOKEN}"
       VERTEX_PROJECT: "${VERTEX_PROJECT}"
       VERTEX_LOCATION: "eu"

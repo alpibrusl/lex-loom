@@ -24,6 +24,8 @@
 # roles below the company's ceiling, and cast.lex consults it exactly when
 # the builtin dispatch misses.
 
+import "./pack_names" as pack_names_mod
+
 import "std.str" as str
 
 import "std.list" as list
@@ -62,15 +64,11 @@ fn roles_sprint(company_id :: Str) -> Str {
 # "core" is always staffed. Together the packs cover every builtin role —
 # tests/test_role_registry.lex asserts the partition matches role_kinds.
 fn pack_registry() -> List[(Str, List[Str])] {
-  [("core", ["pm", "architect", "build", "py_build", "ts_build", "qa", "py_qa", "ts_qa", "test_author", "py_test_author", "ts_test_author", "devops", "docs", "demo", "scribe", "launch", "deploy", "founder"]), ("web", ["fe_build", "ux_designer"]), ("content", ["brand_designer", "content_designer", "brand_strategist", "copywriter", "content_creator", "seo_specialist"]), ("finance", ["finance", "monetization_handoff"]), ("governance", ["legal", "cx"]), ("research", ["research", "opportunity_research"]), ("security", ["security"])]
+  pack_names_mod.pack_registry()
 }
 
 fn pack_names() -> List[Str] {
-  list.map(pack_registry(), fn (p :: (Str, List[Str])) -> Str {
-    match p {
-      (name, _) => name,
-    }
-  })
+  pack_names_mod.pack_names()
 }
 
 fn pack_roles(name :: Str) -> List[Str] {

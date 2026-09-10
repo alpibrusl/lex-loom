@@ -274,8 +274,30 @@ fi
 # accepted and where; then one line every ten idle polls, so a runner left
 # running is never silent for more than a couple of minutes.
 polls=0
+# The runner tells the cloud which roles and packs it can actually cast, read
+# from the runtime that will cast them (src/role_kinds.lex, src/pack_names.lex)
+# rather than mirrored in shell -- the same rule #427 set for the provider. The
+# cloud validates against this instead of keeping a vocabulary of its own,
+# which could only drift from what this runner would accept.
+vocabulary() {
+  local kinds packs
+  kinds=$(lex run --allow-effects io src/role_kinds.lex known_kinds 2>/dev/null | tail -1)
+  packs=$(lex run --allow-effects io src/pack_names.lex pack_names 2>/dev/null | tail -1)
+  python3 -c 'import sys,json
+k=sys.argv[1]; p=sys.argv[2]
+def arr(s):
+    try:
+        v=json.loads(s)
+        return v if isinstance(v,list) else []
+    except Exception:
+        return []
+print(json.dumps({"role_kinds":arr(k),"packs":arr(p)}))' "$kinds" "$packs"
+}
+VOCAB=$(vocabulary)
+echo "[runner] vocabulary: $(python3 -c 'import sys,json;d=json.loads(sys.argv[1]);print(f"{len(d[\"role_kinds\"])} role kinds, {len(d[\"packs\"])} packs")' "$VOCAB")"
+
 while :; do
-  f=$(mktemp); with_token '{}' > "$f"
+  f=$(mktemp); with_token "$VOCAB" > "$f"
   if ! resp=$(jpost /api/runners/poll-company "$f"); then rm -f "$f"; echo "[runner] poll failed against $LOOM_SERVER (see above); retrying in 15s"; sleep 15; continue; fi
   rm -f "$f"
   uuid=$(python3 -c 'import sys,json; c=json.loads(sys.argv[1]).get("company"); print(c["id"] if c else "")' "$resp")

@@ -11,13 +11,13 @@
 # /etc/hosts pinned to the grant's hosts (the guest has no resolver).
 #
 # Inputs in JT_DIR (default /tmp/jt3), shipped by bin/jt3-run-on-kvm-host.sh:
-#   loom.tgz, packages.tgz. Env: LEX_OS_ROOT, LEX_VERSION (default 0.10.17),
+#   loom.tgz, packages.tgz. Env: LEX_OS_ROOT, LEX_VERSION (default 0.11.5),
 #   FRESH_ROOTFS=1 to rebuild.
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)" >&2; exit 2; }
 LEX_OS_ROOT="${LEX_OS_ROOT:-/home/${SUDO_USER:-$USER}/Workspace/alpibrusl/lex-os}"
 JT_DIR="${JT_DIR:-/tmp/jt3}"
-LEX_VERSION="${LEX_VERSION:-0.10.17}"
+LEX_VERSION="${LEX_VERSION:-0.11.5}"
 BASE_URL="${BASE_URL:-https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz}"
 ASSETS="$LEX_OS_ROOT/demo/assets"
 OUT="$ASSETS/loom-company-rootfs.ext4"

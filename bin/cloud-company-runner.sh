@@ -2,7 +2,7 @@
 # cloud-company-runner.sh -- runner protocol v2 (loom-cloud#47): the cloud
 # holds companies and board decisions; this machine executes.
 #
-#   LOOM_SERVER=http://127.0.0.1:8880 LOOM_RUNNER_TOKEN=... bin/cloud-company-runner.sh [--once]
+#   LOOM_SERVER=http://127.0.0.1:8880 LOOM_RUNNER_TOKEN=<runner key from the dashboard's Runners page> bin/cloud-company-runner.sh [--once]
 #
 # Loop: claim one queued company (POST /api/runners/poll-company), run it
 # here, report iterations + events + status (POST /api/companies/:id/report).
@@ -20,7 +20,7 @@ ONCE="${1:-}"
 WS_ROOT="${LOOM_WORKSPACE:-$HOME/loom-companies}"
 
 jpost() { # path json-file -> body (fails loudly on non-2xx)
-  local out; out=$(curl -sS --max-time 40 -w '\n%{http_code}' -H 'Content-Type: application/json' -d @"$2" "$LOOM_SERVER$1"); local code="${out##*$'\n'}"; local body="${out%$'\n'*}"
+  local out; out=$(curl -sS --max-time 40 -w '\n%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $LOOM_RUNNER_TOKEN" -d @"$2" "$LOOM_SERVER$1"); local code="${out##*$'\n'}"; local body="${out%$'\n'*}"
   if [ "${code:0:1}" != "2" ]; then echo "[runner] $1 -> $code: $body" >&2; return 1; fi; printf '%s' "$body"
 }
 with_token() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["runner_token"]=sys.argv[2]; print(json.dumps(d))' "$1" "$LOOM_RUNNER_TOKEN"; }

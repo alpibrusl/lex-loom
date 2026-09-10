@@ -69,93 +69,106 @@ case "$CPATH" in
 esac
 
 # --- the model endpoint, the one that costs hours to discover ---------------
-# Mirror run-company.sh exactly: it falls back to the credentials file when
-# the key is not already exported. Checking anything else checks a provider
-# the run will not use.
-OC_FILE_KEY=""
-OC_FROM_FILE=""
-if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
-  OC_FILE_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"
-  OC_FROM_FILE=1
+# The decision comes from the runtime itself (src/main.lex provider_cmd, the
+# same roles.choose_provider every model call dispatches on), not from a
+# shell mirror of it. The mirror is how #427 happened: this preflight said
+# "LiteLLM serves the model" and the run went to Mistral, because the
+# runtime's fall-through honoured an ambient MISTRAL_API_KEY the mirror did
+# not know about. Whatever this section checks is now, by construction, the
+# provider the run uses. The company's own model wins over the environment,
+# exactly as run-company.sh passes it.
+EFFECTS=approval,concurrent,crypto,env,fs_read,fs_write,io,llm,net,proc,random,sql,stream,time,vcs
+PROVIDER_LINE="$(MODEL="$CMODEL" lex run --allow-effects "$EFFECTS" src/main.lex provider_cmd 2>/dev/null | grep '^provider=' | head -1 || true)"
+if [ -z "$PROVIDER_LINE" ]; then
+  bad "could not resolve the provider (lex run src/main.lex provider_cmd printed nothing)"
+  PROVIDER=""; ENDPOINT=""
+else
+  PROVIDER="$(printf '%s' "$PROVIDER_LINE" | sed -n 's/^provider=\([^ ]*\).*/\1/p')"
+  ENDPOINT="$(printf '%s' "$PROVIDER_LINE" | sed -n 's/.* endpoint=\([^ ]*\).*/\1/p')"
+  if [ -n "${LOOM_PROVIDER:-}" ]; then
+    ok "$PROVIDER_LINE (LOOM_PROVIDER=$LOOM_PROVIDER)"
+  else
+    ok "$PROVIDER_LINE (default; name another with LOOM_PROVIDER=ollama|opencode|mlx|vertex|anthropic|openai|google|mistral)"
+  fi
 fi
-# LOOM_PROVIDER (roles.lex choose_provider) names the provider outright and
-# beats every key. A preflight that ignores it describes a provider the run
-# will not use -- the same defect as ignoring the credentials file did.
-case "$(printf '%s' "${LOOM_PROVIDER:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
-  ollama)   OC_FILE_KEY=""; OC_FROM_FILE=""; OPENCODE_API_KEY=""; LITELLM_BASE_URL="" ;;
-  opencode) LITELLM_BASE_URL=""; : "${OPENCODE_API_KEY:=${OC_FILE_KEY:-}}" ;;
-  litellm)  OC_FILE_KEY=""; OC_FROM_FILE=""; OPENCODE_API_KEY=""; : "${LITELLM_BASE_URL:=http://localhost:4000}" ;;
-  "")
-    # The DEFAULT is LiteLLM in front of ollama. run-company.sh no longer loads
-    # the opencode key unless asked for it, so with nothing configured this is
-    # the path a run takes, and it must be CHECKED rather than assumed.
-    OC_FILE_KEY=""; OC_FROM_FILE=""
-    : "${LITELLM_BASE_URL:=http://localhost:4000}" ;;
-esac
 
-BASE="${LITELLM_BASE_URL:-}"
-if [ -n "$BASE" ]; then
-  if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" >/dev/null 2>&1; then
-    if curl -s -m 8 "$BASE/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" 2>/dev/null | grep -q "\"$CMODEL\""; then
-      # Serving the model is not the same as being usable. A proxy routing
-      # ollama through the legacy `ollama/` prefix answers completions
-      # perfectly and returns NO tool calls at all — and every build, QA and
-      # launch node in loom is a tool-calling agent, so the run dies on step
-      # limits with no hint of why. Measured: `ollama/` 0 tool calls,
-      # `ollama_chat/` 1, same model, same request.
-      TOOL_PROBE=$(curl -s -m 120 "$BASE/v1/chat/completions" \
-        -H 'Content-Type: application/json' \
-        -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" \
-        -d "{\"model\":\"$CMODEL\",\"max_tokens\":600,\"messages\":[{\"role\":\"user\",\"content\":\"Call the ping tool.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"ping\",\"description\":\"ping\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}" 2>/dev/null || true)
-      if printf '%s' "$TOOL_PROBE" | grep -q '"tool_calls"'; then
-        ok "proxy at $BASE serves '$CMODEL' and returns tool calls"
+# A key check that only proves the variable is set: the vendor adapters
+# authenticate on the first call, and a hand-rolled probe here would test a
+# different call shape than lex-llm uses (which is how an earlier opencode
+# probe reported 401 for a key that worked).
+need_var() { # var-name provider
+  eval "v=\${$1:-}"
+  if [ -n "$(printf '%s' "${v:-}" | tr -d ' \n')" ]; then ok "$1 is set for LOOM_PROVIDER=$2"; else bad "LOOM_PROVIDER=$2 but $1 is unset — every call would fail on auth"; fi
+}
+
+case "$PROVIDER" in
+  litellm|mlx)
+    if curl -s -m 8 "$ENDPOINT/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" >/dev/null 2>&1; then
+      if curl -s -m 8 "$ENDPOINT/v1/models" -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" 2>/dev/null | grep -q "\"$CMODEL\""; then
+        # Serving the model is not the same as being usable. A proxy routing
+        # ollama through the legacy `ollama/` prefix answers completions
+        # perfectly and returns NO tool calls at all — and every build, QA and
+        # launch node in loom is a tool-calling agent, so the run dies on step
+        # limits with no hint of why. Measured: `ollama/` 0 tool calls,
+        # `ollama_chat/` 1, same model, same request.
+        TOOL_PROBE=$(curl -s -m 120 "$ENDPOINT/v1/chat/completions" \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer ${LITELLM_API_KEY:-sk-1234}" \
+          -d "{\"model\":\"$CMODEL\",\"max_tokens\":600,\"messages\":[{\"role\":\"user\",\"content\":\"Call the ping tool.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"ping\",\"description\":\"ping\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}" 2>/dev/null || true)
+        if printf '%s' "$TOOL_PROBE" | grep -q '"tool_calls"'; then
+          ok "$PROVIDER at $ENDPOINT serves '$CMODEL' and returns tool calls"
+        else
+          bad "$PROVIDER at $ENDPOINT serves '$CMODEL' but returned NO tool call — every build/QA/launch node is a tool-calling agent, so the run would burn its step budget and fail with no explanation. If this is an ollama route, use the ollama_chat/ prefix, not ollama/"
+        fi
       else
-        bad "proxy at $BASE serves '$CMODEL' but returned NO tool call — every build/QA/launch node is a tool-calling agent, so the run would burn its step budget and fail with no explanation. If this is an ollama route, use the ollama_chat/ prefix, not ollama/"
+        bad "$PROVIDER at $ENDPOINT is up but does not list '$CMODEL' — the run will fail on its first node"
       fi
     else
-      bad "proxy at $BASE is up but does not list '$CMODEL' — the run will fail on its first node"
+      bad "no $PROVIDER at $ENDPOINT — this is the provider the run would use and there is no silent fallback. Start it with:  bin/litellm-up.sh   …or name another with LOOM_PROVIDER=ollama|opencode|mlx|vertex|anthropic|openai|google|mistral"
+    fi ;;
+  ollama)
+    if curl -sf -m 5 "$ENDPOINT/api/tags" >/dev/null 2>&1; then
+      if curl -sf -m 5 "$ENDPOINT/api/tags" 2>/dev/null | grep -q "\"$CMODEL\""; then
+        ok "ollama at $ENDPOINT serves '$CMODEL' (native adapter, no proxy)"
+      else
+        bad "ollama at $ENDPOINT is up but does not have '$CMODEL' — pull it first, or the run fails on its first node"
+      fi
+    else
+      bad "no ollama at $ENDPOINT (LOOM_PROVIDER=ollama) — start it, or set OLLAMA_URL"
+    fi ;;
+  opencode)
+    # Mirror run-company.sh exactly: with LOOM_PROVIDER=opencode it loads the
+    # credentials file when the key is not already exported.
+    OC_FROM_FILE=""
+    if [ -z "${OPENCODE_API_KEY:-}" ] && [ -f "$HOME/.credentials/opencode/key" ]; then
+      OPENCODE_API_KEY="$(tr -d '\n' < "$HOME/.credentials/opencode/key")"; OC_FROM_FILE=1
     fi
-  else
-    bad "no LiteLLM at $BASE — this is the default provider and there is no silent fallback. Start it with:  bin/litellm-up.sh   …or pick another with LOOM_PROVIDER=ollama|opencode"
-  fi
-elif [ -n "$(printf '%s' "${OPENCODE_API_KEY:-}${OC_FILE_KEY:-}" | tr -d ' \n')" ]; then
-  # run-company.sh loads the key from ~/.credentials/opencode/key when it is
-  # not already exported, so a preflight that only reads the environment
-  # checks a DIFFERENT provider than the run will use. That is not academic:
-  # it reported "ollama serves qwen3.8" and the run then sent that ollama
-  # model id to OpenCode and got HTTP 401 on every single call, which the
-  # company reported as an "unparseable strategist reply".
-  OCK="${OPENCODE_API_KEY:-${OC_FILE_KEY:-}}"
-  OCB="${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1}"
-  OC_MODELS=$(curl -s -m 10 -H "Authorization: Bearer $OCK" "$OCB/models" 2>/dev/null || true)
-  # Only what /models can actually prove. It needs no auth, so it cannot
-  # validate the key -- and lex-llm's opencode-go provider uses a different
-  # call shape than a plain curl, so a hand-rolled auth probe here reports
-  # 401 for a key that works. Claiming "the key is good" on that basis would
-  # be the same lie this preflight exists to prevent.
-  if [ -z "$OC_MODELS" ]; then
-    bad "opencode at $OCB did not answer — the run cannot reach its provider"
-  elif printf '%s' "$OC_MODELS" | grep -q "\"$CMODEL\""; then
-    ok "opencode serves '$CMODEL'${OC_FROM_FILE:+ (key from ~/.credentials/opencode/key)}; the key itself is not exercised here"
-  else
-    bad "opencode does not serve '$CMODEL' — every call fails on the model id (this is what sent an ollama model id to opencode and produced HTTP 401 on every node)"
-  fi
-elif [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
-  ok "a provider API key is set"
-elif curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" >/dev/null 2>&1; then
-  # The native Ollama adapter is used automatically when no proxy or cloud key
-  # is set (README "Providers"), so a reachable Ollama IS a model endpoint.
-  # This check used to fail that configuration outright -- and it is the one
-  # every local run actually uses, which made the preflight refuse a working
-  # setup while claiming each failure "costs a full run to discover".
-  if curl -sf -m 5 "${OLLAMA_HOST:-http://localhost:11434}/api/tags" 2>/dev/null | grep -q "\"$CMODEL\""; then
-    ok "ollama serves '$CMODEL' (native adapter, no proxy needed)"
-  else
-    bad "ollama is up but does not have '$CMODEL' — pull it first, or the run fails on its first node"
-  fi
-else
-  bad "no model endpoint: start ollama, or set LITELLM_BASE_URL, or OPENCODE_API_KEY, or a provider key"
-fi
+    if [ -z "$(printf '%s' "${OPENCODE_API_KEY:-}" | tr -d ' \n')" ]; then
+      bad "LOOM_PROVIDER=opencode but no OPENCODE_API_KEY and no ~/.credentials/opencode/key"
+    else
+      OCB="${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1}"
+      OC_MODELS=$(curl -s -m 10 -H "Authorization: Bearer $OPENCODE_API_KEY" "$OCB/models" 2>/dev/null || true)
+      # Only what /models can actually prove. It needs no auth, so it cannot
+      # validate the key -- and lex-llm's opencode-go provider uses a different
+      # call shape than a plain curl, so a hand-rolled auth probe here reports
+      # 401 for a key that works. Claiming "the key is good" on that basis
+      # would be the same lie this preflight exists to prevent.
+      if [ -z "$OC_MODELS" ]; then
+        bad "opencode at $OCB did not answer — the run cannot reach its provider"
+      elif printf '%s' "$OC_MODELS" | grep -q "\"$CMODEL\""; then
+        ok "opencode serves '$CMODEL'${OC_FROM_FILE:+ (key from ~/.credentials/opencode/key)}; the key itself is not exercised here"
+      else
+        bad "opencode does not serve '$CMODEL' — every call fails on the model id (this is what sent an ollama model id to opencode and produced HTTP 401 on every node)"
+      fi
+    fi ;;
+  vertex)    need_var VERTEX_ACCESS_TOKEN vertex; need_var VERTEX_PROJECT vertex ;;
+  anthropic) need_var ANTHROPIC_API_KEY anthropic ;;
+  openai)    need_var OPENAI_API_KEY openai ;;
+  google)    need_var GOOGLE_API_KEY google ;;
+  mistral)   need_var MISTRAL_API_KEY mistral ;;
+  "") : ;;
+  *)  bad "provider '$PROVIDER' has no preflight — add one before trusting a run on it" ;;
+esac
 
 # --- the operator profile: which providers this machine can reach -----------
 # company.toml says what to BUILD; the profile says what this machine can REACH.

@@ -95,6 +95,8 @@ import "./identity" as identity
 
 import "./dag_view" as dagv
 
+import "./roles" as roles
+
 type TransRow = { from_phase :: Str, to_phase :: Str, evidence :: Str, ts :: Str }
 
 type RunRow = { run_id :: Str }
@@ -875,6 +877,7 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     evolve_flag != "false"
   }
   let org_spec := get_env("ORG_EDGES", "")
+  let __pp := io.print(str.join(["[company] ", provider_line()], ""))
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
     Ok(db) => match org.parse_org_spec(org_spec) {
@@ -1126,6 +1129,25 @@ fn add_pool_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, ran
       },
     }
   }
+}
+
+# ── provider_cmd (#427) ───────────────────────────────────────────────────────
+# Print the provider decision the runtime will make for THIS environment:
+#   provider=<name> endpoint=<url-or-empty> model=<resolved model>
+# bin/check-company-env.sh reads it instead of mirroring the decision in
+# shell: the preflight that mirrored it said "LiteLLM serves the model"
+# while the run went to Mistral on an ambient MISTRAL_API_KEY.
+#   lex run --allow-effects <full row> src/main.lex provider_cmd
+# run_company_cmd prints the same line first: the provider is named up
+# front, from the same decision every model call dispatches on, so what
+# the log says is where the calls go. (The comment lives here, not in the
+# body, because lex fmt deletes comments inside fn bodies, lex-lang#755.)
+fn provider_cmd() -> [env, io] Unit {
+  io.print(provider_line())
+}
+
+fn provider_line() -> [env] Str {
+  str.join(["provider=", roles.provider_name(), " endpoint=", roles.provider_endpoint(), " model=", defaults.resolved_model()], "")
 }
 
 # ── dump_config_cmd (#247) ────────────────────────────────────────────────────

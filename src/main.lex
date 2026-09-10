@@ -877,8 +877,6 @@ fn run_company_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, 
     evolve_flag != "false"
   }
   let org_spec := get_env("ORG_EDGES", "")
-  # The provider is named up front, from the same decision every model call
-  # dispatches on (#427): what this line says is where the calls go.
   let __pp := io.print(str.join(["[company] ", provider_line()], ""))
   match open_db(db_path) {
     Err(e) => io.print(str.concat("[company] FATAL: ", e)),
@@ -1140,6 +1138,10 @@ fn add_pool_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, ran
 # shell: the preflight that mirrored it said "LiteLLM serves the model"
 # while the run went to Mistral on an ambient MISTRAL_API_KEY.
 #   lex run --allow-effects <full row> src/main.lex provider_cmd
+# run_company_cmd prints the same line first: the provider is named up
+# front, from the same decision every model call dispatches on, so what
+# the log says is where the calls go. (The comment lives here, not in the
+# body, because lex fmt deletes comments inside fn bodies, lex-lang#755.)
 fn provider_cmd() -> [env, io] Unit {
   io.print(provider_line())
 }

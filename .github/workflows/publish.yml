@@ -1,7 +1,7 @@
 name: Publish to lex-hub
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
@@ -12,22 +12,25 @@ jobs:
         with:
           fetch-depth: 2
 
-      # No version-string gate here on purpose. There used to be one, keyed off
-      # whether lex.toml's `version` changed between commits, and it silently
-      # no-op'd every push: real commits land without touching `version`, so it
-      # always evaluated false while the job still reported success in under
-      # 10s. lex-schema#38 removed the identical gate first; this is the
-      # follow-up that PR called for.
+      # Publishes on a TAG, not on every push to main.
       #
-      # Note what removing it actually buys, measured on lex-schema's runs
-      # rather than assumed: a publish of an ALREADY-published version does not
-      # no-op, it returns 409 after roughly an hour, and every publish run --
-      # success or failure -- takes 26 to 62 minutes. So this workflow is now
-      # honest but slow, and it will go red on any push to main that does not
-      # bump the version. Bump `version` in the same PR as any change you want
-      # published. (lex-schema#38 claimed republishing was "safe and
-      # idempotent" because the store is content-addressed; the 409s show that
-      # is not what the registry does.)
+      # There used to be a version-string gate here (run only when lex.toml's
+      # `version` changed between commits). It silently no-op'd every push for
+      # months: nothing bumps `version` routinely, so the job reported success
+      # in 9 seconds having published nothing. lex-schema#38 removed the same
+      # gate and published on every push instead -- and measured on its runs,
+      # that is the wrong fix: republishing an already-published version does
+      # not no-op, it returns 409 after roughly an hour, so every push without
+      # a version bump went red; and every version bump is a commit that
+      # drifts every downstream consumer (three red builds fleet-wide on one
+      # day, 2026-09-11, each from a one-line lex-schema bump).
+      #
+      # A tag makes a release a deliberate act: bump `version` in lex.toml,
+      # tag it v<version>, push the tag. Nothing publishes by accident, main
+      # never goes red for lacking a bump, and consumers drift once per
+      # release rather than once per merge. A publish still takes 26-62
+      # minutes (a lex-hub problem, not this workflow's), so it should not be
+      # something every merge triggers.
 
       - name: Install lex
         run: |

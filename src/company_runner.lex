@@ -131,6 +131,34 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
   decision
 }
 
+# #442: after an iteration, the goals cx proposed from REAL support items
+# join the backlog as pending items, once each (a goal already queued, or
+# proposed twice in the same output, is not re-added), each on the trail
+# with source "cx" so the founder can see which iterations users chose.
+fn propose_from_cx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, k :: Int) -> [sql, fs_write, time, random, crypto, io] Int {
+  let goals := company.cx_backlog_proposals(db, sprint_id)
+  let existing := list.map(company.load_backlog(db, company_id), fn (it :: company.BacklogItem) -> Str {
+    it.goal
+  })
+  let out := list.fold(goals, (0, existing), fn (acc :: (Int, List[Str]), g :: Str) -> [sql, fs_write, time, random, crypto, io] (Int, List[Str]) {
+    match acc {
+      (n, seen) => if list.is_empty(list.filter(seen, fn (x :: Str) -> Bool {
+        x == g
+      })) {
+        let __a := company.append_backlog(db, company_id, g)
+        let __bt := tr.trail(db, company_id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"cx\",\"goal\":\"", company.json_escape(g), "\"}"], ""))
+        let __bp := io.print(str.join(["[company] backlog: cx proposed \"", g, "\" from real support items"], ""))
+        (n + 1, list.concat(seen, [g]))
+      } else {
+        (n, seen)
+      },
+    }
+  })
+  match out {
+    (n, _) => n,
+  }
+}
+
 # #80: pop the next pending backlog item (if any) and mark it active, emitting
 # the same trail event either call site would. Shared by the mid-loop "stop"
 # branch and the resume-from-Sunset entry point so both grow the feature set
@@ -634,6 +662,11 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     io.print(str.join(["[company] backlog: queued \"", decision.goal, "\""], ""))
   } else {
     ()
+  }
+  let __cx := if result.parked {
+    0
+  } else {
+    propose_from_cx(db, ccfg.id, sprint_id, k)
   }
   let next_goal := if decision.decision == "revise" {
     decision.goal

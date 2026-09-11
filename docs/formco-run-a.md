@@ -76,3 +76,56 @@ not proceed.
    at 50%.
 
 Everything else runs without a human.
+
+## How to start Run A (#453)
+
+Through the cloud runner, from the dashboard, as a founder would. Nothing
+below is a CLI run of the company; the CLI is for the checks.
+
+### On the runner machine, once
+
+1. A provider that serves the manifest's model and returns tool calls. The
+   default route is LiteLLM at `localhost:4000`; name another with
+   `LOOM_PROVIDER=opencode|ollama|...`. Prove it before a token is spent:
+
+       LOOM_PROVIDER=<provider> bin/check-company-env.sh examples/formco.company.toml
+
+   Every line must be `ok`. The check makes one real tool-calling request;
+   a model that lists but does not call tools fails every build node.
+
+2. The needs file. Iteration 5 parks on `DEPLOY_DOMAIN` and `HETZNER_HOST`
+   (`[needs]` in the manifest). The runner reads them from
+   `~/.loom/needs.env` (or `LOOM_NEEDS_FILE`) before every bootstrap, so
+   they can be written while the company is parked -- or now:
+
+       mkdir -p ~/.loom
+       printf 'DEPLOY_DOMAIN=<hostname pointed at the box>\nHETZNER_HOST=<ip>\n' >> ~/.loom/needs.env
+
+   Values never leave this machine; the board decision carries the NAME.
+
+3. The runner, with a key from the dashboard's Runners page:
+
+       LOOM_SERVER=https://loom.lexlang.org LOOM_RUNNER_TOKEN=<key> bin/cloud-company-runner.sh
+
+### In the dashboard
+
+4. Companies -> New company -> paste `examples/formco.company.toml` ->
+   Queue company. The runner claims it on its next poll.
+5. Answer the board decisions as they appear on the card, in order:
+   the founding plan (budget in the question; `budget_eur=N` in the reason
+   changes it), then each need at iteration 5, then the operable contract's
+   human criterion.
+
+### What to watch, and what counts as a finding
+
+- `iteration_nodes`, `company_backlog` and the runner's `role_kinds` are
+  all reported over the wire for the first time on a real company. Any of
+  the three empty after the first poll is a finding, not a display bug.
+- Every gate refusal is expected the first time through six new roles; the
+  run report records the node, the gate's reason, and whether the role's
+  output was usable or merely present.
+- A need that parks twice with the same name means the value did not reach
+  the runner: check the file, not the company.
+
+The written report goes in `docs/`, the fixes as issues against #435 or
+#445, each citing the node and the reason.

@@ -120,6 +120,37 @@ fn software_contract_id() -> Str {
   "c-software-1"
 }
 
+fn operable_capability() -> Str {
+  "operable-delivery/v1"
+}
+
+fn operable_price() -> Int {
+  30000
+}
+
+fn operable_deadline_ms() -> Int {
+  7200000
+}
+
+fn operable_contract_id() -> Str {
+  "c-operable-1"
+}
+
+# Run 2's third contract. Run 1 stopped at "software built"; this pays for
+# the product being OPERABLE -- measurable, restorable, documented for launch,
+# reachable over TLS. Every criterion is re-derived by the buyer with
+# bin/check_operable_delivery.py, which re-runs the roles' own grounded gates
+# rather than trusting their word. No human criterion: operability is
+# mechanical. Offline, reachable-over-tls is unmet and the contract settles at
+# 50% -- a hostname is a founder-provided need, never assumed.
+fn run2_operable_criteria() -> List[request_bid.Criterion] {
+  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:metrics-instrumented", "every success metric the PRD states names an event the product's code really emits (bin/check_metrics_instrumented.py)"), crit("checkable:restore-performed", "the ops role's backup restores into a fresh database and its row counts match the recorded evidence (bin/check_restore_performed.py)"), crit("checkable:runbook-present", "the passing sprint holds an accepted release_manager node: a runbook with owners, times, a rollback and evidence-backed go/no-go"), crit("checkable:data-map-present", "the passing sprint holds an accepted data_protection node: data map, lawful basis, sub-processors and a DPA, all marked DRAFT"), crit("checkable:reachable-over-tls", "https://<domain>/healthz answers ok:true over a valid certificate; unmet until the founder provides a hostname")]
+}
+
+fn operable_request_description() -> Str {
+  "Make the product SoftwareCo built operable, on the same python-fastapi path: instrument the PRD's success metrics so each is computable from events the code really emits; back up the data store and PERFORM a restore into a fresh database, recording what it contained; write the launch runbook with owners, times, a rollback and evidence-backed go/no-go; produce the data map, lawful basis, sub-processor list and DPA as human-review drafts; expose /healthz. Reachability over TLS needs a hostname the founder provides and is settled when one exists. Nothing here sends, publishes, or charges."
+}
+
 # The second contract's criteria: what loom's own trail and workspace show,
 # re-derived by bin/check_software_delivery.py. No human criterion: the
 # founder's judgement went into the research contract; delivery is
@@ -510,6 +541,56 @@ fn open_software(db :: conn.ConnDb, log :: tlog.Log, report :: Str, now_ms :: In
             }
           },
           _ => Err("consortium: softwareco has no treasury (run open first)"),
+        },
+      }
+    },
+  }
+}
+
+# The operable contract: the same internal-build path as the software
+# contract, taken after it settled. SoftwareCo declares the ops pack's
+# capability first, so procurement sees an offer to Build against.
+fn open_operable(db :: conn.ConnDb, log :: tlog.Log, now_ms :: Int) -> [sql, time, fs_read, fs_write] Result[Opened, Str] {
+  match load_contract(db, software_contract_id()) {
+    Err(e) => Err(e),
+    Ok(srow) => if srow.state != "settled" {
+      Err(str.join(["consortium: the software contract is ", srow.state, ", not settled; the operable contract takes the built product as input"], ""))
+    } else {
+      match load_contract(db, operable_contract_id()) {
+        Ok(_) => Err("consortium: the operable contract is already open; use status or deliver-operable"),
+        Err(_) => match eb.declare_capabilities(db, softwareco(), ["core", "ops"], "python-fastapi") {
+          Err(e) => Err(e),
+          Ok(_) => match treasury.get_treasury(db.handle, softwareco()) {
+            Ok(Some(t)) => {
+              let own := offers_of(db, softwareco())
+              let available := min_int(treasury.available_cents(t), softwareco_policy_cap())
+              let decision := proc.decide(operable_capability(), own, [], operable_price(), available, 0, no_trust)
+              match decision.decision {
+                Build => {
+                  let req := request_bid.post_request("req-operable-1", softwareco(), operable_capability(), operable_request_description(), { cents: softwareco_policy_cap(), currency: currency() }, run2_operable_criteria(), now_ms + operable_deadline_ms())
+                  match request_bid.submit_bid(req, "bid-softwareco-2", softwareco(), { cents: operable_price(), currency: currency() }, "internal ops work on the python-fastapi path, verified by loom acceptance", now_ms) {
+                    Err(e) => Err(str.concat("consortium: self-bid: ", e)),
+                    Ok(bid) => match request_bid.award(req, [bid], bid.id) {
+                      Err(e) => Err(str.concat("consortium: award: ", e)),
+                      Ok((req2, bids)) => match list.head(bids) {
+                        None => Err("consortium: no bid after award"),
+                        Some(won) => match settlement.open_contract(db.handle, log, req2, won, operable_contract_id(), "commit-operable-1") {
+                          Err(e) => Err(str.concat("consortium: open operable contract: ", e)),
+                          Ok(c) => match save_contract(db, c, run2_operable_criteria(), [], "commit-operable-1", request_json_of(req2), bid_json_of(won), now_ms) {
+                            Err(e) => Err(e),
+                            Ok(_) => Ok({ contract: c, goal: ec.goal_from_request(req2), reason: decision.reason, commitment_id: "commit-operable-1" }),
+                          },
+                        },
+                      },
+                    },
+                  }
+                },
+                Buy(_) => Err(str.concat("consortium: procurement chose Buy for a capability SoftwareCo sells: ", decision.reason)),
+                Defer => Err(str.concat("consortium: procurement deferred the operable work: ", decision.reason)),
+              }
+            },
+            _ => Err("consortium: softwareco has no treasury (run open first)"),
+          },
         },
       }
     },

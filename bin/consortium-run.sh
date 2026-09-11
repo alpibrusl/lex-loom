@@ -18,6 +18,15 @@
 #   bin/consortium-run.sh deliver-software
 #                                    re-derive the evidence from SoftwareCo's
 #                                    trail + workspace; verdict + settlement
+#   bin/consortium-run.sh open-operable
+#                                    SoftwareCo contracts itself to make the
+#                                    built product operable; writes the manifest
+#   bin/consortium-run.sh operable   bootstrap + run SoftwareCo on that manifest
+#                                    (re-bootstraps the same company id; first
+#                                    exercised live by #453)
+#   bin/consortium-run.sh deliver-operable
+#                                    re-derive the operable evidence; verdict +
+#                                    settlement. DEPLOY_DOMAIN assesses TLS.
 #   bin/consortium-run.sh status
 #
 # Env: LOOM_WORKSPACE (default ~/loom-companies), CONSORTIUM_DB (default
@@ -31,6 +40,7 @@ export LOOM_WORKSPACE="$WS"
 export CONSORTIUM_DB="${CONSORTIUM_DB:-$WS/consortium.db}"
 MANIFEST="$WS/researchco.company.toml"
 SW_MANIFEST="$WS/softwareco.company.toml"
+OP_MANIFEST="$WS/softwareco-operable.company.toml"
 LEDGER="/tmp/loom-search-ledger-researchco.txt"
 EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurrent,vcs,llm,approval,stream"
 mkdir -p "$WS"
@@ -77,6 +87,16 @@ PY
     ;;
   deliver-software)
     COMPANY_DB="$WS/softwareco/company.db" WORKSPACE_DIR="$WS/softwareco" run_cmd consortium_deliver_software_cmd
+    ;;
+  open-operable)
+    OPERABLE_MANIFEST="$OP_MANIFEST" run_cmd consortium_open_operable_cmd
+    ;;
+  operable)
+    [ -f "$OP_MANIFEST" ] || { echo "no $OP_MANIFEST -- run 'open-operable' first" >&2; exit 1; }
+    STOP_WHEN='verdict-passed' bin/bootstrap-company.sh "$OP_MANIFEST"
+    ;;
+  deliver-operable)
+    COMPANY_DB="$WS/softwareco/company.db" WORKSPACE_DIR="$WS/softwareco" run_cmd consortium_deliver_operable_cmd
     ;;
   status)
     run_cmd consortium_status_cmd

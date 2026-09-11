@@ -163,28 +163,32 @@ fn preset_name_for_kind(kind :: Str) -> Str {
         if kind == "py_build" {
           "Implementation"
         } else {
-          if kind == "fe_build" {
+          if kind == "analytics" or kind == "ops" {
             "Implementation"
           } else {
-            if kind == "qa" {
-              "QA"
+            if kind == "fe_build" {
+              "Implementation"
             } else {
-              if kind == "py_qa" {
+              if kind == "qa" {
                 "QA"
               } else {
-                if kind == "security" {
+                if kind == "py_qa" {
                   "QA"
                 } else {
-                  if kind == "scribe" {
-                    "Retro"
+                  if kind == "security" {
+                    "QA"
                   } else {
-                    if kind == "research" or kind == "opportunity_research" {
-                      "Research"
+                    if kind == "scribe" {
+                      "Retro"
                     } else {
-                      if kind == "founder" {
-                        "Design"
+                      if kind == "research" or kind == "opportunity_research" {
+                        "Research"
                       } else {
-                        "Demo"
+                        if kind == "founder" {
+                          "Design"
+                        } else {
+                          "Demo"
+                        }
                       }
                     }
                   }

@@ -13,7 +13,7 @@
 import "std.list" as list
 
 fn pack_registry() -> List[(Str, List[Str])] {
-  [("core", ["pm", "architect", "build", "py_build", "ts_build", "qa", "py_qa", "ts_qa", "test_author", "py_test_author", "ts_test_author", "devops", "docs", "demo", "scribe", "launch", "deploy", "founder"]), ("web", ["fe_build", "ux_designer"]), ("content", ["brand_designer", "content_designer", "brand_strategist", "copywriter", "content_creator", "seo_specialist"]), ("finance", ["finance", "monetization_handoff"]), ("governance", ["legal", "cx", "data_protection"]), ("research", ["research", "opportunity_research"]), ("security", ["security"]), ("ops", ["analytics", "release_manager"])]
+  [("core", ["pm", "architect", "build", "py_build", "ts_build", "qa", "py_qa", "ts_qa", "test_author", "py_test_author", "ts_test_author", "devops", "docs", "demo", "scribe", "launch", "deploy", "founder"]), ("web", ["fe_build", "ux_designer"]), ("content", ["brand_designer", "content_designer", "brand_strategist", "copywriter", "content_creator", "seo_specialist"]), ("finance", ["finance", "monetization_handoff"]), ("governance", ["legal", "cx", "data_protection"]), ("research", ["research", "opportunity_research"]), ("security", ["security"]), ("ops", ["analytics", "ops", "release_manager"])]
 }
 
 fn pack_names() -> List[Str] {

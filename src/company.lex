@@ -1505,6 +1505,72 @@ fn role_node_ids(db :: conn.ConnDb, sprint_id :: Str, roles :: List[Str]) -> [sq
 
 type GraphRow = { graph_json :: Str }
 
+# #442: cx closes the loop. Its output ends with a fenced ```json block
+# {"backlog":[{"goal":"...","theme":"..."}]}; the goals become pending
+# backlog items (company_runner.propose_from_cx), so the next iteration is
+# chosen by what real users said, not by the strategist's opinion alone.
+# Pure: the LAST ```json fence wins, a missing or malformed one yields
+# nothing, empty goals are dropped, and at most three survive -- a cx that
+# proposes ten goals has not triaged.
+fn parse_backlog_proposals(content :: Str) -> List[Str]
+  examples {
+    parse_backlog_proposals("no fence here") => [],
+    parse_backlog_proposals("## Backlog proposals\n```json\n{\"backlog\":[{\"goal\":\"Add CSV export\",\"theme\":\"export\"},{\"goal\":\"  \",\"theme\":\"x\"}]}\n```\n") => ["Add CSV export"],
+    parse_backlog_proposals("```json\nnot json\n```") => [],
+    parse_backlog_proposals("```json\n{\"backlog\":[{\"goal\":\"a\"},{\"goal\":\"b\"},{\"goal\":\"c\"},{\"goal\":\"d\"}]}\n```") => ["a", "b", "c"]
+  }
+{
+  let parts := str.split(content, "```json")
+  if list.len(parts) < 2 {
+    []
+  } else {
+    let last := list.fold(parts, "", fn (_acc :: Str, p :: Str) -> Str {
+      p
+    })
+    match list.head(str.split(last, "```")) {
+      None => [],
+      Some(block) => match jv.parse(str.trim(block)) {
+        Err(_) => [],
+        Ok(j) => match jv.get_field(j, "backlog") {
+          Some(JList(items)) => list.fold(items, [], fn (acc :: List[Str], it :: jv.Json) -> List[Str] {
+            let g := str.trim(json_str_field(it, "goal"))
+            if str.is_empty(g) or list.len(acc) >= 3 {
+              acc
+            } else {
+              list.concat(acc, [g])
+            }
+          }),
+          _ => [],
+        },
+      },
+    }
+  }
+}
+
+# The cx node's latest artifact in this sprint, by the graph's ground-truth
+# role (never a node-name guess), parsed for backlog proposals. No cx node,
+# no artifact, or no fence: nothing.
+fn cx_backlog_proposals(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[Str] {
+  let ids := role_node_ids(db, sprint_id, ["cx"])
+  if list.is_empty(ids) {
+    []
+  } else {
+    let sql_text := str.join(["SELECT content FROM artifacts WHERE sprint_id=? AND node_id IN (", placeholders(list.len(ids)), ") ORDER BY created_at DESC LIMIT 1"], "")
+    let params := list.concat([PStr(sprint_id)], list.map(ids, fn (id :: Str) -> SqlParam {
+      PStr(id)
+    }))
+    let q := ormq.for_dialect({ sql: sql_text, params: params }, db.dialect)
+    let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
+    match rows {
+      Err(_) => [],
+      Ok(rs) => match list.head(rs) {
+        None => [],
+        Some(r) => parse_backlog_proposals(r.content),
+      },
+    }
+  }
+}
+
 # node_ids from the sprint's most recent recorded graph whose role is
 # "build" or "py_build" -- the real build node(s), by ground truth, not a
 # guess from the node_id string.

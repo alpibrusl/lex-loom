@@ -34,40 +34,48 @@ fn tools_for(role :: Str) -> List[Str] {
           if role == "py_build" {
             ["py_check", "read_file"]
           } else {
-            if role == "ts_build" {
-              ["ts_check", "read_file"]
+            if role == "analytics" {
+              ["py_check", "read_file"]
             } else {
-              if role == "qa" {
-                ["read_file", "lex_run"]
+              if role == "ops" {
+                ["py_check", "run_code", "read_file"]
               } else {
-                if role == "py_qa" {
-                  ["run_code"]
+                if role == "ts_build" {
+                  ["ts_check", "read_file"]
                 } else {
-                  if role == "ts_qa" {
-                    ["run_node_code"]
+                  if role == "qa" {
+                    ["read_file", "lex_run"]
                   } else {
-                    if role == "launch" {
-                      ["run_server"]
+                    if role == "py_qa" {
+                      ["run_code"]
                     } else {
-                      if role == "deploy" {
-                        ["deploy_hetzner"]
+                      if role == "ts_qa" {
+                        ["run_node_code"]
                       } else {
-                        if role == "security" {
-                          ["security_scan"]
+                        if role == "launch" {
+                          ["run_server"]
                         } else {
-                          if role == "content_creator" {
-                            ["publish_content"]
+                          if role == "deploy" {
+                            ["deploy_hetzner"]
                           } else {
-                            if role == "cx" {
-                              ["fetch_support_items"]
+                            if role == "security" {
+                              ["security_scan"]
                             } else {
-                              if role == "research" or role == "opportunity_research" {
-                                ["web_search"]
+                              if role == "content_creator" {
+                                ["publish_content"]
                               } else {
-                                if role == "founder" {
-                                  []
+                                if role == "cx" {
+                                  ["fetch_support_items"]
                                 } else {
-                                  []
+                                  if role == "research" or role == "opportunity_research" {
+                                    ["web_search"]
+                                  } else {
+                                    if role == "founder" {
+                                      []
+                                    } else {
+                                      []
+                                    }
+                                  }
                                 }
                               }
                             }

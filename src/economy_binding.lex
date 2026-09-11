@@ -112,7 +112,11 @@ fn offers_for(packs :: List[Str], path :: Str) -> List[capability.Offer] {
           if pack == "ops" {
             list.concat(acc, [{ capability: "operable-delivery/v1", attrs: JObj([("pack", JStr("ops")), ("gate", JStr("check_operable_delivery"))]) }])
           } else {
-            acc
+            if pack == "growth" {
+              list.concat(acc, [{ capability: "launch-delivery/v1", attrs: JObj([("pack", JStr("growth")), ("gate", JStr("check_launch_delivery"))]) }])
+            } else {
+              acc
+            }
           }
         }
       }

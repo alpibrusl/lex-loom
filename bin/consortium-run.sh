@@ -27,6 +27,16 @@
 #   bin/consortium-run.sh deliver-operable
 #                                    re-derive the operable evidence; verdict +
 #                                    settlement. DEPLOY_DOMAIN assesses TLS.
+#   bin/consortium-run.sh open-launch
+#                                    SoftwareCo contracts itself to launch the
+#                                    operable product by #452's stages; manifest
+#   bin/consortium-run.sh launch     bootstrap + run SoftwareCo on that manifest
+#   bin/consortium-run.sh deliver-launch
+#                                    re-derive the checkable half by counting in
+#                                    the product's own store; the three human
+#                                    criteria then wait for
+#   CONTRACT_ID=c-launch-1 ATTR=human:approved-to-publish ANSWER=yes bin/consortium-run.sh answer
+#                                    (and human:approved-to-send, human:product-created)
 #   bin/consortium-run.sh status
 #
 # Env: LOOM_WORKSPACE (default ~/loom-companies), CONSORTIUM_DB (default
@@ -41,6 +51,7 @@ export CONSORTIUM_DB="${CONSORTIUM_DB:-$WS/consortium.db}"
 MANIFEST="$WS/researchco.company.toml"
 SW_MANIFEST="$WS/softwareco.company.toml"
 OP_MANIFEST="$WS/softwareco-operable.company.toml"
+LAUNCH_MANIFEST="$WS/softwareco-launch.company.toml"
 LEDGER="/tmp/loom-search-ledger-researchco.txt"
 EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurrent,vcs,llm,approval,stream"
 mkdir -p "$WS"
@@ -98,10 +109,20 @@ PY
   deliver-operable)
     COMPANY_DB="$WS/softwareco/company.db" WORKSPACE_DIR="$WS/softwareco" run_cmd consortium_deliver_operable_cmd
     ;;
+  open-launch)
+    LAUNCH_MANIFEST="$LAUNCH_MANIFEST" run_cmd consortium_open_launch_cmd
+    ;;
+  launch)
+    [ -f "$LAUNCH_MANIFEST" ] || { echo "no $LAUNCH_MANIFEST -- run 'open-launch' first" >&2; exit 1; }
+    STOP_WHEN='verdict-passed' bin/bootstrap-company.sh "$LAUNCH_MANIFEST"
+    ;;
+  deliver-launch)
+    COMPANY_DB="$WS/softwareco/company.db" WORKSPACE_DIR="$WS/softwareco" run_cmd consortium_deliver_launch_cmd
+    ;;
   status)
     run_cmd consortium_status_cmd
     ;;
   *)
-    sed -n 2,28p "$0"; exit 2
+    sed -n 2,40p "$0"; exit 2
     ;;
 esac

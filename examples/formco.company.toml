@@ -53,3 +53,10 @@ packs = ["core", "finance", "governance", "content", "ops"]
 [policy]
 max_iterations = 6
 budget_eur     = 40
+
+# What only the founder can provide, and from which iteration it is needed
+# (#451). The build runs without them; the deploy node at the end cannot. A
+# missing one parks the company on a board decision naming the exact
+# variable; the value is set on the runner machine and never travels.
+[needs]
+env = ["DEPLOY_DOMAIN@5", "HETZNER_HOST@5"]

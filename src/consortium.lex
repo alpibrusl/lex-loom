@@ -136,6 +136,34 @@ fn operable_contract_id() -> Str {
   "c-operable-1"
 }
 
+fn launch_capability() -> Str {
+  "launch-delivery/v1"
+}
+
+fn launch_price() -> Int {
+  30000
+}
+
+fn launch_deadline_ms() -> Int {
+  7200000
+}
+
+fn launch_contract_id() -> Str {
+  "c-launch-1"
+}
+
+fn human_publish_attr() -> Str {
+  "human:approved-to-publish"
+}
+
+fn human_send_attr() -> Str {
+  "human:approved-to-send"
+}
+
+fn human_product_attr() -> Str {
+  "human:product-created"
+}
+
 # Run 2's third contract. Run 1 stopped at "software built"; this pays for
 # the product being OPERABLE -- measurable, restorable, documented for launch,
 # reachable over TLS. Every criterion is re-derived by the buyer with
@@ -149,6 +177,22 @@ fn run2_operable_criteria() -> List[request_bid.Criterion] {
 
 fn operable_request_description() -> Str {
   "Make the product SoftwareCo built operable, on the same python-fastapi path: instrument the PRD's success metrics so each is computable from events the code really emits; back up the data store and PERFORM a restore into a fresh database, recording what it contained; write the launch runbook with owners, times, a rollback and evidence-backed go/no-go; produce the data map, lawful basis, sub-processor list and DPA as human-review drafts; expose /healthz. Reachability over TLS needs a hostname the founder provides and is settled when one exists. Nothing here sends, publishes, or charges."
+}
+
+# Run 2's fourth contract (#447, Run B): pays for the product being LAUNCHED
+# and KNOWN, by #452's staged thresholds. The checkable half is what loom
+# recorded (an accepted community, lifecycle and release_manager node) plus
+# what the PRODUCT recorded, counted by the buyer in the product's own store
+# through bin/check_launch_delivery.py -- never a number the supplier wrote
+# down. The human half IS this contract: publishing, sending and creating
+# the paid product are real-world acts a model must not self-certify; each
+# holds Ambiguous until a person answers, as human:would-fund did.
+fn run2_launch_criteria() -> List[request_bid.Criterion] {
+  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:channel-plan-present", "an accepted community node: the dated channel plan, the per-channel norms check, the press kit"), crit("checkable:welcome-sequence-present", "an accepted lifecycle node: capture form, double opt-in, welcome sequence, unsubscribe"), crit("checkable:launch-runbook-present", "an accepted release_manager node: the go/no-go runbook whose items point at evidence"), crit("checkable:waitlist-threshold", "Stage 0: at least 100 waitlist signups or 15 would-pay answers, counted by the buyer in the product's own store"), crit("checkable:first-genuine-submission", "the product's own store records a first genuine submission"), crit("checkable:paying-customer", "Stage 2: at least one paying customer in the product's own store -- a settlement, not a claim"), crit(human_publish_attr(), "May the launch posts community drafted be published, as drafted?"), crit(human_send_attr(), "May the welcome sequence lifecycle drafted be sent, as drafted?"), crit(human_product_attr(), "Has a person created the paid product (Stripe or Lemon Squeezy) the finance role priced?")]
+}
+
+fn launch_request_description() -> Str {
+  "Launch the operable product SoftwareCo built, on the same python-fastapi path, by stages with go/no-go thresholds: a waitlist page and the privacy-first angle put to target developers (Stage 0, at least 100 signups or 15 would-pay), then a soft launch with a staffed support loop (Stage 2, at least one paying customer). lifecycle drafts the capture form, double opt-in and welcome sequence; community drafts the dated channel plan with each channel's self-promotion rules quoted from a real source, and the press kit; release_manager writes the go/no-go runbook. Record waitlist signups, would-pay answers, genuine submissions and payments in the product's own store, with a launch/evidence.json naming the store and the read-only queries that count them: the buyer runs those queries itself. Nothing is published, sent or sold by the company: each is a person's decision at a human gate."
 }
 
 # The second contract's criteria: what loom's own trail and workspace show,
@@ -597,6 +641,56 @@ fn open_operable(db :: conn.ConnDb, log :: tlog.Log, now_ms :: Int) -> [sql, tim
   }
 }
 
+# The launch contract takes the OPERABLE product as input, so it waits for
+# c-operable-1 to be settled (in full or in part: a product with no TLS can
+# still be put to a waitlist). SoftwareCo makes launch-delivery/v1 itself.
+fn open_launch(db :: conn.ConnDb, log :: tlog.Log, now_ms :: Int) -> [sql, time, fs_read, fs_write] Result[Opened, Str] {
+  match load_contract(db, operable_contract_id()) {
+    Err(e) => Err(e),
+    Ok(srow) => if srow.state != "settled" {
+      Err(str.join(["consortium: the operable contract is ", srow.state, ", not settled; the launch contract takes the operable product as input"], ""))
+    } else {
+      match load_contract(db, launch_contract_id()) {
+        Ok(_) => Err("consortium: the launch contract is already open; use status or deliver-launch"),
+        Err(_) => match eb.declare_capabilities(db, softwareco(), ["core", "ops", "growth", "content"], "python-fastapi") {
+          Err(e) => Err(e),
+          Ok(_) => match treasury.get_treasury(db.handle, softwareco()) {
+            Ok(Some(t)) => {
+              let own := offers_of(db, softwareco())
+              let available := min_int(treasury.available_cents(t), softwareco_policy_cap())
+              let decision := proc.decide(launch_capability(), own, [], launch_price(), available, 0, no_trust)
+              match decision.decision {
+                Build => {
+                  let req := request_bid.post_request("req-launch-1", softwareco(), launch_capability(), launch_request_description(), { cents: softwareco_policy_cap(), currency: currency() }, run2_launch_criteria(), now_ms + launch_deadline_ms())
+                  match request_bid.submit_bid(req, "bid-softwareco-3", softwareco(), { cents: launch_price(), currency: currency() }, "internal growth work on the python-fastapi path; every publish, send and sale is a human gate", now_ms) {
+                    Err(e) => Err(str.concat("consortium: self-bid: ", e)),
+                    Ok(bid) => match request_bid.award(req, [bid], bid.id) {
+                      Err(e) => Err(str.concat("consortium: award: ", e)),
+                      Ok((req2, bids)) => match list.head(bids) {
+                        None => Err("consortium: no bid after award"),
+                        Some(won) => match settlement.open_contract(db.handle, log, req2, won, launch_contract_id(), "commit-launch-1") {
+                          Err(e) => Err(str.concat("consortium: open launch contract: ", e)),
+                          Ok(c) => match save_contract(db, c, run2_launch_criteria(), [], "commit-launch-1", request_json_of(req2), bid_json_of(won), now_ms) {
+                            Err(e) => Err(e),
+                            Ok(_) => Ok({ contract: c, goal: ec.goal_from_request(req2), reason: decision.reason, commitment_id: "commit-launch-1" }),
+                          },
+                        },
+                      },
+                    },
+                  }
+                },
+                Buy(_) => Err(str.concat("consortium: procurement chose Buy for a capability SoftwareCo sells: ", decision.reason)),
+                Defer => Err(str.concat("consortium: procurement deferred the launch work: ", decision.reason)),
+              }
+            },
+            _ => Err("consortium: softwareco has no treasury (run open first)"),
+          },
+        },
+      }
+    },
+  }
+}
+
 # What a phase decided: the verdict as verified, and the contract after
 # settlement (whose state no longer carries the verdict once Settled).
 type Outcome = { verdict :: contract.Verdict, final :: contract.Contract }
@@ -654,16 +748,53 @@ fn deliver(db :: conn.ConnDb, log :: tlog.Log, contract_id :: Str, checker_outpu
 
 # The founder's answer to the human criterion: re-verify and settle.
 fn answer(db :: conn.ConnDb, log :: tlog.Log, contract_id :: Str, yes :: Bool, note :: Str, now_ms :: Int) -> [sql, time] Result[Outcome, Str] {
+  answer_attr(db, log, contract_id, human_attr(), yes, note, now_ms)
+}
+
+# A contract with several human criteria (launch-delivery/v1 has three) is
+# answered one criterion at a time; it stays Ambiguous until the last one and
+# settles then. An attr the contract does not list is refused rather than
+# recorded as a stray item nobody asked for.
+fn answer_attr(db :: conn.ConnDb, log :: tlog.Log, contract_id :: Str, attr :: Str, yes :: Bool, note :: Str, now_ms :: Int) -> [sql, time] Result[Outcome, Str] {
   match load_contract(db, contract_id) {
     Err(e) => Err(e),
     Ok(row) => {
       let c := contract_of_row(row)
       let criteria := criteria_of(row.criteria_json)
-      let items := list.concat(evidence_of(row.evidence_json), [ec.human_answer_item(human_attr(), yes, note)])
-      match ec.reverify_after_answer(c, criteria, items) {
-        Err(e) => Err(str.concat("consortium: ", e)),
-        Ok(verified) => settle_and_save(db, log, verified, criteria, items, row.commitment_id, now_ms),
+      let listed := list.filter(criteria, fn (cr :: request_bid.Criterion) -> Bool {
+        cr.attr == attr
+      })
+      if list.is_empty(listed) {
+        Err(str.join(["consortium: contract ", contract_id, " has no human criterion ", attr], ""))
+      } else {
+        let items := list.concat(evidence_of(row.evidence_json), [ec.human_answer_item(attr, yes, note)])
+        match ec.reverify_after_answer(c, criteria, items) {
+          Err(e) => Err(str.concat("consortium: ", e)),
+          Ok(verified) => settle_and_save(db, log, verified, criteria, items, row.commitment_id, now_ms),
+        }
       }
+    },
+  }
+}
+
+# The human criteria of a contract still awaiting an answer, as
+# "attr: question" lines for the founder.
+fn open_questions(db :: conn.ConnDb, contract_id :: Str) -> [sql] List[Str] {
+  match load_contract(db, contract_id) {
+    Err(_) => [],
+    Ok(row) => {
+      let answered := list.map(evidence_of(row.evidence_json), fn (i :: evidence.EvidenceItem) -> Str {
+        i.attr
+      })
+      list.fold(criteria_of(row.criteria_json), [], fn (acc :: List[Str], cr :: request_bid.Criterion) -> List[Str] {
+        if str.starts_with(cr.attr, "human:") and list.is_empty(list.filter(answered, fn (a :: Str) -> Bool {
+          a == cr.attr
+        })) {
+          list.concat(acc, [str.join([cr.attr, ": ", cr.description], "")])
+        } else {
+          acc
+        }
+      })
     },
   }
 }

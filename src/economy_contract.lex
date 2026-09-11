@@ -84,7 +84,7 @@ fn evidence_from_checker(criteria :: List[request_bid.Criterion], checker_output
         v == c.attr
       }))
       list.concat(acc, [{ attr: c.attr, satisfied: hit, note: if hit {
-        "verified by check_research_report"
+        "on the buyer's checker line (re-derived, not the supplier's word)"
       } else {
         str.concat("not on the checker's verified line: ", str.slice(str.trim(checker_output), 0, 300))
       } }])

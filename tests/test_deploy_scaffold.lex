@@ -30,11 +30,11 @@ fn test_compose_shape() -> Result[Unit, Str] {
   let pinned := str.contains(yml, "image: caddy:2") and str.contains(yml, "latest") == false
   let restart := str.contains(yml, "restart: unless-stopped")
   let named := str.contains(yml, "container_name: widgetapi")
-  let published := str.contains(yml, "\"9000:9000\"")
+  let published := str.contains(yml, "\"9000:9000\"") == false
   let tls_ports := str.contains(yml, "\"80:80\"") and str.contains(yml, "\"443:443\"")
   let ro_mount := str.contains(yml, "./Caddyfile:/etc/caddy/Caddyfile:ro")
   let cert_volume := str.contains(yml, "caddy_data:/data")
-  check("compose has pinned caddy, restart policy, ro Caddyfile mount, cert volume", pinned and restart and named and published and tls_ports and ro_mount and cert_volume)
+  check("compose has pinned caddy, restart policy, ro Caddyfile mount, cert volume, and the app publishes no host port", pinned and restart and named and published and tls_ports and ro_mount and cert_volume)
 }
 
 fn test_caddyfile_routes_domain_to_app() -> Result[Unit, Str] {

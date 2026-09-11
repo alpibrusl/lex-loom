@@ -29,13 +29,21 @@ import "std.str" as str
 # Caddy image is pinned to the 2.x major, never :latest.
 fn compose_yaml(service_name :: Str, port :: Int) -> Str
   examples {
-    compose_yaml("app", 8080) => "services:\n  app:\n    build: .\n    container_name: app\n    restart: unless-stopped\n    ports:\n      - \"8080:8080\"\n  caddy:\n    image: caddy:2\n    restart: unless-stopped\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - ./Caddyfile:/etc/caddy/Caddyfile:ro\n      - caddy_data:/data\n      - caddy_config:/config\nvolumes:\n  caddy_data:\n  caddy_config:\n"
+    compose_yaml("app", 8080) => "services:\n  app:\n    build: .\n    container_name: app\n    restart: unless-stopped\n  caddy:\n    image: caddy:2\n    restart: unless-stopped\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n    volumes:\n      - ./Caddyfile:/etc/caddy/Caddyfile:ro\n      - caddy_data:/data\n      - caddy_config:/config\nvolumes:\n  caddy_data:\n  caddy_config:\n"
   }
 {
   let p := int.to_str(port)
-  str.join(["services:", "  app:", "    build: .", str.concat("    container_name: ", service_name), "    restart: unless-stopped", "    ports:", str.join(["      - \"", p, ":", p, "\""], ""), "  caddy:", "    image: caddy:2", "    restart: unless-stopped", "    ports:", "      - \"80:80\"", "      - \"443:443\"", "    volumes:", "      - ./Caddyfile:/etc/caddy/Caddyfile:ro", "      - caddy_data:/data", "      - caddy_config:/config", "volumes:", "  caddy_data:", "  caddy_config:", ""], "\n")
+  str.join(["services:", "  app:", "    build: .", str.concat("    container_name: ", service_name), "    restart: unless-stopped", "  caddy:", "    image: caddy:2", "    restart: unless-stopped", "    ports:", "      - \"80:80\"", "      - \"443:443\"", "    volumes:", "      - ./Caddyfile:/etc/caddy/Caddyfile:ro", "      - caddy_data:/data", "      - caddy_config:/config", "volumes:", "  caddy_data:", "  caddy_config:", ""], "\n")
 }
 
+# The app service publishes NO host port. Caddy reaches it as app:<port> over
+# the compose network (see caddyfile below), and Caddy's 80/443 are the only
+# doors. The scaffold used to publish "<port>:<port>" on the app too, which
+# left the product answering plaintext on http://<host>:<port> beside the TLS
+# front door -- reachable to anyone, with no certificate, bypassing the only
+# thing in front of it (lex-loom#450). The whole point of a front door is that
+# it is the only one.
+#
 # Caddyfile: the domain block proxies to the app service over the compose
 # network. Naming a domain is what switches Caddy into automatic-HTTPS
 # mode — certificates are provisioned and renewed by Caddy itself.

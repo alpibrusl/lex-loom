@@ -10,6 +10,8 @@ import "std.str" as str
 
 import "std.env" as env
 
+import "./needs" as needs
+
 import "std.int" as int
 
 import "std.io" as io
@@ -455,7 +457,53 @@ fn run_iterations(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, paren
   if in_founding(db, ccfg, k, prev_ctx) {
     run_founding(db, ccfg, k, api_max, prev_ctx, evolve)
   } else {
-    run_iterations_budgeted(db, ccfg, k, parent_sprint, api_max, prev_ctx, current_goal, evolve)
+    let missing := needs.missing_at(needs.parse_needs(needs_spec()), k)
+    if list.is_empty(missing) {
+      run_iterations_budgeted(db, ccfg, k, parent_sprint, api_max, prev_ctx, current_goal, evolve)
+    } else {
+      match park_on_need(db, ccfg.id, k, missing) {
+        Err(e) => {
+          let __p := io.print(str.concat("[company] need: could not park the company: ", e))
+          { company_id: ccfg.id, iterations: k - 1, last_verdict: prev_ctx.last_verdict, stopped_by: "need_failed" }
+        },
+        Ok(_) => { company_id: ccfg.id, iterations: k - 1, last_verdict: prev_ctx.last_verdict, stopped_by: "parked" },
+      }
+    }
+  }
+}
+
+# [needs] env from the manifest, flattened by bootstrap-company.sh to NEEDS.
+fn needs_spec() -> [env] Str {
+  match env.get("NEEDS") {
+    Some(v) => v,
+    None => "",
+  }
+}
+
+# A founder-provided need is missing for iteration k: park the company on a
+# board decision that names the exact variable, the same way the founding
+# plan parks (#451, the smallest slice of docs/needs-ledger.md). No iteration
+# is recorded -- nothing ran -- so the resume re-enters at the same k and
+# re-checks: a yes without the value parks again, it does not proceed. The
+# value never leaves the runner machine; only the name is in the note.
+fn park_on_need(db :: conn.ConnDb, company_id :: Str, k :: Int, missing :: List[Str]) -> [env, io, sql, fs_read, fs_write, time, random, crypto, vcs] Result[Str, Str] {
+  let name := match list.head(missing) {
+    Some(n) => n,
+    None => "",
+  }
+  let sid := company.iteration_sprint_id(company_id, k)
+  let text := str.join(["# Need: ", name, "\n\nThe company cannot start iteration ", int.to_str(k), " until `", name, "` is set on the runner machine -- the machine running bin/cloud-company-runner.sh. Set it there, then answer yes; the company re-checks and resumes. A yes without the value parks again. Values never leave that machine; only the name travels here.\n\nMissing at this iteration: ", str.join(missing, ", "), "\n"], "")
+  match tr.artifact_put(db, sid, str.concat("need:", name), text) {
+    Err(e) => Err(str.concat("could not store the need note: ", e)),
+    Ok(hash) => match tr.push_attention(db, sid, str.concat("need:", name), "human founder blocking", "founder", hash) {
+      Err(e) => Err(str.concat("could not queue the board decision: ", e)),
+      Ok(aid) => {
+        let __t := tr.trail(db, company_id, "need_missing", str.join(["{\"need\":\"", name, "\",\"iter\":", int.to_str(k), ",\"attention\":\"", aid, "\"}"], ""))
+        let __pt := tr.trail(db, company_id, "company_parked", str.join(["{\"iter\":", int.to_str(k), ",\"sprint\":\"", sid, "\",\"need\":\"", name, "\"}"], ""))
+        let __p := io.print(str.join(["[company] PARKED: need ", name, " missing (attention ", aid, "): set ", name, " on the runner machine, then approve. Resume: ATTENTION_ID=", aid, " VERDICT=approved then bin/run-company.sh"], ""))
+        Ok(aid)
+      },
+    },
   }
 }
 

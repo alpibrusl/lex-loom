@@ -28,6 +28,15 @@ cd "$(dirname "$0")/.."
 : "${LOOM_SERVER:?LOOM_SERVER is required}"; : "${LOOM_RUNNER_TOKEN:?LOOM_RUNNER_TOKEN is required}"
 ONCE="${1:-}"
 WS_ROOT="${LOOM_WORKSPACE:-$HOME/loom-companies}"
+# src/main.lex imports the whole runtime, and a Lex program's effect row is the
+# union of everything it imports -- so ANY command in it needs the full row,
+# even attention_resolve_cmd, which touches only the database. It used to be
+# called with a reduced row here, under `>/dev/null 2>&1 || true`, which meant
+# the founder's approval of a founding plan NEVER resolved the attention item:
+# the call failed with effect_not_allowed and the failure was swallowed. The
+# company re-bootstrapped anyway, so it looked like it worked. Found while
+# building the need-park loop (#451), which copied the same dead call.
+RESOLVE_EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurrent,vcs,llm,approval,stream"
 
 jpost() { # path json-file -> body (fails loudly on non-2xx)
   local out; out=$(curl -sS --max-time 40 -w '\n%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $LOOM_RUNNER_TOKEN" -d @"$2" "$LOOM_SERVER$1"); local code="${out##*$'\n'}"; local body="${out%$'\n'*}"
@@ -251,10 +260,53 @@ PY
     done
     local lv; lv=$([ "$verdict" = yes ] && echo approved || echo rejected)
     echo "[runner] founder: $lv ($reason)"
-    DB_PATH="$ws/$cid/company.db" ATTENTION_ID="$aid" VERDICT="$lv" REASON="$reason" RESOLVER_ID="founder-via-loom-cloud" lex run --allow-effects env,io,sql,fs_read,fs_write,time,random,crypto src/main.lex attention_resolve_cmd > "$ws/resolve.log" 2>&1 || true
+    DB_PATH="$ws/$cid/company.db" ATTENTION_ID="$aid" VERDICT="$lv" REASON="$reason" RESOLVER_ID="founder-via-loom-cloud" lex run --allow-effects "$RESOLVE_EFFECTS" src/main.lex attention_resolve_cmd > "$ws/resolve.log" 2>&1 || true
     report "$uuid" '{"status":"running","summary":"founding plan decided; company resuming"}'
     STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
   fi
+  # A founder-provided need is missing (#451): the company parked on a board
+  # decision naming the exact variable. The founder sets it on THIS machine
+  # and answers in the dashboard; the runner resolves through loom's one
+  # decide path and re-bootstraps, which re-checks -- a yes without the value
+  # parks again on a new item, and this loop asks again. `last_aid` stops the
+  # loop from re-posting an item it already resolved once the company moves on.
+  local last_aid=""
+  while command grep -q 'PARKED: need ' "$ws/company.log"; do
+    local line; line=$(command grep -o 'PARKED: need [A-Za-z0-9_]* missing (attention [0-9a-f]*' "$ws/company.log" | tail -1)
+    local need aid; need=$(echo "$line" | awk '{print $3}'); aid=$(echo "$line" | grep -o '[0-9a-f]*$')
+    { [ -n "$aid" ] && [ "$aid" != "$last_aid" ]; } || break
+    last_aid="$aid"
+    local note; note=$(python3 - "$ws/$cid/company.db" "$aid" <<'PY'
+import sqlite3, sys
+db, aid = sys.argv[1:3]
+c = sqlite3.connect(db)
+row = c.execute("select artifact_hash from attention_queue where id=?", (aid,)).fetchone()
+r2 = c.execute("select content from artifacts where hash=?", (row[0],)).fetchone() if row else None
+print(r2[0] if r2 else "(note unavailable)")
+PY
+)
+    local body; body=$(python3 -c 'import sys,json; print(json.dumps({"item_id": sys.argv[1], "kind": "need", "question": "The company needs %s set on the runner machine before it can continue. Set it there, then answer yes (no stops the company)." % sys.argv[2], "context_md": sys.argv[3]}))' "$aid" "$need" "$note")
+    local f; f=$(mktemp); with_token "$body" > "$f"; jpost "/api/companies/$uuid/decisions" "$f" >/dev/null; rm -f "$f"
+    report_from_db "$uuid" "$ws/$cid/company.db" "awaiting-decision" "" "needs $need on the runner; awaiting the founder"
+    echo "[runner] waiting for the founder: set $need on this machine, then answer in the dashboard..."
+    local verdict="" reason=""
+    while [ -z "$verdict" ]; do
+      sleep 10
+      f=$(mktemp); with_token "$(python3 -c 'import json,sys; print(json.dumps({"item_id": sys.argv[1]}))' "$aid")" > "$f"
+      local resp; resp=$(jpost "/api/companies/$uuid/decisions/poll" "$f" || echo '{}'); rm -f "$f"
+      verdict=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print(ds[0]["verdict"] if ds else "")' "$resp")
+      reason=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print((ds[0].get("reason") or "") if ds else "")' "$resp")
+    done
+    local lv; lv=$([ "$verdict" = yes ] && echo approved || echo rejected)
+    echo "[runner] founder on $need: $lv ($reason)"
+    DB_PATH="$ws/$cid/company.db" ATTENTION_ID="$aid" VERDICT="$lv" REASON="$reason" RESOLVER_ID="founder-via-loom-cloud" lex run --allow-effects "$RESOLVE_EFFECTS" src/main.lex attention_resolve_cmd 2>&1 | tail -1 || echo "[runner] WARNING: attention_resolve_cmd failed; the item stays pending"
+    if [ "$lv" != approved ]; then
+      report_from_db "$uuid" "$ws/$cid/company.db" "failed" "" "the founder declined to provide $need; company stopped"
+      return
+    fi
+    report "$uuid" "$(python3 -c 'import json,sys; print(json.dumps({"status":"running","summary":"%s provided; company re-checking and resuming" % sys.argv[1]}))' "$need")"
+    STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
+  done
   local v; v=$(command grep -o 'last_verdict=[a-z_]*' "$ws/company.log" | tail -1 | cut -d= -f2)
   report_from_db "$uuid" "$ws/$cid/company.db" "$([ "$v" = passed ] && echo done || echo failed)" "$v" "$(command grep '\[company\] done' "$ws/company.log" | tail -1 | cut -c1-200)"
 }

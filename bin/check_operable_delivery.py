@@ -42,8 +42,11 @@ def sub_checker(script: str, ws: Path) -> tuple[bool, str]:
     if not p.exists():
         return False, f"{script} not found beside this checker"
     r = subprocess.run([sys.executable, str(p), str(ws)], capture_output=True, text=True, timeout=120)
-    tail = (r.stdout.strip().splitlines() or [""])[-1][:160]
-    return r.returncode == 0, tail
+    lines = r.stdout.strip().splitlines() or [""]
+    # the sub-checker's own unmet detail ("  checkable:x: why") is what a founder
+    # needs to read; fall back to its last line when there is none
+    detail = next((l.strip() for l in lines if l.startswith("  checkable:")), lines[-1])
+    return r.returncode == 0, detail[:200]
 
 
 def accepted_node_of_role(c: sqlite3.Connection, sprint: str, role: str) -> bool:

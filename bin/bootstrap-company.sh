@@ -111,6 +111,11 @@ role_packs = ",".join(str(x) for x in roles_table.get("packs", []) if str(x).str
 # MODEL_OVERRIDES. Everything routes through LiteLLM, so a local Ollama name
 # and a hosted OpenCode name are interchangeable here -- the mix is a routing
 # choice, not an architectural one.
+# [needs] env: variables only the founder can provide, "VAR" or "VAR@k"
+# (required from iteration k). Flattened to NEEDS; the company parks on a
+# board decision naming the first one missing when its iteration comes (#451).
+needs_table = m.get("needs", {}) if isinstance(m.get("needs", {}), dict) else {}
+needs_env = ",".join(str(x).strip() for x in needs_table.get("env", []) if str(x).strip())
 models_table = m.get("models", {}) if isinstance(m.get("models", {}), dict) else {}
 model_overrides = ",".join(f"{k}:{v}" for k, v in models_table.items() if str(v).strip())
 
@@ -142,6 +147,7 @@ out = {
     "CROLE_PACKS": role_packs,
     "CBUDGET_ENVELOPES": budget_envelopes,
     "CMODEL_OVERRIDES": model_overrides,
+    "CNEEDS": needs_env,
 }
 for k, v in out.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -320,7 +326,7 @@ fi
 
 if [ "$NORUN" = "--no-run" ]; then
   echo "[bootstrap] --no-run: scaffold complete, not starting the company."
-  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' MODEL_OVERRIDES='$CMODEL_OVERRIDES' bin/run-company.sh"
+  echo "[bootstrap] to run:  LOOM_WORKSPACE='$WS' COMPANY_ID='$CID' MODEL='$CMODEL' MAX_ITERATIONS=$CMAXIT STOP_WHEN='$STOP_WHEN' DB_PATH='$DIR/company.db' GOAL=... ORG_EDGES='$CORG_EDGES' ROLE_PACKS='$CROLE_PACKS' BUDGET_ENVELOPES='$CBUDGET_ENVELOPES' MODEL_OVERRIDES='$CMODEL_OVERRIDES' NEEDS='$CNEEDS' bin/run-company.sh"
   exit 0
 fi
 
@@ -331,6 +337,6 @@ COMPANY_ID="$CID" MODEL="$CMODEL" MAX_ITERATIONS="$CMAXIT" STOP_WHEN="$STOP_WHEN
   SOFT_MESH_URL="$CSOFT_MESH_URL" SOFT_ORG_ID="$CSOFT_ORG_ID" SOFT_ROLES="$CSOFT_ROLES" \
   SOFT_SETTLEMENT="$CSOFT_SETTLEMENT" POLICY_ISOLATION="$CPOLICY_ISOLATION" \
   ORG_EDGES="$CORG_EDGES" ROLE_PACKS="$CROLE_PACKS" BUDGET_ENVELOPES="$CBUDGET_ENVELOPES" COMPANY_PATH="$CPATH" \
-  MODEL_OVERRIDES="$CMODEL_OVERRIDES" FOUNDING="$CFOUNDING" LOOM_IAC_ALLOW="$CIAC_ALLOW" \
+  MODEL_OVERRIDES="$CMODEL_OVERRIDES" FOUNDING="$CFOUNDING" LOOM_IAC_ALLOW="$CIAC_ALLOW" NEEDS="$CNEEDS" \
   bin/run-company.sh
 

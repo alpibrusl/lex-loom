@@ -91,6 +91,8 @@ import "./events" as events
 
 import "./company_runner" as company_runner
 
+import "./needs" as needs
+
 import "./identity" as identity
 
 import "./dag_view" as dagv
@@ -1126,6 +1128,31 @@ fn add_pool_contact_cmd() -> [env, io, sql, fs_read, fs_write, time, crypto, ran
       Ok(db) => match company.add_pool_agent_contact(db, company_id, oracle, agent_id) {
         Err(e) => io.print(str.concat("[contacts] FATAL: ", e)),
         Ok(_) => io.print(str.join(["[contacts] ", company_id, "/", oracle, " -> agent:", agent_id], "")),
+      },
+    }
+  }
+}
+
+# ── needs_check_cmd (#451) ────────────────────────────────────────────────────
+# The needs check the iteration loop performs, callable on its own so the
+# park -> decision -> resolve -> re-check path is provable offline, with no
+# model. Env: DB_PATH, COMPANY_ID, NEEDS ("VAR@k,..."), ITER.
+fn needs_check_cmd() -> [env, io, sql, fs_read, fs_write, time, random, crypto, vcs] Unit {
+  let db_path := resolve_db_url()
+  let company_id := get_env("COMPANY_ID", "acme")
+  let k := parse_int_or(get_env("ITER", "1"), 1)
+  let missing := needs.missing_at(needs.parse_needs(get_env("NEEDS", "")), k)
+  if list.is_empty(missing) {
+    io.print(str.concat("[needs] satisfied for iteration ", int.to_str(k)))
+  } else {
+    match open_db(db_path) {
+      Err(e) => io.print(str.concat("[needs] FATAL: ", e)),
+      Ok(db) => match migrate.run(db.handle) {
+        Err(e) => io.print(str.concat("[needs] FATAL: migrate: ", e)),
+        Ok(_) => match company_runner.park_on_need(db, company_id, k, missing) {
+          Err(e) => io.print(str.concat("[needs] FATAL: ", e)),
+          Ok(_) => (),
+        },
       },
     }
   }

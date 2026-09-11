@@ -1,0 +1,55 @@
+# formco -- the first company (lex-loom#445): a privacy-first form backend for
+# static sites. Run A manifest: build -> sellable -> operable, settled by the
+# operable-delivery contract (#447). The growth pack (lifecycle, community)
+# joins for Run B once #440/#441 exist; it is deliberately absent here.
+#
+# Positioning, written down once so every copy role reads the same line:
+# NOT cheaper than the incumbents (FormBackend sells 1,000 submissions for
+# $5/mo, verified live 2026-09-11). EU-resident on Hetzner, short retention
+# by default, real deletion. No copy role invents a price war.
+
+[identity]
+id      = "formco"
+name    = "FormCo"
+mission = """
+Build a privacy-first form backend for static sites, as a paid, self-serve
+product on the python-fastapi path.
+
+A paying developer points a static site's <form action> at a unique endpoint.
+Submissions are validated against the endpoint's declared fields, filtered for
+spam (honeypot, per-endpoint and per-IP rate limits, body and field-count
+caps), stored briefly, emailed to the owner, and visible in a dashboard with
+CSV export and a custom success redirect. EU-hosted; retention short by
+default; deletion deletes.
+
+OUT OF v1, deliberately: file uploads, autoresponders, CRM or Zapier
+integrations, custom SMTP, a form builder, conditional workflows. Each expands
+the storage, malware or abuse surface before there is evidence anyone wants it.
+
+Positioning: not cheaper than the incumbents -- privacy is the product. EU
+residency, short retention, real deletion.
+
+Success metrics (rates and retention, never volumes):
+1. first-submission activation: % of new accounts whose endpoint receives a
+   genuine submission within 7 days
+2. live-form retention: % of paid endpoints still receiving genuine
+   submissions in the following billing period
+3. genuine-delivery rate: genuine submissions delivered to the owner divided
+   by genuine submissions received -- a falsely rejected lead matters more
+   than a hundred filtered spam
+
+Nothing here sends email to real people, posts publicly, creates a paid
+product, or buys a domain: each is a founder decision at a human gate, and
+the credentials for them are provided by the founder, never invented.
+"""
+
+[stack]
+path  = "python-fastapi"
+model = "kimi-k2.7-code"
+
+[roles]
+packs = ["core", "finance", "governance", "content", "ops"]
+
+[policy]
+max_iterations = 6
+budget_eur     = 40

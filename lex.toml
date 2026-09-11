@@ -1,6 +1,7 @@
 [package]
 name        = "lex-loom"
 version     = "0.1.1"
+lex         = "0.11.5"
 edition     = "2025"
 license     = "EUPL-1.2"
 description = "Autonomous companies — persistent goals run as iterating multi-agent sprint cycles"

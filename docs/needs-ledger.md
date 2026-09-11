@@ -83,6 +83,12 @@ environment and print one state:
 | `no-adapter` | profile declares no `providers.<adapter>` | declare it in the profile |
 | `grant-off` | profile grant is false | flip `grants.<grant> = true` |
 | `missing-credential` | env var unset on the runner machine | set `<VAR>` on the runner machine |
+
+"On the runner machine" means in the runner's needs file, `~/.loom/needs.env`
+(`LOOM_NEEDS_FILE`), as a `VAR=value` line: the cloud runner loads it before
+every bootstrap. An `export` in another shell never reaches a runner that is
+already running, and a founder who did that would watch the company park on
+the same need twice (found while reading the park loop, 2026-09-11).
 | `founder-action` | probe = founder and not confirmed | confirm in the dashboard (board decision) |
 | `not-yet-required` | required_by is later than the next iteration | none |
 

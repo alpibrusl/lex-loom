@@ -28,6 +28,28 @@ cd "$(dirname "$0")/.."
 : "${LOOM_SERVER:?LOOM_SERVER is required}"; : "${LOOM_RUNNER_TOKEN:?LOOM_RUNNER_TOKEN is required}"
 ONCE="${1:-}"
 WS_ROOT="${LOOM_WORKSPACE:-$HOME/loom-companies}"
+# Founder-provided needs (#451): a company checks its `[needs]` at the start
+# of an iteration by reading the ENVIRONMENT -- and that is this process's
+# environment, fixed when the runner started, long before the founder was
+# asked for anything. An `export` in another shell never reaches it, so a
+# founder who did exactly what the board question said would watch the
+# company park on the same need again. Every bootstrap therefore first loads
+# the needs file the question names: KEY=value lines (an optional `export `
+# prefix is tolerated; blank lines and # comments ignored), written by the
+# founder while the company is parked, present when it re-checks.
+NEEDS_FILE="${LOOM_NEEDS_FILE:-$HOME/.loom/needs.env}"
+load_needs_file() {
+  [ -f "$NEEDS_FILE" ] || return 0
+  local line n
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#export }"
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *=*) ;; *) continue ;; esac
+    n="${line%%=*}"
+    case "$n" in ''|[0-9]*|*[!A-Za-z0-9_]*) echo "[runner] needs file: skipping malformed line: $line" >&2; continue ;; esac
+    export "$n=${line#*=}"
+  done < "$NEEDS_FILE"
+}
 # src/main.lex imports the whole runtime, and a Lex program's effect row is the
 # union of everything it imports -- so ANY command in it needs the full row,
 # even attention_resolve_cmd, which touches only the database. It used to be
@@ -230,7 +252,7 @@ run_plain_company() { # uuid manifest-file stop_when
   export LOOM_WORKSPACE="$ws"
   local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
   report "$uuid" '{"status":"running"}'
-  STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
+  load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
   if command grep -q 'founding plan ready for the board' "$ws/company.log"; then
     local aid; aid=$(command grep -o 'attention [0-9a-f]*' "$ws/company.log" | head -1 | awk '{print $2}')
     local body; body=$(python3 - "$ws/$cid/company.db" "$aid" <<'PY'
@@ -262,7 +284,7 @@ PY
     echo "[runner] founder: $lv ($reason)"
     DB_PATH="$ws/$cid/company.db" ATTENTION_ID="$aid" VERDICT="$lv" REASON="$reason" RESOLVER_ID="founder-via-loom-cloud" lex run --allow-effects "$RESOLVE_EFFECTS" src/main.lex attention_resolve_cmd > "$ws/resolve.log" 2>&1 || true
     report "$uuid" '{"status":"running","summary":"founding plan decided; company resuming"}'
-    STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
+    load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
   fi
   # A founder-provided need is missing (#451): the company parked on a board
   # decision naming the exact variable. The founder sets it on THIS machine
@@ -285,10 +307,10 @@ r2 = c.execute("select content from artifacts where hash=?", (row[0],)).fetchone
 print(r2[0] if r2 else "(note unavailable)")
 PY
 )
-    local body; body=$(python3 -c 'import sys,json; print(json.dumps({"item_id": sys.argv[1], "kind": "need", "question": "The company needs %s set on the runner machine before it can continue. Set it there, then answer yes (no stops the company)." % sys.argv[2], "context_md": sys.argv[3]}))' "$aid" "$need" "$note")
+    local body; body=$(python3 -c 'import sys,json; print(json.dumps({"item_id": sys.argv[1], "kind": "need", "question": "The company needs %s before it can continue. On the runner machine, add the line `%s=<value>` to %s, then answer yes (no stops the company)." % (sys.argv[2], sys.argv[2], sys.argv[4]), "context_md": sys.argv[3]}))' "$aid" "$need" "$note" "$NEEDS_FILE")
     local f; f=$(mktemp); with_token "$body" > "$f"; jpost "/api/companies/$uuid/decisions" "$f" >/dev/null; rm -f "$f"
     report_from_db "$uuid" "$ws/$cid/company.db" "awaiting-decision" "" "needs $need on the runner; awaiting the founder"
-    echo "[runner] waiting for the founder: set $need on this machine, then answer in the dashboard..."
+    echo "[runner] waiting for the founder: add $need=<value> to $NEEDS_FILE on this machine, then answer in the dashboard..."
     local verdict="" reason=""
     while [ -z "$verdict" ]; do
       sleep 10
@@ -305,7 +327,7 @@ PY
       return
     fi
     report "$uuid" "$(python3 -c 'import json,sys; print(json.dumps({"status":"running","summary":"%s provided; company re-checking and resuming" % sys.argv[1]}))' "$need")"
-    STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
+    load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
   done
   local v; v=$(command grep -o 'last_verdict=[a-z_]*' "$ws/company.log" | tail -1 | cut -d= -f2)
   report_from_db "$uuid" "$ws/$cid/company.db" "$([ "$v" = passed ] && echo done || echo failed)" "$v" "$(command grep '\[company\] done' "$ws/company.log" | tail -1 | cut -c1-200)"

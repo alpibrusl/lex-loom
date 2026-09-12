@@ -50,6 +50,11 @@ with its own `py_test_author` sibling and `py_qa`.
 
 ## Estimate
 
+The estimate below was made against `kimi-k2.7-code`, the model the prior
+runs used. The manifest now names `qwen3.8:27b-mlx`, served locally through
+LiteLLM (2026-09-12): no provider spend, but a smaller model, so expect
+more gate bounces per node and treat the iteration counts as a floor.
+
 | phase | iterations | wall-clock on kimi-k2.7-code | note |
 |---|---|---|---|
 | build nodes 1, 3, 4, 5 | 3–4 | 3–5 h | run 1's shape: expect one failed iteration |

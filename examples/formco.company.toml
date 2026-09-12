@@ -45,7 +45,7 @@ the credentials for them are provided by the founder, never invented.
 
 [stack]
 path  = "python-fastapi"
-model = "kimi-k2.7-code"
+model = "qwen3.8:27b-mlx"
 
 [roles]
 packs = ["core", "finance", "governance", "content", "ops"]

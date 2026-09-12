@@ -1,0 +1,10 @@
+[package]
+name        = "lex-web-api"
+version     = "0.1.0"
+lex         = "0.11.13"
+description = "Golden-path skeleton for a Lex HTTP API on lex-web: typed routes, form and JSON bodies, body limits, a testing surface."
+license     = "EUPL-1.2"
+
+[dependencies]
+lex-web    = { git = "https://github.com/alpibrusl/lex-web" }
+lex-schema = { git = "https://github.com/alpibrusl/lex-schema" }

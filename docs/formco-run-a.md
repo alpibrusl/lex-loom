@@ -86,6 +86,50 @@ not proceed.
 
 Everything else runs without a human.
 
+## Local first: no domain, no host (the way to start)
+
+A founder without a hostname or a VM can still run this company end to end.
+With `LOOM_ENV` unset the architect is **forbidden** a deploy node, so every
+graph ends at `launch` -- the node that boots the product on a port and curls
+it for real. That is a genuine finish line: the product runs, answers a real
+request, and its own suite passes.
+
+Use `examples/formco-local.company.toml`. It is the same company with two
+differences: it declares no `[needs]`, and its mission says the run is local.
+That matters -- on the first run (2026-09-12) the deploy needs were declared
+at iteration 5 and parked a company whose graphs had never contained a deploy
+node at all.
+
+    LOOM_SERVER=https://loom.lexlang.org LOOM_RUNNER_TOKEN=<key> bin/cloud-company-runner.sh
+    # dashboard: Companies -> New company -> kind `company` -> paste
+    # examples/formco-local.company.toml
+
+### Trying the product yourself, while it builds
+
+Each iteration's accepted files land in the company's workspace under
+`$LOOM_WORKSPACE/cloud-<uuid>/formcolocal/`. To run one yourself, from that
+directory, on a port nothing else holds:
+
+    lsof -ti :8123 || PORT=8123 lex run --allow-effects \
+      env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,approval,stream,vcs \
+      main.lex main
+    curl -i localhost:8123/health
+    curl -i -d 'name=Ada&email=ada@example.eu' 'localhost:8123/submit?next=/thanks'
+
+That effect row is not decoration: a Lex program needs the union of every
+effect its imports declare, and lex-web reaches `crypto` and `random` inside
+its own request-id middleware. A shorter row lets the process start and then
+fails every request -- which reads as a dead endpoint on a server that is
+plainly running. `demo/lw1-lex-web-path-roundtrip.sh` pins it.
+
+### When a host does appear
+
+Switch to `examples/formco.company.toml` (which declares `DEPLOY_DOMAIN@5`
+and `HETZNER_HOST@5`), put the values in `~/.loom/needs.env`, set `LOOM_ENV`
+to something other than `local`, and flip `grants.allow_real_deploy` in
+`~/.loom/profile.toml`. Only then is a deploy node planned, and only then does
+the operable contract's `reachable-over-tls` criterion become assessable.
+
 ## How to start Run A (#453)
 
 Through the cloud runner, from the dashboard, as a founder would. Nothing

@@ -291,6 +291,109 @@ fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
 # probe.lex/probe1.lex -- scratch experiments that never compiled, left in a
 # work dir whose `spec compiles` gate compiles every file. py_check has had
 # this since #333; the Lex builder had no way out at all.
+# ── lex_docs ────────────────────────────────────────────────────────────────
+# A Lex package DESCRIBES ITSELF: `lex docs <path>` emits its API -- every
+# module's doc comments and function count, read from the source the company
+# will actually link against. Until this tool the Lex build agent held
+# lex_guidelines (hand-written LANGUAGE rules) and nothing at all about the
+# LIBRARIES its stack path pre-wires, so it invented their APIs from training
+# data that does not contain Lex: FormCo's first three iterations (2026-09-12,
+# lex-web-api path) were spent writing lex-web calls that do not exist.
+#
+# Two shapes, both cheap, so the agent narrows before it pulls:
+#   {package}          -> the module index (module name + fn count)
+#   {package, module}  -> that module's full API docs, capped
+#   package="stdlib"   -> `lex docs --stdlib-index`, the whole stdlib index
+#
+# Injection: the package/module names come from a model, and they are
+# interpolated into a single-quoted shell word. A name containing a quote, a
+# slash or ".." is refused rather than escaped -- inside '...' nothing else
+# expands, so those three rejections make the quoting airtight.
+fn docs_cap() -> Int {
+  24000
+}
+
+fn is_safe_docs_name(s :: Str) -> Bool
+  examples {
+    is_safe_docs_name("lex-web") => true,
+    is_safe_docs_name("body") => true,
+    is_safe_docs_name("") => false,
+    is_safe_docs_name("a'; rm -rf /") => false,
+    is_safe_docs_name("../../etc/passwd") => false,
+    is_safe_docs_name("src/body") => false
+  }
+{
+  not str.is_empty(s) and not str.contains(s, "'") and not str.contains(s, "..") and not str.contains(s, "/")
+}
+
+# Trim what a model tends to type: "lex-web/src/body.lex" is refused by the
+# name check above, but a bare "body.lex" is just "body".
+fn docs_module_name(m :: Str) -> Str
+  examples {
+    docs_module_name("body") => "body",
+    docs_module_name("body.lex") => "body"
+  }
+{
+  match str.strip_suffix(m, ".lex") {
+    Some(base) => base,
+    None => m,
+  }
+}
+
+fn docs_cmd(package :: Str, module :: Str) -> Str {
+  if package == "stdlib" or package == "std" {
+    "${LEX:-lex} docs --stdlib-index"
+  } else {
+    let root := str.join(["\"$HOME\"/.lex/packages/'", package, "'"], "")
+    if str.is_empty(module) {
+      str.join(["if [ -d ", root, "/src ]; then echo \"MODULES IN ", package, " -- call lex_docs again with module=<name> for one module's API:\"; ${LEX:-lex} docs ", root, "/src 2>/dev/null | grep -E '\\.lex \\([0-9]+ fn\\):' | sed -e 's#.*/##' -e 's#\\.lex # #' -e 's#:$##'; else echo \"no package '", package, "' is installed. Installed packages:\"; ls \"$HOME\"/.lex/packages 2>/dev/null; fi"], "")
+    } else {
+      str.join(["f=", root, "/src/'", module, "'.lex; if [ -f \"$f\" ]; then ${LEX:-lex} docs \"$f\"; else echo \"no module '", module, "' in ", package, ". Modules:\"; ls ", root, "/src 2>/dev/null | sed 's#\\.lex$##'; fi"], "")
+    }
+  }
+}
+
+fn cap_docs(out :: Str) -> Str {
+  if str.len(out) > docs_cap() {
+    str.join([str.slice(out, 0, docs_cap()), "\n\n[truncated -- call lex_docs again with a single module to get its full API]"], "")
+  } else {
+    out
+  }
+}
+
+fn make_lex_docs_tool() -> t.Tool {
+  let params := { title: "LexDocs", description: "Read a Lex package's own API docs", fields: [s.required_str("package", []), s.optional(s.required_str("module", []))] }
+  t.define("lex_docs", "Return the REAL API of a Lex package your project depends on, generated from that package's source (`lex docs`). Call it for EVERY dependency in lex.toml before writing code that uses one -- Lex libraries are not in your training data and a plausible-looking call you remember does not exist. Give `package` alone (e.g. package='lex-web') for the module index, then `package` + `module` (e.g. module='router') for that module's functions and their documented behaviour. package='stdlib' returns the whole standard-library index.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let package := match jv.get_field(args, "package") {
+      Some(JStr(v)) => str.trim(v),
+      _ => "",
+    }
+    let module := match jv.get_field(args, "module") {
+      Some(JStr(v)) => docs_module_name(str.trim(v)),
+      _ => "",
+    }
+    if not is_safe_docs_name(package) {
+      Ok(JObj([("ok", JStr("false")), ("docs", JStr("package must be a bare package name, e.g. 'lex-web' or 'stdlib' (no paths, no quotes)"))]))
+    } else {
+      if not str.is_empty(module) and not is_safe_docs_name(module) {
+        Ok(JObj([("ok", JStr("false")), ("docs", JStr("module must be a bare module name, e.g. 'router' (no paths, no quotes)"))]))
+      } else {
+        match proc.run("bash", ["-c", docs_cmd(package, module)]) {
+          Err(msg) => Ok(JObj([("ok", JStr("false")), ("docs", JStr(msg))])),
+          Ok(r) => {
+            let out := str.trim(str.concat(r.stdout, r.stderr))
+            if str.is_empty(out) {
+              Ok(JObj([("ok", JStr("false")), ("docs", JStr(str.concat("no docs found for ", package)))]))
+            } else {
+              Ok(JObj([("ok", JStr("true")), ("docs", JStr(cap_docs(out)))]))
+            }
+          },
+        }
+      }
+    }
+  })
+}
+
 fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   let dir := work_dir(sprint_id)
   let params := { title: "LexCheck", description: "Type-check a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("code", []), s.optional(s.required_bool("delete"))] }

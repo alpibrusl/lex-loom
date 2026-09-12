@@ -68,6 +68,10 @@ with_token() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["runner
 report() { # company-uuid json-fields
   local f; f=$(mktemp); with_token "$2" > "$f"; jpost "/api/companies/$1/report" "$f" >/dev/null; rm -f "$f"
 }
+# `graphs` carries the SHAPE of each iteration -- loom's sprint graph
+# verbatim, nodes with their role and gate plus the edges between them. The
+# cloud draws it on the card, so a founder reads a plan with a failure in it
+# rather than a bag of node names (found watching #453's first run).
 # `backlog` carries what the company proposes to do NEXT: loom's own
 # company_backlog, which the strategist appends to as work surfaces. Those
 # proposals are the company's next iterations, and until now they existed only
@@ -95,7 +99,7 @@ report_from_db() { # company-uuid company.db status last_verdict summary
 import sqlite3, json, sys, os, datetime, time
 db, status, verdict, summary, tok = sys.argv[1:6]
 ioff, soff = int(os.environ.get("IDX_OFFSET") or 0), int(os.environ.get("SEQ_OFFSET") or 0)
-its, evs, nodes, backlog = [], [], [], []
+its, evs, nodes, backlog, graphs = [], [], [], [], []
 try:
     c = sqlite3.connect(db)
     its = [dict(idx=r[0] + ioff, sprint_id=r[1], status=r[2], started_at=r[3], ended_at=r[4]) for r in c.execute("select idx, sprint_id, status, started_at, ended_at from company_iterations order by idx")]
@@ -106,6 +110,27 @@ try:
         idx = sprint_idx.get(r[0])
         if idx is not None:
             nodes.append(dict(idx=idx, node_id=r[1], phase=r[2] or "", accepted=bool(r[3]), reason=(r[4] or "")[:2000]))
+    # The SHAPE of each iteration, not just its outcome: loom's own sprint
+    # graph (nodes with role and gate, plus the edges). A sprint records one
+    # row per phase and one more per architect extension, so take the FULLEST
+    # graph for each sprint -- the extension adds nodes, and it is the graph
+    # the iteration actually ran.
+    try:
+        fullest = {}
+        for sid, phase, gj in c.execute("select sprint_id, phase, graph_json from sprint_graphs order by created_at"):
+            idx = sprint_idx.get(sid)
+            if idx is None:
+                continue
+            try:
+                n = len(json.loads(gj).get("nodes", []))
+            except Exception:
+                continue
+            prev = fullest.get(idx)
+            if prev is None or n >= prev[0]:
+                fullest[idx] = (n, dict(idx=idx, sprint_id=sid, phase=phase or "", graph_json=gj[:60000]))
+        graphs = [v[1] for v in sorted(fullest.values(), key=lambda kv: kv[1]["idx"])]
+    except Exception:
+        graphs = []
     rows = c.execute("select ts, event_kind, data_json from traces where event_kind in ('stage_transition','goal_decision','sprint_complete','acceptance_passed','acceptance_failed','node_denied','treasury_opened','company_parked','qa_skipped_document_sprint') order by ts").fetchall()
     for i, (ts, k, d) in enumerate(rows[-400:]):
         try: data = json.loads(d)
@@ -116,7 +141,7 @@ except Exception as e:
 now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 for j, e in enumerate(json.loads(os.environ.get("EXTRA_EVENTS_JSON") or "[]")):
     evs.append(dict(seq=1000000 + int(time.time()) % 100000000 + j, kind=e["kind"], data=e.get("data", {}), ts=now))
-print(json.dumps(dict(runner_token=tok, status=status, last_verdict=verdict, summary=summary, iterations=its, events=evs, nodes=nodes, backlog=backlog)))
+print(json.dumps(dict(runner_token=tok, status=status, last_verdict=verdict, summary=summary, iterations=its, events=evs, nodes=nodes, graphs=graphs, backlog=backlog)))
 PY
   jpost "/api/companies/$1/report" "$f" >/dev/null; rm -f "$f"
 }

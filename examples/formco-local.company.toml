@@ -1,0 +1,72 @@
+# formco-local -- FormCo with nothing to deploy to yet (#453, first real run).
+#
+# Same company, same mission; what differs is that this one is finished when
+# the product RUNS LOCALLY and its own suite passes. The founder has no domain
+# and no host, and loom already knows it: with LOOM_ENV unset the architect is
+# forbidden a deploy node, so every graph this company plans ends at `launch`
+# -- the node that boots the product on a port and curls it for real.
+#
+# Therefore NO [needs]: a founder-provided need exists to stop a company that
+# is about to need a credential it does not have (#451). Declaring
+# DEPLOY_DOMAIN here would park a company that was never going to deploy --
+# which is exactly what happened on the first run, at iteration 5, after four
+# iterations that never touched a host.
+#
+# When there IS a host: use examples/formco.company.toml, which declares the
+# deploy needs at iteration 5, and set LOOM_ENV + grants.allow_real_deploy.
+#
+# Positioning, written down once so every copy role reads the same line:
+# NOT cheaper than the incumbents (FormBackend sells 1,000 submissions for
+# $5/mo, verified live 2026-09-11). EU-resident on Hetzner, short retention
+# by default, real deletion. No copy role invents a price war.
+
+[identity]
+id      = "formcolocal"
+name    = "FormCo (local)"
+mission = """
+Build a privacy-first form backend for static sites, as a paid, self-serve
+product on the lex-web-api path (Lex, on lex-web).
+
+A paying developer points a static site's <form action> at a unique endpoint.
+Submissions are validated against the endpoint's declared fields, filtered for
+spam (honeypot, per-endpoint and per-IP rate limits, body and field-count
+caps), stored briefly, emailed to the owner, and visible in a dashboard with
+CSV export and a custom success redirect. EU-hosted; retention short by
+default; deletion deletes.
+
+OUT OF v1, deliberately: file uploads, autoresponders, CRM or Zapier
+integrations, custom SMTP, a form builder, conditional workflows. Each expands
+the storage, malware or abuse surface before there is evidence anyone wants it.
+
+Positioning: not cheaper than the incumbents -- privacy is the product. EU
+residency, short retention, real deletion.
+
+Success metrics (rates and retention, never volumes):
+1. first-submission activation: % of new accounts whose endpoint receives a
+   genuine submission within 7 days
+2. live-form retention: % of paid endpoints still receiving genuine
+   submissions in the following billing period
+3. genuine-delivery rate: genuine submissions delivered to the owner divided
+   by genuine submissions received -- a falsely rejected lead matters more
+   than a hundred filtered spam
+
+Nothing here sends email to real people, posts publicly, creates a paid
+product, or buys a domain: each is a founder decision at a human gate, and
+the credentials for them are provided by the founder, never invented.
+
+THIS RUN IS LOCAL. It is done when the product starts on a port, answers a
+real request, and its own test suite passes -- no host, no domain, no TLS,
+no deployment. Build for a single process with SQLite next to it; do not
+write deployment manifests, Kubernetes, or cloud provider config.
+"""
+
+[stack]
+path  = "lex-web-api"
+model = "qwen3.8:27b-mlx"
+
+[roles]
+packs = ["core", "finance", "governance", "content", "ops"]
+
+[policy]
+max_iterations = 6
+budget_eur     = 40

@@ -50,8 +50,12 @@ with its own `py_test_author` sibling and `py_qa`.
 
 ## Estimate
 
-The estimate below was made against `kimi-k2.7-code`, the model the prior
-runs used. The manifest now names `qwen3.8:27b-mlx`, served locally through
+The estimate below was made against `kimi-k2.7-code` on the `python-fastapi`
+path, the stack the prior runs used. FormCo now builds in **Lex on lex-web**
+(`lex-web-api` path, 2026-09-12): the gates are the same except that Lex
+build nodes are gated by a real `lex check` (`spec compiles`) instead of
+`check_imports.py`, and no Lex-path company has run end to end before, so
+the first iterations will also be finding the Lex build agent's limits. The manifest now names `qwen3.8:27b-mlx`, served locally through
 LiteLLM (2026-09-12): no provider spend, but a smaller model, so expect
 more gate bounces per node and treat the iteration counts as a floor.
 

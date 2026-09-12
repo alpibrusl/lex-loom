@@ -13,7 +13,7 @@ id      = "formco"
 name    = "FormCo"
 mission = """
 Build a privacy-first form backend for static sites, as a paid, self-serve
-product on the python-fastapi path.
+product on the lex-web-api path (Lex, on lex-web).
 
 A paying developer points a static site's <form action> at a unique endpoint.
 Submissions are validated against the endpoint's declared fields, filtered for
@@ -44,7 +44,7 @@ the credentials for them are provided by the founder, never invented.
 """
 
 [stack]
-path  = "python-fastapi"
+path  = "lex-web-api"
 model = "qwen3.8:27b-mlx"
 
 [roles]

@@ -1,4 +1,4 @@
-# Vetted golden-path Dockerfile for lex-x402-api. Pre-supplied by the
+# Vetted golden-path Dockerfile for lex-web-api. Pre-supplied by the
 # bootstrap so devops never has to improvise one, same reasoning as
 # python-fastapi's Dockerfile: `COPY . .` copies whatever the build agents
 # actually wrote, so it can't drift out of sync with the real file layout.
@@ -29,4 +29,4 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["lex", "run", "--allow-effects", "env,net", "main.lex", "main"]
+CMD ["lex", "run", "--allow-effects", "env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval", "main.lex", "main"]

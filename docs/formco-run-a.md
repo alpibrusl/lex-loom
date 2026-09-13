@@ -104,6 +104,19 @@ node at all.
     # dashboard: Companies -> New company -> kind `company` -> paste
     # examples/formco-local.company.toml
 
+### Steps are time, not money, on a local model
+
+A node's tool-call budget defaults to 40 steps for a build and 20 elsewhere.
+On ollama or mlx a step costs minutes, not cents, so an operator running
+locally can afford a build that reads more docs and repairs more files:
+
+    MAX_STEPS_BUILD=120 MAX_STEPS_NODE=40 bin/cloud-company-runner.sh
+
+or put the same lines in `~/.loom/needs.env`, which the runner exports before
+every bootstrap. Nothing guesses this from the provider: a proxy can front
+anything, and a wrong guess would spend somebody's money. Raise it when the
+model is yours; leave it alone when a token has a price.
+
 ### Trying the product yourself, while it builds
 
 Each iteration's accepted files land in the company's workspace under

@@ -40,7 +40,7 @@ fn docs_cmd() -> [env, io, net, proc] Unit {
   let package := get_env("PACKAGE", "lex-web")
   let module := get_env("MODULE", "")
   let args := JObj([("package", JStr(package)), ("module", JStr(module))])
-  let tool := lexskill.make_lex_docs_tool()
+  let tool := lexskill.make_lex_docs_tool(get_env("SPRINT", ""))
   match tool.execute(args) {
     Err(_) => io.print("tool call failed"),
     Ok(j) => match jv.get_field(j, "docs") {

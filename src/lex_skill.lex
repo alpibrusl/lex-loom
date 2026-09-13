@@ -291,6 +291,51 @@ fn record_lex_run_evidence(evidence_path :: Str, this_ok :: Bool) -> [io] Unit {
 # probe.lex/probe1.lex -- scratch experiments that never compiled, left in a
 # work dir whose `spec compiles` gate compiles every file. py_check has had
 # this since #333; the Lex builder had no way out at all.
+# One node, one read per module.
+#
+# Measured live (2026-09-13, formcolocal iteration 2): a single build attempt
+# called lex_docs 46 times and lex_check 55, and ended with "step budget
+# exhausted" -- the agent re-read the same lex-web modules after every failed
+# check instead of fixing the code from the error it had just been given. The
+# docs it needs do not change within a node, so the SECOND identical read
+# returns one line instead of 20 KB: cheap in tokens, and a clear signal that
+# re-reading is not the move. The step is still spent, which is the honest
+# part -- a tool cannot give back a step the agent chose to burn.
+fn docs_memo_path(sprint_id :: Str) -> Str {
+  str.join(["/tmp/loom-lexdocs-", sanitize_sprint_id(sprint_id), ".txt"], "")
+}
+
+fn docs_memo_key(package :: Str, module :: Str) -> Str {
+  str.join([package, "/", module, "\n"], "")
+}
+
+fn docs_already_sent(sprint_id :: Str, package :: Str, module :: Str) -> [io] Bool {
+  if str.is_empty(sprint_id) {
+    false
+  } else {
+    match io.read(docs_memo_path(sprint_id)) {
+      Err(_) => false,
+      Ok(seen) => str.contains(seen, docs_memo_key(package, module)),
+    }
+  }
+}
+
+fn docs_remember(sprint_id :: Str, package :: Str, module :: Str) -> [io] Unit {
+  if str.is_empty(sprint_id) {
+    ()
+  } else {
+    let path := docs_memo_path(sprint_id)
+    let seen := match io.read(path) {
+      Err(_) => "",
+      Ok(v) => v,
+    }
+    match io.write(path, str.concat(seen, docs_memo_key(package, module))) {
+      Err(_) => (),
+      Ok(_) => (),
+    }
+  }
+}
+
 # ── lex_docs ────────────────────────────────────────────────────────────────
 # A Lex package DESCRIBES ITSELF: `lex docs <path>` emits its API -- every
 # module's doc comments and function count, read from the source the company
@@ -340,9 +385,46 @@ fn docs_module_name(m :: Str) -> Str
   }
 }
 
+# `std.str` is not an installed package, and a build agent naturally asks for
+# it that way: the live run called lex_docs with package="std.str",
+# package="std.list" and package="std.map" and was told "no package … is
+# installed", which is true and useless. Anything under std is the stdlib, and
+# naming a module there gets that module's own signatures rather than the
+# whole index.
+fn stdlib_module_of(package :: Str, module :: Str) -> Str {
+  if str.starts_with(package, "std.") {
+    match str.strip_prefix(package, "std.") {
+      Some(m) => m,
+      None => module,
+    }
+  } else {
+    module
+  }
+}
+
+fn is_stdlib(package :: Str) -> Bool
+  examples {
+    is_stdlib("stdlib") => true,
+    is_stdlib("std") => true,
+    is_stdlib("std.str") => true,
+    is_stdlib("lex-web") => false
+  }
+{
+  package == "stdlib" or package == "std" or str.starts_with(package, "std.")
+}
+
+# The stdlib spec's rows look like "| `str.split` | `(Str, Str) -> List[Str]` |",
+# so a module's signatures are selected in python with the name passed as an
+# argument: a grep pattern for that would need backticks inside nested
+# quoting, and the name has already been checked to hold no quote or slash.
 fn docs_cmd(package :: Str, module :: Str) -> Str {
-  if package == "stdlib" or package == "std" {
-    "${LEX:-lex} docs --stdlib-index"
+  if is_stdlib(package) {
+    let m := stdlib_module_of(package, module)
+    if str.is_empty(m) {
+      "${LEX:-lex} docs --stdlib-index"
+    } else {
+      str.join(["${LEX:-lex} docs --stdlib-spec | python3 -c 'import sys\nm = sys.argv[1]\nrows = [l for l in sys.stdin if l.startswith(\"| `\" + m + \".\")]\nif rows:\n    print(\"SIGNATURES IN std.\" + m + \" (from the toolchain stdlib spec):\")\n    sys.stdout.write(\"\".join(rows))\nelse:\n    print(\"no std.\" + m + \" in the stdlib -- call lex_docs with package=stdlib for the whole index\")' '", m, "'"], "")
+    }
   } else {
     let root := str.join(["\"$HOME\"/.lex/packages/'", package, "'"], "")
     if str.is_empty(module) {
@@ -361,7 +443,7 @@ fn cap_docs(out :: Str) -> Str {
   }
 }
 
-fn make_lex_docs_tool() -> t.Tool {
+fn make_lex_docs_tool(sprint_id :: Str) -> t.Tool {
   let params := { title: "LexDocs", description: "Read a Lex package's own API docs", fields: [s.required_str("package", []), s.optional(s.required_str("module", []))] }
   t.define("lex_docs", "Return the REAL API of a Lex package your project depends on, generated from that package's source (`lex docs`). Call it for EVERY dependency in lex.toml before writing code that uses one -- Lex libraries are not in your training data and a plausible-looking call you remember does not exist. Give `package` alone (e.g. package='lex-web') for the module index, then `package` + `module` (e.g. module='router') for that module's functions and their documented behaviour. package='stdlib' returns the whole standard-library index.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let package := match jv.get_field(args, "package") {
@@ -378,16 +460,25 @@ fn make_lex_docs_tool() -> t.Tool {
       if not str.is_empty(module) and not is_safe_docs_name(module) {
         Ok(JObj([("ok", JStr("false")), ("docs", JStr("module must be a bare module name, e.g. 'router' (no paths, no quotes)"))]))
       } else {
-        match proc.run("bash", ["-c", docs_cmd(package, module)]) {
-          Err(msg) => Ok(JObj([("ok", JStr("false")), ("docs", JStr(msg))])),
-          Ok(r) => {
-            let out := str.trim(str.concat(r.stdout, r.stderr))
-            if str.is_empty(out) {
-              Ok(JObj([("ok", JStr("false")), ("docs", JStr(str.concat("no docs found for ", package)))]))
-            } else {
-              Ok(JObj([("ok", JStr("true")), ("docs", JStr(cap_docs(out)))]))
-            }
-          },
+        if docs_already_sent(sprint_id, package, module) {
+          Ok(JObj([("ok", JStr("true")), ("docs", JStr(str.join(["You already read ", package, if str.is_empty(module) {
+            "'s module index"
+          } else {
+            str.concat("/", module)
+          }, " in this node, and it has not changed. Use what it told you: write the file with lex_check, and when a check fails, fix the code from the error rather than re-reading the docs."], "")))]))
+        } else {
+          match proc.run("bash", ["-c", docs_cmd(package, module)]) {
+            Err(msg) => Ok(JObj([("ok", JStr("false")), ("docs", JStr(msg))])),
+            Ok(r) => {
+              let out := str.trim(str.concat(r.stdout, r.stderr))
+              if str.is_empty(out) {
+                Ok(JObj([("ok", JStr("false")), ("docs", JStr(str.concat("no docs found for ", package)))]))
+              } else {
+                let __m := docs_remember(sprint_id, package, module)
+                Ok(JObj([("ok", JStr("true")), ("docs", JStr(cap_docs(out)))]))
+              }
+            },
+          }
         }
       }
     }

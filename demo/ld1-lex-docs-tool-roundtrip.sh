@@ -46,7 +46,15 @@ echo "$OUT" | grep -q 'form_body' && ok "carries form_body -- a real lex-web fun
 OUT="$(PACKAGE=lex-web MODULE=body.lex lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'API docs for lex-web' && ok "a module written 'body.lex' resolves too" || bad "body.lex not accepted"
 
-say "4. stdlib"
+say "4. stdlib -- including the way an agent actually asks for it"
+OUT="$(PACKAGE=std.str lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+# The live run asked for package="std.str" / "std.list" / "std.map" and was
+# told "no package is installed", which is true and useless: std is not a
+# package, and that is the tool's problem, not the agent's.
+{ echo "$OUT" | grep -q 'SIGNATURES IN std.str' && echo "$OUT" | grep -q 'str.split'; } && ok "package='std.str' answers with str's real signatures" || bad "std.str not understood: $(echo "$OUT" | head -2)"
+OUT="$(PACKAGE=std.nosuch lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$OUT" | grep -q 'call lex_docs with package=stdlib' && ok "an unknown std module points at the index" || bad "unknown std module unhelpful: $OUT"
+
 OUT="$(PACKAGE=stdlib lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'std.str' && ok "stdlib index returned" || bad "no stdlib index: $(echo "$OUT" | head -3)"
 
@@ -63,6 +71,20 @@ echo "$OUT" | grep -q 'must be a bare package name' && ok "a quoted package name
 [ -f "$CANARY" ] && ok "the injected command never ran" || bad "the shell ran the injected command"
 OUT="$(PACKAGE=lex-web MODULE='../../../../etc/passwd' lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'must be a bare module name' && ok "path traversal in module is refused" || bad "traversal not refused: $(echo "$OUT" | head -3)"
+
+say "7. a second read of the same module costs one line, not 20 KB"
+SP="ld1-$$"
+rm -f "/tmp/loom-lexdocs-$SP.txt"
+FIRST="$(SPRINT=$SP PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+SECOND="$(SPRINT=$SP PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$FIRST" | grep -q 'API docs for lex-web' && ok "the first read is the real API" || bad "first read wrong: $(echo "$FIRST" | head -2)"
+echo "$SECOND" | grep -q 'You already read lex-web/body in this node' && ok "the second says so instead of repeating itself" || bad "the second read repeated the docs"
+[ "$(printf '%s' "$SECOND" | wc -c)" -lt "$(printf '%s' "$FIRST" | wc -c)" ] && ok "and it is far shorter ($(printf '%s' "$SECOND" | wc -c | tr -d ' ') vs $(printf '%s' "$FIRST" | wc -c | tr -d ' ') bytes)" || bad "the repeat was not shorter"
+OTHER="$(SPRINT=$SP PACKAGE=lex-web MODULE=router lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$OTHER" | grep -q 'API docs for lex-web' && ok "a different module still reads in full" || bad "a new module was suppressed"
+NEWNODE="$(SPRINT=ld1-other-$$ PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$NEWNODE" | grep -q 'API docs for lex-web' && ok "and another node starts fresh" || bad "the memo leaked across nodes"
+rm -f "/tmp/loom-lexdocs-$SP.txt" "/tmp/loom-lexdocs-ld1-other-$$.txt"
 
 printf '\n== %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -71,6 +71,12 @@ fi
 : "${MAX_ITERATIONS:=3}"
 : "${STOP_WHEN:=}"
 : "${MAX_API_CALLS:=200}"
+# Steps are time, not money, on a local provider: a build node that reads more
+# docs and repairs more files costs an operator running ollama/mlx nothing but
+# minutes. Raise these when the model is local; leave them alone when a token
+# has a price.
+: "${MAX_STEPS_BUILD:=}"
+: "${MAX_STEPS_NODE:=}"
 : "${DB_PATH:=company-${COMPANY_ID}.db}"
 : "${GOAL:=Build a CLI tool that counts word frequencies in a text file and prints the top-10 words.}"
 : "${EXEC_MODE:=queue}"
@@ -105,6 +111,7 @@ fi
 
 export COMPANY_PATH
 export COMPANY_ID MODEL MAX_ITERATIONS STOP_WHEN MAX_API_CALLS DB_PATH GOAL EXEC_MODE POLL_MS RECLAIM_LEASE_SECONDS REVENUE_URL SOFT_MESH_URL SOFT_ORG_ID SOFT_ROLES SOFT_SETTLEMENT POLICY_ISOLATION ORG_EDGES ROLE_PACKS BUDGET_ENVELOPES MODEL_OVERRIDES FOUNDING LOOM_IAC_ALLOW NEEDS
+export MAX_STEPS_BUILD MAX_STEPS_NODE
 
 WORKER_PIDS=()
 WORKER_LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loom-company-workers.XXXXXX")"

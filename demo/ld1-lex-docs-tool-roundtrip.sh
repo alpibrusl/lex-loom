@@ -46,7 +46,15 @@ echo "$OUT" | grep -q 'form_body' && ok "carries form_body -- a real lex-web fun
 OUT="$(PACKAGE=lex-web MODULE=body.lex lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'API docs for lex-web' && ok "a module written 'body.lex' resolves too" || bad "body.lex not accepted"
 
-say "4. stdlib"
+say "4. stdlib -- including the way an agent actually asks for it"
+OUT="$(PACKAGE=std.str lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+# The live run asked for package="std.str" / "std.list" / "std.map" and was
+# told "no package is installed", which is true and useless: std is not a
+# package, and that is the tool's problem, not the agent's.
+{ echo "$OUT" | grep -q 'SIGNATURES IN std.str' && echo "$OUT" | grep -q 'str.split'; } && ok "package='std.str' answers with str's real signatures" || bad "std.str not understood: $(echo "$OUT" | head -2)"
+OUT="$(PACKAGE=std.nosuch lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$OUT" | grep -q 'call lex_docs with package=stdlib' && ok "an unknown std module points at the index" || bad "unknown std module unhelpful: $OUT"
+
 OUT="$(PACKAGE=stdlib lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'std.str' && ok "stdlib index returned" || bad "no stdlib index: $(echo "$OUT" | head -3)"
 

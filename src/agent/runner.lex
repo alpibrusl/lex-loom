@@ -431,14 +431,38 @@ fn is_build_kind(kind :: Str) -> Bool {
 # so the sprint failed even though health.lex/health_test.lex/main.lex all
 # compiled. Unlike `launch`, spending steps here is the node doing its job,
 # not a model stuck in a loop.
-fn max_steps_for(kind :: Str) -> Int {
+# How many tool-calling steps a node gets. A step is not money: on a local
+# provider (ollama, mlx, a LiteLLM in front of either) it costs time and
+# nothing else, so an operator running locally can afford a build that reads
+# more docs and repairs more files than one paying per token. Live evidence
+# that 40 is tight for the Lex path: formcolocal iteration 2 lost two attempts
+# to "step budget exhausted" while writing a lex-web service (2026-09-13).
+#
+# MAX_STEPS_BUILD / MAX_STEPS_NODE override the defaults; nothing here guesses
+# from the provider, because a proxy can front anything and a wrong guess
+# would silently spend somebody's money.
+fn steps_env(name :: Str, fallback :: Int) -> [env] Int {
+  match env.get(name) {
+    None => fallback,
+    Some(v) => match str.to_int(str.trim(v)) {
+      Some(n) => if n > 0 {
+        n
+      } else {
+        fallback
+      },
+      None => fallback,
+    },
+  }
+}
+
+fn max_steps_for(kind :: Str) -> [env] Int {
   if kind == "launch" {
     4
   } else {
     if is_build_kind(kind) {
-      40
+      steps_env("MAX_STEPS_BUILD", 40)
     } else {
-      20
+      steps_env("MAX_STEPS_NODE", 20)
     }
   }
 }

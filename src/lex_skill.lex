@@ -385,9 +385,46 @@ fn docs_module_name(m :: Str) -> Str
   }
 }
 
+# `std.str` is not an installed package, and a build agent naturally asks for
+# it that way: the live run called lex_docs with package="std.str",
+# package="std.list" and package="std.map" and was told "no package … is
+# installed", which is true and useless. Anything under std is the stdlib, and
+# naming a module there gets that module's own signatures rather than the
+# whole index.
+fn stdlib_module_of(package :: Str, module :: Str) -> Str {
+  if str.starts_with(package, "std.") {
+    match str.strip_prefix(package, "std.") {
+      Some(m) => m,
+      None => module,
+    }
+  } else {
+    module
+  }
+}
+
+fn is_stdlib(package :: Str) -> Bool
+  examples {
+    is_stdlib("stdlib") => true,
+    is_stdlib("std") => true,
+    is_stdlib("std.str") => true,
+    is_stdlib("lex-web") => false
+  }
+{
+  package == "stdlib" or package == "std" or str.starts_with(package, "std.")
+}
+
+# The stdlib spec's rows look like "| `str.split` | `(Str, Str) -> List[Str]` |",
+# so a module's signatures are selected in python with the name passed as an
+# argument: a grep pattern for that would need backticks inside nested
+# quoting, and the name has already been checked to hold no quote or slash.
 fn docs_cmd(package :: Str, module :: Str) -> Str {
-  if package == "stdlib" or package == "std" {
-    "${LEX:-lex} docs --stdlib-index"
+  if is_stdlib(package) {
+    let m := stdlib_module_of(package, module)
+    if str.is_empty(m) {
+      "${LEX:-lex} docs --stdlib-index"
+    } else {
+      str.join(["${LEX:-lex} docs --stdlib-spec | python3 -c 'import sys\nm = sys.argv[1]\nrows = [l for l in sys.stdin if l.startswith(\"| `\" + m + \".\")]\nif rows:\n    print(\"SIGNATURES IN std.\" + m + \" (from the toolchain stdlib spec):\")\n    sys.stdout.write(\"\".join(rows))\nelse:\n    print(\"no std.\" + m + \" in the stdlib -- call lex_docs with package=stdlib for the whole index\")' '", m, "'"], "")
+    }
   } else {
     let root := str.join(["\"$HOME\"/.lex/packages/'", package, "'"], "")
     if str.is_empty(module) {

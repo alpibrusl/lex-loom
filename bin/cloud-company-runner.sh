@@ -501,13 +501,20 @@ while :; do
   fi
   kind=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"]["kind"])' "$resp")
   stop=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"].get("stop_when") or "verdict-passed")' "$resp")
-  mf=$(mktemp "${TMPDIR:-/tmp}/cloud-company.XXXXXX.toml"); python3 -c 'import sys,json; sys.stdout.write(json.loads(sys.argv[1])["company"]["manifest_toml"])' "$resp" > "$mf"
+  # BSD mktemp (macOS) only substitutes X's at the END of the template: given
+  # "cloud-company.XXXXXX.toml" it creates a file called exactly that, and the
+  # NEXT claim fails with "File exists" -- which, under set -e, killed the
+  # runner moments after it had claimed a company, leaving that company
+  # `running` forever with nobody behind it. GNU mktemp substitutes in the
+  # middle, so Linux CI never saw it. Found live, 2026-09-13.
+  mfdir=$(mktemp -d "${TMPDIR:-/tmp}/cloud-company.XXXXXX")
+  mf="$mfdir/company.toml"; python3 -c 'import sys,json; sys.stdout.write(json.loads(sys.argv[1])["company"]["manifest_toml"])' "$resp" > "$mf"
   echo "[runner] claimed company $uuid kind=$kind"
   case "$kind" in
     consortium-research) run_consortium_research "$uuid" "$mf" ;;
     *) run_plain_company "$uuid" "$mf" "$stop" ;;
   esac
   heartbeat_stop   # whichever path the work took, and however it returned
-  rm -f "$mf"
+  rm -rf "$mfdir"
   [ "$ONCE" = "--once" ] && exit 0
 done

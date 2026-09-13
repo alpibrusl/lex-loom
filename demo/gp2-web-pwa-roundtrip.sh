@@ -46,7 +46,8 @@ echo "$out" | grep -q "^# fail 0" && check "0 failing skeleton tests" 0 || check
 echo
 echo "-- 2. installable shell: boot + curl the PWA pieces"
 PORT=8184
-SRV_LOG=$(mktemp "${TMPDIR:-/tmp}/gp2-server.XXXXXX.log")
+# X's must end the template: BSD mktemp does not substitute them mid-name.
+SRV_LOG=$(mktemp "${TMPDIR:-/tmp}/gp2-server.XXXXXX")
 (cd paths/web-pwa && PORT=$PORT node --experimental-strip-types app.ts >"$SRV_LOG" 2>&1 & echo $! > "${SRV_LOG}.pid")
 trap 'kill "$(cat "${SRV_LOG}.pid" 2>/dev/null)" 2>/dev/null || true' EXIT
 for i in $(seq 1 20); do

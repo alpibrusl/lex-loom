@@ -60,6 +60,31 @@ load_needs_file() {
 # building the need-park loop (#451), which copied the same dead call.
 RESOLVE_EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurrent,vcs,llm,approval,stream"
 
+# While a company runs, this runner does not poll -- and the cloud marked
+# last_seen_at only on a poll, so a machine three hours into a sprint showed
+# as Offline on the Runners page, which is the opposite of the truth (found
+# live, 2026-09-13). A heartbeat runs in the background for exactly as long as
+# the work does: it claims nothing, and a failed beat is silent (the run
+# matters, the beat does not).
+HEARTBEAT_PID=""
+heartbeat_start() {
+  [ -z "$HEARTBEAT_PID" ] || return 0
+  ( while :; do
+      f=$(mktemp); with_token '{}' > "$f"
+      curl -sS --max-time 15 -o /dev/null -H 'Content-Type: application/json' -d @"$f" "$LOOM_SERVER/api/runners/heartbeat" 2>/dev/null || true
+      rm -f "$f"
+      sleep 45
+    done ) &
+  HEARTBEAT_PID=$!
+}
+heartbeat_stop() {
+  [ -n "$HEARTBEAT_PID" ] || return 0
+  kill "$HEARTBEAT_PID" 2>/dev/null || true
+  wait "$HEARTBEAT_PID" 2>/dev/null || true
+  HEARTBEAT_PID=""
+}
+trap 'heartbeat_stop' EXIT INT TERM
+
 jpost() { # path json-file -> body (fails loudly on non-2xx)
   local out; out=$(curl -sS --max-time 40 -w '\n%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $LOOM_RUNNER_TOKEN" -d @"$2" "$LOOM_SERVER$1"); local code="${out##*$'\n'}"; local body="${out%$'\n'*}"
   if [ "${code:0:1}" != "2" ]; then echo "[runner] $1 -> $code: $body" >&2; return 1; fi; printf '%s' "$body"
@@ -215,6 +240,7 @@ run_consortium_software() { # uuid
 run_consortium_research() { # uuid manifest-file
   local uuid="$1" manifest="$2" ws="$WS_ROOT/cloud-$1"
   export LOOM_WORKSPACE="$ws"; export CONSORTIUM_DB="$ws/consortium.db"; mkdir -p "$ws"
+  heartbeat_start
   echo "[runner] consortium research for $uuid in $ws"
   bin/consortium-run.sh open > "$ws/open.log" 2>&1 || { report "$uuid" '{"status":"failed","summary":"consortium open failed"}'; return; }
   cp "$manifest" "$ws/researchco.company.toml"   # the founder's manifest wins over the generated one for identity/model; mission stays the contract goal
@@ -275,6 +301,7 @@ PY
 run_plain_company() { # uuid manifest-file stop_when
   local uuid="$1" manifest="$2" ws="$WS_ROOT/cloud-$1"; mkdir -p "$ws"
   export LOOM_WORKSPACE="$ws"
+  heartbeat_start
   local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
   report "$uuid" '{"status":"running"}'
   load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
@@ -423,6 +450,7 @@ while :; do
     consortium-research) run_consortium_research "$uuid" "$mf" ;;
     *) run_plain_company "$uuid" "$mf" "$stop" ;;
   esac
+  heartbeat_stop   # whichever path the work took, and however it returned
   rm -f "$mf"
   [ "$ONCE" = "--once" ] && exit 0
 done

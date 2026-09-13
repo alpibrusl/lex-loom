@@ -63,19 +63,69 @@ RESOLVE_EFFECTS="env,io,sql,time,fs_read,fs_write,proc,crypto,random,net,concurr
 # While a company runs, this runner does not poll -- and the cloud marked
 # last_seen_at only on a poll, so a machine three hours into a sprint showed
 # as Offline on the Runners page, which is the opposite of the truth (found
-# live, 2026-09-13). A heartbeat runs in the background for exactly as long as
-# the work does: it claims nothing, and a failed beat is silent (the run
-# matters, the beat does not).
+# live, 2026-09-13). A beat runs in the background for exactly as long as the
+# work does: it claims nothing, and a failed beat is silent (the run matters,
+# the beat does not).
+# What the company is doing RIGHT NOW, in one line, read from its own db:
+# the iteration, the node, and the attempt. Empty when there is nothing to say.
+current_work() { # company.db -> summary
+  [ -f "$1" ] || return 0
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import sqlite3, sys, json
+c = sqlite3.connect(sys.argv[1])
+try:
+    it = c.execute("select idx from company_iterations where status='running' order by idx desc limit 1").fetchone()
+    ev = c.execute("select event_kind, data_json from traces where event_kind in ('node_started','node_accepted','node_denied') order by id desc limit 1").fetchone()
+except sqlite3.Error:
+    raise SystemExit
+if not ev:
+    raise SystemExit
+kind, data = ev
+try:
+    d = json.loads(data)
+except Exception:
+    d = {}
+node = d.get("node", "?")
+where = "iteration %s" % it[0] if it else "starting"
+if kind == "node_started":
+    att = d.get("attempt", 1)
+    print("%s: %s running%s" % (where, node, "" if att in (1, "1") else " (attempt %s)" % att))
+elif kind == "node_accepted":
+    print("%s: %s accepted" % (where, node))
+else:
+    print("%s: %s refused by its gate" % (where, node))
+PY
+}
+
+# A company takes minutes per node and hours per iteration, and the runner used
+# to report only at iteration boundaries -- so the card sat on "running" with no
+# iterations, no nodes and no graph for as long as the work took, which is
+# exactly when a founder wants to see it (found live, 2026-09-13).
+#
+# While a company runs, this pushes the SAME report the boundaries push, every
+# 45s, straight from the company's own db: the iteration, every node its gate
+# has ruled on, the sprint graph, the trail. It also authenticates as the
+# runner, so it doubles as the heartbeat; before the db exists (bootstrap is
+# still scaffolding) it falls back to the bare beat.
 HEARTBEAT_PID=""
-heartbeat_start() {
+progress_start() { # uuid company.db
   [ -z "$HEARTBEAT_PID" ] || return 0
+  local uuid="$1" db="$2"
   ( while :; do
-      f=$(mktemp); with_token '{}' > "$f"
-      curl -sS --max-time 15 -o /dev/null -H 'Content-Type: application/json' -d @"$f" "$LOOM_SERVER/api/runners/heartbeat" 2>/dev/null || true
-      rm -f "$f"
       sleep 45
+      if [ -f "$db" ]; then
+        report_from_db "$uuid" "$db" "running" "" "$(current_work "$db")" 2>/dev/null || true
+      else
+        f=$(mktemp); with_token '{}' > "$f"
+        curl -sS --max-time 15 -o /dev/null -H 'Content-Type: application/json' -d @"$f" "$LOOM_SERVER/api/runners/heartbeat" 2>/dev/null || true
+        rm -f "$f"
+      fi
     done ) &
   HEARTBEAT_PID=$!
+}
+
+heartbeat_start() {
+  progress_start "" ""
 }
 heartbeat_stop() {
   [ -n "$HEARTBEAT_PID" ] || return 0
@@ -301,8 +351,8 @@ PY
 run_plain_company() { # uuid manifest-file stop_when
   local uuid="$1" manifest="$2" ws="$WS_ROOT/cloud-$1"; mkdir -p "$ws"
   export LOOM_WORKSPACE="$ws"
-  heartbeat_start
   local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
+  progress_start "$uuid" "$ws/$cid/company.db"
   report "$uuid" '{"status":"running"}'
   load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
   if command grep -q 'founding plan ready for the board' "$ws/company.log"; then

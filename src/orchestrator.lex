@@ -64,6 +64,8 @@ import "./authority" as authority
 
 import "./budget" as budget
 
+import "./economy_binding" as eb
+
 # ── Types ─────────────────────────────────────────────────────────────────────
 type NodeOutcome = { node_id :: Str, attested :: Bool, sealed :: Bool, artifact :: Str, reason :: Str }
 
@@ -756,6 +758,15 @@ fn response_schema_of(prd :: Str) -> Str {
 # fail every attempt, so the graph should not contain one.
 # paths/research-report is the one document path today (consortium run 1's
 # ResearchCo); its companies never build software.
+# The language of the stack path this company was started on, so a graph that
+# casts another language's builder can be refused before it runs.
+fn company_language() -> [env] Str {
+  match env.get("COMPANY_PATH") {
+    None => "",
+    Some(p) => eb.language_of_path(str.trim(p)),
+  }
+}
+
 fn document_path_only() -> [env] Bool {
   match env.get("COMPANY_PATH") {
     None => false,
@@ -1272,7 +1283,7 @@ fn run_design(prd :: Str, request :: Str, specs_context :: Str, attempts :: Int,
           let __tr := tr.trail(cfg.db, cfg.id, "graph_rejected", str.join(["{\"reason\":\"", struct_err, "\",\"attempt\":", int.to_str(attempts), "}"], ""))
           run_design(prd, request, specs_context, attempts + 1, str.join(["structural error: ", struct_err], ""), cfg)
         },
-        Ok(_) => match metaspec.check_for_company(g, deploy_target_allowed(), document_path_only()) {
+        Ok(_) => match metaspec.check_for_company_on(g, deploy_target_allowed(), document_path_only(), company_language()) {
           Invalid(vs) => {
             let error_str := list.fold(vs, "", fn (acc :: Str, v :: metaspec.Violation) -> Str {
               str.join([acc, v.rule, ": ", v.message, "; "], "")

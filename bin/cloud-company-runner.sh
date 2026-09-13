@@ -387,21 +387,28 @@ polls=0
 # cloud validates against this instead of keeping a vocabulary of its own,
 # which could only drift from what this runner would accept.
 vocabulary() {
-  local kinds packs
+  local kinds packs paths
   kinds=$(lex run --allow-effects io src/role_kinds.lex known_kinds 2>/dev/null | tail -1)
   packs=$(lex run --allow-effects io src/pack_names.lex pack_names 2>/dev/null | tail -1)
+  # The stack paths this checkout really has skeletons for, read from disk for
+  # the same reason the roles are read from the runtime: the cloud validating
+  # `[stack].path` against a list of its own could only drift from the machine
+  # that has to scaffold it.
+  paths=$(ls -1 paths 2>/dev/null | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
   python3 -c 'import sys,json
-k=sys.argv[1]; p=sys.argv[2]
+k=sys.argv[1]; p=sys.argv[2]; d=sys.argv[3]
 def arr(s):
     try:
         v=json.loads(s)
         return v if isinstance(v,list) else []
     except Exception:
         return []
-print(json.dumps({"role_kinds":arr(k),"packs":arr(p)}))' "$kinds" "$packs"
+print(json.dumps({"role_kinds":arr(k),"packs":arr(p),"paths":arr(d)}))' "$kinds" "$packs" "$paths"
 }
 VOCAB=$(vocabulary)
-echo "[runner] vocabulary: $(python3 -c 'import sys,json;d=json.loads(sys.argv[1]);print(f"{len(d[\"role_kinds\"])} role kinds, {len(d[\"packs\"])} packs")' "$VOCAB")"
+echo "[runner] vocabulary: $(python3 -c 'import sys,json
+d=json.loads(sys.argv[1])
+print("%d role kinds, %d packs, %d stack paths" % (len(d["role_kinds"]), len(d["packs"]), len(d["paths"])))' "$VOCAB")"
 
 while :; do
   f=$(mktemp); with_token "$VOCAB" > "$f"

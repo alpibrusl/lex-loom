@@ -64,5 +64,19 @@ echo "$OUT" | grep -q 'must be a bare package name' && ok "a quoted package name
 OUT="$(PACKAGE=lex-web MODULE='../../../../etc/passwd' lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
 echo "$OUT" | grep -q 'must be a bare module name' && ok "path traversal in module is refused" || bad "traversal not refused: $(echo "$OUT" | head -3)"
 
+say "7. a second read of the same module costs one line, not 20 KB"
+SP="ld1-$$"
+rm -f "/tmp/loom-lexdocs-$SP.txt"
+FIRST="$(SPRINT=$SP PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+SECOND="$(SPRINT=$SP PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$FIRST" | grep -q 'API docs for lex-web' && ok "the first read is the real API" || bad "first read wrong: $(echo "$FIRST" | head -2)"
+echo "$SECOND" | grep -q 'You already read lex-web/body in this node' && ok "the second says so instead of repeating itself" || bad "the second read repeated the docs"
+[ "$(printf '%s' "$SECOND" | wc -c)" -lt "$(printf '%s' "$FIRST" | wc -c)" ] && ok "and it is far shorter ($(printf '%s' "$SECOND" | wc -c | tr -d ' ') vs $(printf '%s' "$FIRST" | wc -c | tr -d ' ') bytes)" || bad "the repeat was not shorter"
+OTHER="$(SPRINT=$SP PACKAGE=lex-web MODULE=router lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$OTHER" | grep -q 'API docs for lex-web' && ok "a different module still reads in full" || bad "a new module was suppressed"
+NEWNODE="$(SPRINT=ld1-other-$$ PACKAGE=lex-web MODULE=body lex run --max-steps 0 --allow-effects "$E" demo/ld1_probe.lex docs_cmd 2>&1)"
+echo "$NEWNODE" | grep -q 'API docs for lex-web' && ok "and another node starts fresh" || bad "the memo leaked across nodes"
+rm -f "/tmp/loom-lexdocs-$SP.txt" "/tmp/loom-lexdocs-ld1-other-$$.txt"
+
 printf '\n== %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

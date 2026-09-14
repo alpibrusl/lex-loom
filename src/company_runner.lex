@@ -572,6 +572,12 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     ()
   }
   let __rec := company.record_iteration(db, { company_id: ccfg.id, idx: k, sprint_id: sprint_id, parent_sprint_id: parent_sprint, status: "running", goal: current_goal })
+  let stale_jobs := tr.drain_other_sprint_jobs(db, sprint_id)
+  let __ds := if stale_jobs > 0 {
+    io.print(str.join(["[company] cleared ", int.to_str(stale_jobs), " job(s) left behind by an iteration that did not finish"], ""))
+  } else {
+    ()
+  }
   let __assignments := drain_assignments(db, ccfg, sprint_id, api_max)
   let __reviews := manager.review_assignments(db, ccfg, sprint_id, api_max)
   let __reports := manager.record_reports(db, ccfg.id)

@@ -58,7 +58,7 @@ fn claim_one(db :: conn.ConnDb) -> [sql, time] Option[Int] {
 }
 
 # --- 1. the whole bug: a result that arrived must survive a timeout ---------
-fn test_arrived_result_survives_a_timeout() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_arrived_result_survives_a_timeout() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -86,7 +86,7 @@ fn test_arrived_result_survives_a_timeout() -> [random, sql, fs_read, fs_write, 
 # --- 2. a running job is the node doing its work, not a fault ---------------
 # The idle bound is 100ms but the job is running, so the await must NOT give
 # up at 100ms; the 600ms cap is what ends the wait.
-fn test_await_waits_while_a_job_is_running() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_await_waits_while_a_job_is_running() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -117,7 +117,7 @@ fn test_await_waits_while_a_job_is_running() -> [random, sql, fs_read, fs_write,
 }
 
 # --- 3. nothing in flight and nothing arriving: give up at the idle bound ---
-fn test_a_lost_job_gives_up_at_the_idle_bound() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_a_lost_job_gives_up_at_the_idle_bound() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -137,7 +137,7 @@ fn test_a_lost_job_gives_up_at_the_idle_bound() -> [random, sql, fs_read, fs_wri
 }
 
 # --- 4. everything present: no waiting, no timeout ---------------------------
-fn test_complete_layer_returns_at_once() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_complete_layer_returns_at_once() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -160,7 +160,7 @@ fn test_complete_layer_returns_at_once() -> [random, sql, fs_read, fs_write, tim
 }
 
 # --- 5. a finished sprint leaves nothing in the queue ------------------------
-fn test_drain_fails_only_this_sprints_unfinished_jobs() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_drain_fails_only_this_sprints_unfinished_jobs() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -198,7 +198,7 @@ fn test_drain_fails_only_this_sprints_unfinished_jobs() -> [random, sql, fs_read
 
 # The stall bound is on trail SILENCE, not elapsed time. A dead worker writes
 # nothing; a live one writes a row for every step, tool call and gate.
-fn test_writing_to_the_trail_moves_the_liveness_signal() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_writing_to_the_trail_moves_the_liveness_signal() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -213,7 +213,7 @@ fn test_writing_to_the_trail_moves_the_liveness_signal() -> [random, sql, fs_rea
   }
 }
 
-fn test_a_silent_trail_with_a_running_job_names_the_stall() -> [random, sql, fs_read, fs_write, time, crypto] Result[Unit, Str] {
+fn test_a_silent_trail_with_a_running_job_names_the_stall() -> [random, sql, fs_read, fs_write, time, crypto, io] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -239,11 +239,11 @@ fn test_a_silent_trail_with_a_running_job_names_the_stall() -> [random, sql, fs_
   }
 }
 
-fn suite() -> [random, sql, fs_read, fs_write, time, crypto] List[Result[Unit, Str]] {
+fn suite() -> [random, sql, fs_read, fs_write, time, crypto, io] List[Result[Unit, Str]] {
   [test_arrived_result_survives_a_timeout(), test_await_waits_while_a_job_is_running(), test_a_lost_job_gives_up_at_the_idle_bound(), test_complete_layer_returns_at_once(), test_drain_fails_only_this_sprints_unfinished_jobs(), test_writing_to_the_trail_moves_the_liveness_signal(), test_a_silent_trail_with_a_running_job_names_the_stall()]
 }
 
-fn run_all() -> [random, sql, fs_read, fs_write, time, crypto] Unit {
+fn run_all() -> [random, sql, fs_read, fs_write, time, crypto, io] Unit {
   let failures := list.fold(suite(), 0, fn (n :: Int, r :: Result[Unit, Str]) -> Int {
     match r {
       Ok(_) => n,

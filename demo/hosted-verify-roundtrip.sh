@@ -42,7 +42,10 @@ ok()  { echo "   OK: $*"; pass=$((pass+1)); }
 bad() { echo "   FAIL: $*"; fail=$((fail+1)); }
 
 payload() { # db-file -> writes $WS/payload.b64 (raw base64 body)
-  base64 -w0 "$1" > "$WS/payload.b64"
+  # `base64 -w0 FILE` is GNU-only: BSD base64 (macOS) has no -w and rejects a
+  # positional file, so this demo could only ever run in CI. Reading stdin and
+  # stripping newlines is the same output on both.
+  base64 < "$1" | tr -d '\n' > "$WS/payload.b64"
 }
 
 say "1. the operator runs a REAL sprint (offline)"

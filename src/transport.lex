@@ -353,11 +353,33 @@ fn await_node_results_supervised(db :: conn.ConnDb, sprint_id :: Str, phase :: S
   await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, cap_ms, lease_seconds, reclaim_every_ms, poll_ms, 0, 0, latest_trace_id(db), 0, 0)
 }
 
-# Reclaim only while something is actually in flight to rescue, and only on
-# the cadence asked for. lease_seconds <= 0 disables it entirely, which is
-# what the unsupervised entry point passes.
-fn reclaim_if_due(db :: conn.ConnDb, lease_seconds :: Int, since_reclaim_ms :: Int, reclaim_every_ms :: Int) -> [sql, io, time] Bool {
-  if lease_seconds > 0 and reclaim_every_ms > 0 and since_reclaim_ms >= reclaim_every_ms {
+# Reclaim only what is BOTH out of lease and silent.
+#
+# A lease is a timer, and a timer cannot tell a dead worker from a slow one.
+# RECLAIM_LEASE_SECONDS defaults to 300 and a build node legitimately runs
+# twenty minutes or more; lex-jobs stamps updated_at once, at claim, and never
+# renews it. So the first version of this reclaimer -- which fired on the lease
+# alone -- re-queued jobs that were still running: formcolocal/iter-7 spent
+# 75 minutes with its own three nodes queued behind an iteration-6 build that
+# had been claimed twice (attempts=2) and was still going. Before the
+# orchestrator reclaimed, this could not happen: only an IDLE worker reclaimed,
+# and a worker busy with a long node is never idle.
+#
+# The trail is the liveness signal loom already has, and this loop already
+# tracks it -- silent_ms is how long nothing has been written while a job is in
+# flight. A node that is working writes trail rows; a wedged one writes
+# nothing. So a job is reclaimable only once the trail has been quiet for the
+# same stall window that would have ended the await anyway.
+#
+# Half the stall window, not all of it: the await ENDS at stall_ms, so a
+# reclaimer that waited that long would never fire. Halfway gives a genuinely
+# orphaned job one chance to be re-queued and picked up by a live worker before
+# the await gives up on it entirely.
+#
+# lease_seconds <= 0 disables it entirely, which is what the unsupervised entry
+# point passes.
+fn reclaim_if_due(db :: conn.ConnDb, lease_seconds :: Int, since_reclaim_ms :: Int, reclaim_every_ms :: Int, silent_ms :: Int, stall_ms :: Int) -> [sql, io, time] Bool {
+  if lease_seconds > 0 and reclaim_every_ms > 0 and since_reclaim_ms >= reclaim_every_ms and silent_ms >= stall_ms / 2 {
     let __rc := match jobs.reclaim_stale(db.handle, node_queue(), lease_seconds) {
       Err(e) => io.print(str.join(["[loom/await] reclaim error: ", e], "")),
       Ok(0) => (),
@@ -392,7 +414,7 @@ fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id
         let reclaimed := if list.is_empty(in_flight) {
           false
         } else {
-          reclaim_if_due(db, lease_seconds, since_reclaim_ms, reclaim_every_ms)
+          reclaim_if_due(db, lease_seconds, since_reclaim_ms, reclaim_every_ms, silent_ms, stall_ms)
         }
         let __s := time.sleep_ms(poll_ms)
         await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, cap_ms, lease_seconds, reclaim_every_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
@@ -417,6 +439,31 @@ fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id
 # pending or running for it would execute during the NEXT iteration, on the
 # same worker and the same GPU, which is exactly what tzc8 did. Returns how
 # many jobs were failed.
+# Jobs belonging to any sprint but this one are abandoned by definition.
+#
+# drain_sprint_jobs runs when an iteration ENDS, so an iteration that is killed
+# mid-flight -- a stopped company, a dead runner, four of formcolocal's seven
+# -- never drains. Its jobs sit as 'running' with a dead lease until a working
+# reclaimer returns them to the queue, and then the next iteration's nodes wait
+# behind a build nobody wants: with WORKER_COUNT=1, iteration 7's three pending
+# jobs sat behind iteration 6's.
+#
+# Called when an iteration starts, where "the current sprint" is known and
+# everything else in the queue is, by construction, from a sprint that is over.
+fn drain_other_sprint_jobs(db :: conn.ConnDb, keep_sprint_id :: Str) -> [sql, fs_read, time] Int {
+  let q := str.join(["SELECT id FROM lex_jobs WHERE status IN ('pending','running') AND payload LIKE '%\"sprint_id\":\"%' AND payload NOT LIKE '%\"sprint_id\":\"", sq(keep_sprint_id), "\"%'"], "")
+  let rows :: Result[List[JobIdRow], SqlError] := sql.query(db.handle, q, [])
+  match rows {
+    Err(_) => 0,
+    Ok(rs) => list.fold(rs, 0, fn (n :: Int, r :: JobIdRow) -> [sql, time] Int {
+      match jobs.fail(db.handle, r.id, "left behind by an iteration that did not finish") {
+        Err(_) => n,
+        Ok(_) => n + 1,
+      }
+    }),
+  }
+}
+
 fn drain_sprint_jobs(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read, time] Int {
   let q := str.join(["SELECT id FROM lex_jobs WHERE status IN ('pending','running') AND payload LIKE '%\"sprint_id\":\"", sq(sprint_id), "\"%'"], "")
   let rows :: Result[List[JobIdRow], SqlError] := sql.query(db.handle, q, [])

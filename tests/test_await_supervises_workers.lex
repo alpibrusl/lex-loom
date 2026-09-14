@@ -89,7 +89,7 @@ fn test_the_await_reclaims_what_the_worker_cannot() -> [sql, fs_read, fs_write, 
       },
       Ok(id) => {
         let before := status_of(db, id)
-        let __aw := tr.await_node_results_supervised(db, "sup/iter-1", "Implementation", ["build-1"], 100, 100000, 100000, 60, 10, 20)
+        let __aw := tr.await_node_results_supervised(db, "sup/iter-1", "Implementation", ["build-1"], 100, 200, 100000, 60, 10, 20)
         let after := status_of(db, id)
         let __c := conn.close(db)
         if before == "running" {
@@ -164,8 +164,75 @@ fn test_the_plain_await_reclaims_nothing() -> [sql, fs_read, fs_write, time, io,
   }
 }
 
+# A node that is WORKING writes trail rows, and must not be reclaimed however
+# old its lease is. lex-jobs stamps updated_at once at claim and never renews
+# it, so a 20-minute build is "out of lease" after 300 seconds -- and the first
+# version of this reclaimer took that as death. formcolocal/iter-7 spent 75
+# minutes with its own nodes queued behind an iteration-6 build that had been
+# claimed twice and was still running.
+fn test_a_live_node_is_not_reclaimed() -> [sql, fs_read, fs_write, time, io, crypto, random, proc] Result[Unit, Str] {
+  match fresh() {
+    Err(e) => Err(e),
+    Ok(db) => match wedge_a_job(db, "sup/iter-4", "build-4") {
+      Err(e) => {
+        let __c := conn.close(db)
+        Err(e)
+      },
+      Ok(id) => {
+        let __aw := tr.await_node_results_supervised(db, "sup/iter-4", "Implementation", ["build-4"], 100, 100000, 300, 60, 10, 20)
+        let after := status_of(db, id)
+        let __c := conn.close(db)
+        if after == "running" {
+          Ok(())
+        } else {
+          Err(str.concat("a job whose stall window has not elapsed was reclaimed anyway; status is ", after))
+        }
+      },
+    },
+  }
+}
+
+# Everything queued for another sprint is abandoned: an iteration that was
+# killed never ran its own drain.
+fn test_another_sprints_jobs_are_cleared() -> [sql, fs_read, fs_write, time, io, crypto, random, proc] Result[Unit, Str] {
+  match fresh() {
+    Err(e) => Err(e),
+    Ok(db) => match wedge_a_job(db, "sup/iter-5", "build-old") {
+      Err(e) => {
+        let __c := conn.close(db)
+        Err(e)
+      },
+      Ok(old_id) => match wedge_a_job(db, "sup/iter-6", "build-now") {
+        Err(e) => {
+          let __c := conn.close(db)
+          Err(e)
+        },
+        Ok(now_id) => {
+          let cleared := tr.drain_other_sprint_jobs(db, "sup/iter-6")
+          let old_status := status_of(db, old_id)
+          let now_status := status_of(db, now_id)
+          let __c := conn.close(db)
+          if cleared == 1 {
+            if old_status == "failed" {
+              if now_status == "running" {
+                Ok(())
+              } else {
+                Err(str.concat("the CURRENT sprint's job was cleared too; status is ", now_status))
+              }
+            } else {
+              Err(str.concat("the abandoned job was not cleared; status is ", old_status))
+            }
+          } else {
+            Err(str.concat("expected exactly one job cleared, got ", int_str(cleared)))
+          }
+        },
+      },
+    },
+  }
+}
+
 fn run_all() -> [sql, fs_read, fs_write, time, io, crypto, random, proc] Int {
-  let results := [("the await reclaims what the worker cannot", test_the_await_reclaims_what_the_worker_cannot()), ("a noisy node still hits the cap", test_a_noisy_node_still_hits_the_cap()), ("the plain await reclaims nothing", test_the_plain_await_reclaims_nothing())]
+  let results := [("the await reclaims what the worker cannot", test_the_await_reclaims_what_the_worker_cannot()), ("a noisy node still hits the cap", test_a_noisy_node_still_hits_the_cap()), ("the plain await reclaims nothing", test_the_plain_await_reclaims_nothing()), ("a live node is not reclaimed", test_a_live_node_is_not_reclaimed()), ("another sprint's jobs are cleared", test_another_sprints_jobs_are_cleared())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

@@ -9,6 +9,11 @@
 # a company that produced nothing commits nothing; and a goal full of shell
 # metacharacters is a commit message, not a command.
 #
+# And when the founder has published the company (GITHUB_PUBLISH=1 gave it an
+# origin), the commit goes there too -- `git push` used to appear exactly once
+# in all of lex-loom, for the scaffold, so a published company showed its
+# skeleton and then went silent however many iterations it ran.
+#
 # Run from the repo root:  bash demo/gc1-iteration-commits.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -63,6 +68,35 @@ say "4. a workspace that is not a repo is not an error"
 mkdir -p "$WS/plainco"
 LOOM_WORKSPACE="$WS" CID=plainco STATUS=passed GOAL='no repo here' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main >/dev/null 2>&1
 [ $? -eq 0 ] && ok "a non-repo workspace is skipped quietly" || bad "it failed on a workspace with no .git"
+
+say "5. a published company pushes what it built"
+git init -q --bare "$WS/origin.git"
+mkdir -p "$WS/pushco"
+( cd "$WS/pushco" && git init -q && git remote add origin "$WS/origin.git" \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Scaffold pushco" \
+  && git push -q origin HEAD >/dev/null 2>&1 )
+printf 'fn main() -> Unit { () }\n' > "$WS/pushco/main.lex"
+OUT="$(LOOM_WORKSPACE="$WS" CID=pushco STATUS=passed GOAL='ship the endpoint' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main 2>&1)"
+REMOTE_MSG="$(git -C "$WS/origin.git" log --format=%s -1 2>/dev/null)"
+[[ "$REMOTE_MSG" == "iteration 2: passed -- ship the endpoint" ]] && ok "the iteration commit reached origin" || bad "origin has: $REMOTE_MSG"
+echo "$OUT" | grep -q "pushed it to origin" && ok "and the log says so" || bad "log did not report the push: $OUT"
+
+say "6. an unpublished company stays local, and says so"
+printf 'fn third() -> Unit { () }\n' > "$WS/gc1co/third.lex"
+OUT="$(LOOM_WORKSPACE="$WS" CID=gc1co STATUS=passed GOAL='still local' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main 2>&1)"
+echo "$OUT" | grep -q "in the company workspace" && ok "no origin means no push, and no complaint" || bad "log said: $OUT"
+echo "$OUT" | grep -q "pushed it to origin" && bad "it claimed a push with no remote" || ok "it does not claim a push it did not make"
+
+say "7. a remote that cannot be reached does not cost the iteration its commit"
+mkdir -p "$WS/deadco"
+( cd "$WS/deadco" && git init -q && git remote add origin "$WS/there-is-no-repo-here.git" \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Scaffold deadco" )
+printf 'fn main() -> Unit { () }\n' > "$WS/deadco/main.lex"
+OUT="$(LOOM_WORKSPACE="$WS" CID=deadco STATUS=passed GOAL='origin is gone' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main 2>&1)"
+rc=$?
+[ "$rc" -eq 0 ] && ok "a dead remote is not an iteration failure" || bad "the iteration died on a push (rc=$rc)"
+[ "$(git -C "$WS/deadco" log --oneline | wc -l | tr -d ' ')" = "2" ] && ok "the commit stands locally" || bad "the commit was lost"
+echo "$OUT" | grep -q "the push to origin failed" && ok "and the log says the commit is local" || bad "log did not report the failure: $OUT"
 
 rm -f demo/gc1_probe.lex
 printf '\n== %d passed, %d failed\n' "$pass" "$fail"

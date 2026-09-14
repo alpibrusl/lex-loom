@@ -137,7 +137,46 @@ fn servers_registry_for(sprint_id :: Str) -> Str {
 # different fixes, and a gate that reports the wrong cause steers the repair
 # loop wrong -- which is how the four preceding launch fixes each verified fine
 # and changed nothing.
+# Which work dir a launch node should boot out of, most likely first.
+#
+# The prelude below tries each in turn and takes the first that exists and is
+# not empty. That order used to be fixed -- python, then node, then lex -- so a
+# stale sibling dir outranked the one the company actually built in. The dirs
+# are keyed by sprint id and live in /tmp, which outlives the company workspace
+# (loom empties that between iterations), so "stale" is the normal state: an
+# iteration that re-planned across languages after metaspec refused its graph
+# (#478) leaves an abandoned py dir sitting in front of the lex dir that passed
+# QA, for the same sprint id.
+#
+# The company's own language goes first. The others stay behind it rather than
+# being dropped, because the DUAL LAUNCH PATTERN really does build a Lex and a
+# Python server in one graph, and its launch-py node has to find the py dir.
+# An unknown path keeps the historical order exactly, so nothing moves under a
+# company that has not told us what it is.
+fn work_dirs_in_language_order(sprint_id :: Str, language :: Str) -> List[Str] {
+  let lex_dir := lexskill.work_dir(sprint_id)
+  let py_dir := lexskill.py_work_dir(sprint_id)
+  let ts_dir := lexskill.ts_work_dir(sprint_id)
+  if language == "lex" {
+    [lex_dir, py_dir, ts_dir]
+  } else {
+    if language == "python" {
+      [py_dir, lex_dir, ts_dir]
+    } else {
+      if language == "node" {
+        [ts_dir, lex_dir, py_dir]
+      } else {
+        [py_dir, ts_dir, lex_dir]
+      }
+    }
+  }
+}
+
 fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
+  make_run_server_tool_for(evidence_path, sprint_id, "")
+}
+
+fn make_run_server_tool_for(evidence_path :: Str, sprint_id :: Str, language :: Str) -> t.Tool {
   let params := { title: "RunServer", description: "Start a server in the background and verify it responds", fields: [s.required_str("cmd", []), s.required_int("port", []), s.optional(s.required_str("endpoint", [])), s.optional(s.required_int("timeout_s", [])), s.optional(s.required_str("method", [])), s.optional(s.required_str("body", []))] }
   t.define("run_server", "Start `cmd` as a background server on `port`, wait up to `timeout_s` seconds for it to respond, then fetch `endpoint` and return {ok, url, response, pid, error}. Optional `method` (default GET) and `body` (a JSON string): for a POST route pass method:'POST' and a body the route accepts. Probe a route the build actually defines -- a 404 page is not a live route.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let cmd := match jv.get_field(args, "cmd") {
@@ -173,7 +212,7 @@ fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       let cd_prelude := if str.contains(cmd, "cd ") {
         "# the caller named its own directory; leave it alone\n"
       } else {
-        str.join(["for D in ", lexskill.py_work_dir(sprint_id), " ", lexskill.ts_work_dir(sprint_id), " ", lexskill.work_dir(sprint_id), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then cd \"$D\"; break; fi\n", "done\n"], "")
+        str.join(["for D in ", str.join(work_dirs_in_language_order(sprint_id, language), " "), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then cd \"$D\"; break; fi\n", "done\n"], "")
       }
       let pid_registry := servers_registry_for(sprint_id)
       let script := str.join(["REG='", pid_registry, "'\n", "HOLDER=$(lsof -ti tcp:", port_str, " 2>/dev/null | head -1)\n", "if [ -n \"$HOLDER\" ]; then\n", "  if cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx \"", port_str, ":$HOLDER\"; then\n", "    kill -9 \"$HOLDER\" 2>/dev/null || true\n", "    sleep 1\n", "  else\n", "    echo \"PORTBUSY:$(ps -o comm= -p \"$HOLDER\" 2>/dev/null | tr -d ' ')\"\n", "    exit 3\n", "  fi\n", "fi\n", cd_prelude, "export PORT=", port_str, "\n", "# Detach server: redirect its stdout/stderr to a logfile so it does not\n", "# hold this script's stdout pipe open (which would block the parent read).\n", "nohup bash -c ", "\"", "{ ", cmd, " ; }", " >'", srv_log, "' 2>&1\" >/dev/null 2>&1 &\n", "PID=$!\n", "echo \"", port_str, ":$PID\" >> \"$REG\" 2>/dev/null || true\n", "echo \"PID:$PID\"\n", "OK=0\n", "LAST=\n", "for i in $(seq 1 ", int.to_str(timeout_s), "); do\n", "  sleep 1\n", "  RESP=$(curl -s --max-time 2 -X '", method, "' ", if str.is_empty(body) {
@@ -967,7 +1006,7 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                     Some(make_run_code_tool(evidence_path, sprint_id))
                   } else {
                     if name == "run_server" {
-                      Some(make_run_server_tool(evidence_path, sprint_id))
+                      Some(make_run_server_tool_for(evidence_path, sprint_id, company_language()))
                     } else {
                       if name == "deploy_hetzner" {
                         Some(make_deploy_hetzner_tool(evidence_path, sprint_id))

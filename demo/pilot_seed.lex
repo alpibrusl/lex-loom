@@ -53,6 +53,12 @@ fn pilot_graph(sprint_id :: Str) -> graph.SprintGraph {
   { id: sprint_id, phase: Implementation, nodes: [{ id: "write_docs", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "summarize", role: "docs", gate: "spec non-empty", expand: None, activate_when: "" }], edges: [{ from: "write_docs", to: "summarize", handoff: "schema {}" }] }
 }
 
+# The database is CLOSED before this exits, because the next thing that
+# happens to it is `cp company.db received.db` -- the whole point of the demo
+# is that a pilot receives one file and verifies it alone. Since lex-orm opens
+# SQLite in WAL (lex-orm#31) the recent commits sit in a `-wal` sidecar until
+# something folds them back, and close() does that (lex-orm#32). A seed that
+# just exits leaves the handover copy empty: `no such table: artifacts`.
 fn run_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] Unit {
   let db_path := get_env("DB_PATH", "pilot-demo.db")
   let sprint_id := get_env("SPRINT_ID", "pilot-demo")
@@ -71,6 +77,7 @@ fn run_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, con
             "held"
           }, "|", str.slice(o.reason, 0, 80)], ""))
         })
+        let __closed := conn.close(db)
         io.print(str.concat("PHASE|", if pr.success {
           "success"
         } else {

@@ -1,4 +1,8 @@
 *.db
+# WAL sidecars -- lex-orm opens SQLite in WAL (lex-orm#31), so every database
+# here now has two companions.
+*.db-wal
+*.db-shm
 tsconfig.tsbuildinfo
 .cli/
 llm_call.lex

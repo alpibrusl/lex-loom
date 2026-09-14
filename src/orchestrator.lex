@@ -1001,6 +1001,30 @@ fn outcome_from_await(node_id :: Str, aw :: tr.AwaitOutcome) -> NodeOutcome {
   }
 }
 
+# The absolute bound on one phase's await, however loud its nodes are.
+#
+# The stall timer resets on every trail row, so a node that keeps emitting
+# steps is never stalled -- a build logged 549 steps and was still going when
+# its iteration was closed around it. The only absolute bound was
+# `stall_ms * 10`: a derived five hours nobody chose and no operator could
+# find in a config. Three hours is generous -- the longest real node to date
+# was 25 minutes -- and it is a number someone picked and can change.
+fn queue_await_cap_ms() -> [env] Int {
+  env_int("QUEUE_AWAIT_CAP_TOTAL_MS", 10800000)
+}
+
+# The same lease the worker uses, read from the same variable, because the two
+# must agree on when a job counts as orphaned.
+fn reclaim_lease_seconds() -> [env] Int {
+  env_int("RECLAIM_LEASE_SECONDS", 300)
+}
+
+# Often enough that a wedged node costs minutes rather than hours, rarely
+# enough that it is not a query per poll.
+fn reclaim_every_ms() -> [env] Int {
+  env_int("RECLAIM_EVERY_MS", 30000)
+}
+
 fn queue_await_poll_ms() -> Int {
   1000
 }
@@ -1053,7 +1077,7 @@ fn run_layer_queued(layer :: List[Str], g :: graph.SprintGraph, input_ref :: Str
   let awaited := if list.is_empty(to_enqueue) {
     { rows: [], timed_out: false, missing: [], in_flight: [], waited_ms: 0 }
   } else {
-    tr.await_node_results_partial(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_idle_ms(), queue_await_stall_ms(), queue_await_poll_ms())
+    tr.await_node_results_supervised(cfg.db, cfg.id, phase_name, to_enqueue, queue_await_idle_ms(), queue_await_stall_ms(), queue_await_cap_ms(), reclaim_lease_seconds(), reclaim_every_ms(), queue_await_poll_ms())
   }
   let __tt := if awaited.timed_out {
     tr.trail(cfg.db, cfg.id, "queue_await_timed_out", str.join(["{\"phase\":\"", phase_name, "\",\"waited_ms\":", int.to_str(awaited.waited_ms), ",\"missing\":", jv.stringify(JStr(str.join(awaited.missing, ","))), ",\"still_running\":", jv.stringify(JStr(str.join(awaited.in_flight, ","))), ",\"arrived\":", int.to_str(list.len(awaited.rows)), "}"], ""))

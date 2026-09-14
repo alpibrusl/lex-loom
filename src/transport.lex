@@ -324,11 +324,52 @@ fn jobs_in_flight(db :: conn.ConnDb, sprint_id :: Str, node_ids :: List[Str]) ->
 # the stall branch disabled and a job in flight this loop had no other exit
 # and ran forever -- as production would if the detector ever broke. Five
 # hours at the default 30-minute stall; three seconds in a test at 300 ms.
-fn await_node_results_partial(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
-  await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, poll_ms, 0, 0, latest_trace_id(db), 0)
+# The unsupervised await: no absolute cap of its own (it derives one from
+# stall_ms, as it always has) and no reclaimer. Kept for callers that only
+# want to watch -- the tests, and anything not running a real company.
+fn await_node_results_partial(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time, io] AwaitOutcome {
+  await_node_results_supervised(db, sprint_id, phase, node_ids, idle_ms, stall_ms, stall_ms * 10, 0, 0, poll_ms)
 }
 
-fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, poll_ms :: Int, elapsed_ms :: Int, idle_so_far :: Int, last_seen :: Int, silent_ms :: Int) -> [sql, fs_read, time] AwaitOutcome {
+# The same await, supervising the workers it is waiting on.
+#
+# Two things were missing, and a company died of both (lex-loom#474).
+#
+# THE RESCUER WAS THE RESCUED. jobs.reclaim_stale is what returns a job
+# orphaned by a dead worker to the queue, and it runs inside the worker's own
+# poll loop -- in the branch taken when the worker has NOTHING to do. With
+# WORKER_COUNT=1, which is the default and what every cloud company runs, the
+# only process that could reclaim a wedged job is the wedged one. formcolocal
+# sat inside build-core for two hours at 0% CPU, status `running`, with a live
+# process and nobody coming. The orchestrator is already awake every poll_ms
+# with the db handle in its hand, and it is not the thing that can wedge, so
+# it reclaims too.
+#
+# NOTHING BOUNDED A NODE THAT KEPT TALKING. The stall timer resets on every
+# trail row, so a node that emits steps forever is never stalled; the only
+# absolute bound was `stall_ms * 10`, a derived five hours that nobody chose
+# and no operator could find. cap_ms is that bound, declared and configurable.
+fn await_node_results_supervised(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, cap_ms :: Int, lease_seconds :: Int, reclaim_every_ms :: Int, poll_ms :: Int) -> [sql, fs_read, time, io] AwaitOutcome {
+  await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, cap_ms, lease_seconds, reclaim_every_ms, poll_ms, 0, 0, latest_trace_id(db), 0, 0)
+}
+
+# Reclaim only while something is actually in flight to rescue, and only on
+# the cadence asked for. lease_seconds <= 0 disables it entirely, which is
+# what the unsupervised entry point passes.
+fn reclaim_if_due(db :: conn.ConnDb, lease_seconds :: Int, since_reclaim_ms :: Int, reclaim_every_ms :: Int) -> [sql, io, time] Bool {
+  if lease_seconds > 0 and reclaim_every_ms > 0 and since_reclaim_ms >= reclaim_every_ms {
+    let __rc := match jobs.reclaim_stale(db.handle, node_queue(), lease_seconds) {
+      Err(e) => io.print(str.join(["[loom/await] reclaim error: ", e], "")),
+      Ok(0) => (),
+      Ok(n) => io.print(str.join(["[loom/await] reclaimed ", int.to_str(n), " stale job(s) the worker could not"], "")),
+    }
+    true
+  } else {
+    false
+  }
+}
+
+fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_ids :: List[Str], idle_ms :: Int, stall_ms :: Int, cap_ms :: Int, lease_seconds :: Int, reclaim_every_ms :: Int, poll_ms :: Int, elapsed_ms :: Int, idle_so_far :: Int, last_seen :: Int, silent_ms :: Int, since_reclaim_ms :: Int) -> [sql, fs_read, time, io] AwaitOutcome {
   let results := read_node_results(db, sprint_id, phase)
   let done_ids := list.map(results, fn (r :: NodeResultRow) -> Str {
     r.node_id
@@ -342,14 +383,19 @@ fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id
     let in_flight := jobs_in_flight(db, sprint_id, missing)
     let now_seen := latest_trace_id(db)
     let moved := now_seen != last_seen
-    if not list.is_empty(in_flight) and (silent_ms >= stall_ms or elapsed_ms >= stall_ms * 10) {
+    if not list.is_empty(in_flight) and (silent_ms >= stall_ms or elapsed_ms >= cap_ms) {
       { rows: results, timed_out: true, missing: missing, in_flight: in_flight, waited_ms: elapsed_ms }
     } else {
       if list.is_empty(in_flight) and idle_so_far >= idle_ms {
         { rows: results, timed_out: true, missing: missing, in_flight: [], waited_ms: elapsed_ms }
       } else {
+        let reclaimed := if list.is_empty(in_flight) {
+          false
+        } else {
+          reclaim_if_due(db, lease_seconds, since_reclaim_ms, reclaim_every_ms)
+        }
         let __s := time.sleep_ms(poll_ms)
-        await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
+        await_partial_loop(db, sprint_id, phase, node_ids, idle_ms, stall_ms, cap_ms, lease_seconds, reclaim_every_ms, poll_ms, elapsed_ms + poll_ms, if list.is_empty(in_flight) {
           idle_so_far + poll_ms
         } else {
           0
@@ -357,6 +403,10 @@ fn await_partial_loop(db :: conn.ConnDb, sprint_id :: Str, phase :: Str, node_id
           0
         } else {
           silent_ms + poll_ms
+        }, if reclaimed {
+          0
+        } else {
+          since_reclaim_ms + poll_ms
         })
       }
     }

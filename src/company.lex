@@ -322,15 +322,56 @@ fn record_iteration(db :: conn.ConnDb, it :: CompanyIteration) -> [sql, fs_write
 # a reason to lose a passing build. The subject is passed to the shell as an
 # argument and written to a file with printf -- it carries the iteration's
 # goal, which is model-written text and has no business on a command line.
+#
+# And the commit is pushed, when there is somewhere to push it.
+#
+# `git push` used to appear exactly once in all of lex-loom -- in
+# bootstrap-company.sh, as `gh repo create --push` for the scaffold -- so a
+# published company showed its skeleton and then went silent forever, however
+# many iterations it ran. The history was local to whichever machine happened
+# to run the company.
+#
+# Three rules hold this to what the founder already agreed to:
+#
+#   1. It NEVER creates a remote. `[infra] repo` is declared intent and only
+#      GITHUB_PUBLISH=1 at bootstrap realizes it; no origin means the commit
+#      stays local and nothing leaves the machine. Publishing is a human's
+#      decision and this does not quietly make it again.
+#   2. It cannot hang an iteration. The push is bounded by alarm(60), with
+#      terminal prompts disabled and ssh in BatchMode, so an unreachable or
+#      credential-hungry remote fails in a minute instead of holding a company
+#      open on a password prompt nobody is watching.
+#   3. A failed push is not a failed iteration. The commit stands locally and
+#      the log says so, because losing a green build to a network blip would
+#      be a worse outcome than a stale remote.
 fn commit_iteration(company_id :: Str, idx :: Int, status :: Str, goal :: Str) -> [proc, io] Unit {
   if str.is_empty(company_id) {
     ()
   } else {
     let subject := str.join(["iteration ", int.to_str(idx), ": ", status, " -- ", str.slice(str.trim(one_line(goal)), 0, 72)], "")
-    let cmd := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; cd \"$WS/", company_id, "\" 2>/dev/null || exit 0; [ -d .git ] || exit 0; printf '%s' \"$1\" > .loom-commit-msg; git add -A -- ':!.loom-commit-msg' >/dev/null 2>&1; git diff --cached --quiet && exit 0; git -c user.email=company@loom -c user.name='", company_id, "' commit -q -F .loom-commit-msg >/dev/null 2>&1; rm -f .loom-commit-msg"], "")
+    let cmd := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; cd \"$WS/", company_id, "\" 2>/dev/null || exit 0; [ -d .git ] || exit 0; printf '%s' \"$1\" > .loom-commit-msg; git add -A -- ':!.loom-commit-msg' >/dev/null 2>&1; if git diff --cached --quiet; then rm -f .loom-commit-msg; exit 0; fi; git -c user.email=company@loom -c user.name='", company_id, "' commit -q -F .loom-commit-msg >/dev/null 2>&1 || { rm -f .loom-commit-msg; exit 0; }; rm -f .loom-commit-msg; echo COMMITTED; git remote get-url origin >/dev/null 2>&1 || exit 0; if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new' perl -e 'alarm shift; exec @ARGV' 60 git push -q origin HEAD >/dev/null 2>&1; then echo PUSHED; else echo PUSH_FAILED; fi"], "")
     match proc.run("bash", ["-c", cmd, "loom-commit", subject]) {
       Err(_) => (),
-      Ok(_) => io.print(str.join(["[company] committed iteration ", int.to_str(idx), " in the company workspace"], "")),
+      Ok(r) => report_iteration_commit(idx, str.concat(r.stdout, r.stderr)),
+    }
+  }
+}
+
+# The old line said "committed" whatever happened, including the paths that
+# commit nothing at all. What the log claims about a repo should be what the
+# repo says.
+fn report_iteration_commit(idx :: Int, out :: Str) -> [io] Unit {
+  if str.contains(out, "PUSHED") {
+    io.print(str.join(["[company] committed iteration ", int.to_str(idx), " and pushed it to origin"], ""))
+  } else {
+    if str.contains(out, "PUSH_FAILED") {
+      io.print(str.join(["[company] committed iteration ", int.to_str(idx), " -- the push to origin failed, the commit is local"], ""))
+    } else {
+      if str.contains(out, "COMMITTED") {
+        io.print(str.join(["[company] committed iteration ", int.to_str(idx), " in the company workspace"], ""))
+      } else {
+        ()
+      }
     }
   }
 }

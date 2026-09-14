@@ -89,6 +89,117 @@ fn empty_result() -> ImprovementResult {
 }
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
+# ── Clade metaproductivity (HGM) ─────────────────────────────────────────────
+#
+# WHICH AGENT DOES THE WORK and WHICH AGENT IS WORTH FORKING FROM are different
+# questions, and loom was answering both with the same number.
+#
+# The improver takes the best-performing agent for a role and writes a
+# successor from its prompt. arXiv 2510.21614 (Huxley-Godel Machine, ICLR 2026)
+# names why that is the wrong selector: the Metaproductivity-Performance
+# Mismatch -- an agent with the best immediate score is often NOT the one whose
+# descendants go on to perform, so a search that expands the current leader
+# keeps forking from a dead end. HGM scores a candidate by the aggregated
+# performance of its whole lineage (clade-metaproductivity) and expands that
+# instead, and reaches human-level SWE-bench with fewer CPU-hours than DGM,
+# which expanded on immediate score.
+#
+# So: execution still picks the best PERFORMER (load_best_agent -- the agent
+# that does a node should be the one that does it well). The improver now
+# picks the best SEED, which is the agent whose clade -- itself plus every
+# descendant -- has the highest total standing.
+#
+# The lineage edge this walks is agent_pool.parent_id, added in #487. Pools are
+# small (single digits per role), so the walk happens in Lex rather than a
+# recursive CTE: pure, dialect-free, and testable without a database.
+type PoolAgent = { id :: Str, parent_id :: Str, attestation_count :: Int }
+
+fn own_count(agents :: List[PoolAgent], id :: Str) -> Int {
+  list.fold(agents, 0, fn (acc :: Int, a :: PoolAgent) -> Int {
+    if a.id == id {
+      a.attestation_count
+    } else {
+      acc
+    }
+  })
+}
+
+fn children_of(agents :: List[PoolAgent], id :: Str) -> List[Str] {
+  list.map(list.filter(agents, fn (a :: PoolAgent) -> Bool {
+    if str.is_empty(a.parent_id) {
+      false
+    } else {
+      if a.parent_id == id {
+        a.id != id
+      } else {
+        false
+      }
+    }
+  }), fn (a :: PoolAgent) -> Str {
+    a.id
+  })
+}
+
+# An agent's own standing plus every descendant's. `depth` bounds the walk at
+# the size of the pool, so a parent_id cycle costs a bounded walk rather than
+# the company.
+fn clade_score(agents :: List[PoolAgent], id :: Str, depth :: Int) -> Int {
+  if depth <= 0 {
+    0
+  } else {
+    list.fold(children_of(agents, id), own_count(agents, id), fn (acc :: Int, kid :: Str) -> Int {
+      acc + clade_score(agents, kid, depth - 1)
+    })
+  }
+}
+
+# The agent worth forking from. Ties go to whichever the caller listed first,
+# which is the SQL order (own standing, then newest) -- so a pool with no
+# lineage at all behaves exactly as it did before.
+fn best_seed(agents :: List[PoolAgent]) -> Option[Str] {
+  let depth := list.len(agents) + 1
+  match list.head(agents) {
+    None => None,
+    Some(first) => Some(list.fold(agents, first.id, fn (best :: Str, a :: PoolAgent) -> Str {
+      if clade_score(agents, a.id, depth) > clade_score(agents, best, depth) {
+        a.id
+      } else {
+        best
+      }
+    })),
+  }
+}
+
+fn load_pool(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] List[PoolAgent] {
+  let qd := ormq.for_dialect({ sql: "SELECT id, parent_id, attestation_count FROM agent_pool WHERE role=? ORDER BY attestation_count DESC, created_at DESC", params: [PStr(role)] }, db.dialect)
+  let rows :: Result[List[PoolAgent], SqlError] := sql.query(db.handle, qd.sql, qd.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => rs,
+  }
+}
+
+fn load_agent_by_id(db :: conn.ConnDb, id :: Str) -> [sql, fs_read] Option[AgentRow] {
+  let qd := ormq.for_dialect({ sql: "SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE id=? LIMIT 1", params: [PStr(id)] }, db.dialect)
+  let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
+  match rows {
+    Err(_) => None,
+    Ok(rs) => list.head(rs),
+  }
+}
+
+# The agent the improver forks from: the best clade, falling back to the best
+# performer when a role has no pool at all.
+fn load_seed_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[AgentRow] {
+  match best_seed(load_pool(db, role)) {
+    None => load_best_agent(db, role),
+    Some(id) => match load_agent_by_id(db, id) {
+      None => load_best_agent(db, role),
+      Some(a) => Some(a),
+    },
+  }
+}
+
 fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[AgentRow] {
   let qd := ormq.for_dialect({ sql: "SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role=? ORDER BY attestation_count DESC, created_at DESC LIMIT 1", params: [PStr(role)] }, db.dialect)
   let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
@@ -262,7 +373,18 @@ fn specs_for_role(all_specs :: List[dg.TightenedSpec], role :: Str) -> List[dg.T
 
 # ── Core improvement ──────────────────────────────────────────────────────────
 fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[dg.TightenedSpec], lesson :: Str, model :: Str) -> [env, io, time, crypto, sql, fs_read, fs_write, net, concurrent, llm, proc, random, approval] Option[Str] {
-  let current_opt := load_best_agent(db, role)
+  let current_opt := load_seed_agent(db, role)
+  let __seed := match current_opt {
+    None => (),
+    Some(seed) => match load_best_agent(db, role) {
+      None => (),
+      Some(top) => if top.id == seed.id {
+        ()
+      } else {
+        io.print(str.join(["[loom/improver] forking role=", role, " from ", seed.id, " (best clade) rather than ", top.id, " (best score)"], ""))
+      },
+    },
+  }
   let current_prompt := match current_opt {
     Some(a) => a.system_prompt,
     None => match roles.for_role(role, model, "", "") {

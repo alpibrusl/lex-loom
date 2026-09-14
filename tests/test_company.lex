@@ -703,9 +703,9 @@ fn test_strategist_revise() -> Result[Unit, Str] {
 # #365: a revise goal for iteration 2+ carries the premise that the work dir
 # is empty; iteration 1's goal is untouched.
 fn test_iteration_goal_states_the_empty_work_dir_from_iteration_two() -> Result[Unit, Str] {
-  let g2 := company_runner.iteration_goal("Fix the tzconvert test suite so QA passes", 2, "")
-  let g1 := company_runner.iteration_goal("Build tzconvert", 1, "")
-  let g3 := company_runner.iteration_goal("Add /pricing", 3, "main.py\ntests/test_main.py")
+  let g2 := company_runner.iteration_goal("Fix the tzconvert test suite so QA passes", 2, "", "")
+  let g1 := company_runner.iteration_goal("Build tzconvert", 1, "", "")
+  let g3 := company_runner.iteration_goal("Add /pricing", 3, "main.py\ntests/test_main.py", "")
   if str.contains(g2, "EMPTY work dir") and str.starts_with(g2, "Fix the tzconvert test suite") {
     if g1 == "Build tzconvert" and str.contains(g3, "ALREADY HOLDS") and str.contains(g3, "tests/test_main.py") and not str.contains(g3, "EMPTY") {
       Ok(())

@@ -1181,7 +1181,81 @@ fn architect_lex(model :: Str, request :: Str) -> [env] runner.AgentDef {
 
 # ── System prompt helpers ─────────────────────────────────────────────────────
 fn pm_system_prompt() -> Str {
-  "Describe WHAT the product does, never HOW it is laid out: no file paths, no directory names, no port numbers, no commands. The pipeline owns those (the server reads PORT from the environment; tests are collected from the work dir root). A criterion like 'tests live in tests/' or 'binds port 8000' will be ignored by QA and can only mislead the build.\n\nACCEPTANCE CRITERIA DESCRIBE THE PRODUCT'S BEHAVIOUR -- requests, responses, errors, tests that pass. Never make loom's own pipeline gates or checkers (derived-values, collection, import or compile gates, LOOM_ROOT) a criterion: the pipeline runs those itself and QA must not be asked to.\n\nYou are the Product Manager for a software sprint. Your job is to turn a raw request into a structured PRD that the Architect can design from.\n\nOUTPUT FORMAT — plain text with these sections (no JSON, no markdown fences):\n\n## Goal\nOne sentence: what the product does and who it is for.\n\n## User Stories\n- As a [user], I want [action] so that [outcome].\n(3-6 stories maximum)\n\n## Acceptance Criteria\nNumbered list of concrete, testable conditions. Be specific: file names, HTTP status codes, output format.\n\n## Response Schema\nIf the product returns structured data, pin the EXACT wire shape: every field name, its JSON type, and one concrete example value. Types matter more than prose here — `\"result\": string` and `\"result\": number` are different products, and the build and the tests are written by different agents who only agree if you say which.\nExample:\n  {\"result\": string, \"from_tz\": string, \"to_tz\": string}   // result is the rendered timestamp, e.g. \"1752235200\"\nOmit this section only if the product returns nothing structured.\n\n## Out of Scope\nExplicit list of what this sprint does NOT include.\n\n## Tech Notes\nAny constraints: language preference (Python / Lex / both), deployment target, dependencies to avoid.\n\nKeep it tight. The Architect reads this — not a human executive."
+  "Describe WHAT the product does, never HOW it is laid out: no file paths, no directory names, no port numbers, no commands. The pipeline owns those (the server reads PORT from the environment; tests are collected from the work dir root). A criterion like 'tests live in tests/' or 'binds port 8000' will be ignored by QA and can only mislead the build.\n\nACCEPTANCE CRITERIA DESCRIBE THE PRODUCT'S BEHAVIOUR -- requests, responses, errors, tests that pass. Never make loom's own pipeline gates or checkers (derived-values, collection, import or compile gates, LOOM_ROOT) a criterion: the pipeline runs those itself and QA must not be asked to.\n\nYou are the Product Manager for a software sprint. Your job is to turn a raw request into a structured PRD that the Architect can design from.\n\nOUTPUT FORMAT — plain text with these sections (no JSON, no markdown fences):\n\n## Goal\nOne sentence: what the product does and who it is for.\n\n## User Stories\n- As a [user], I want [action] so that [outcome].\n(3-6 stories maximum)\n\n## Acceptance Criteria\nNumbered list of concrete, testable conditions. Be specific: file names, HTTP status codes, output format.\n\n## Response Schema\nIf the product returns structured data, pin the EXACT wire shape: every field name, its JSON type, and one concrete example value. Types matter more than prose here — `\"result\": string` and `\"result\": number` are different products, and the build and the tests are written by different agents who only agree if you say which.\nExample:\n  {\"result\": string, \"from_tz\": string, \"to_tz\": string}   // result is the rendered timestamp, e.g. \"1752235200\"\nOmit this section only if the product returns nothing structured.\n\n## Out of Scope\nExplicit list of what this sprint does NOT include.\n\n## Tech Notes\nAny constraints: deployment target, dependencies to avoid. NOT the language -- the operator chose the company's stack path and that path fixes it; a PRD that prefers another language only misleads the Architect into a graph metaspec will refuse.\n\nKeep it tight. The Architect reads this — not a human executive."
+}
+
+# The language this company builds in, read from the stack path the operator
+# chose. Every prompt constructor below is already [env]; none of them needs a
+# new parameter, and no call site can forget to pass one.
+fn company_language() -> [env] Str {
+  match env.get("COMPANY_PATH") {
+    None => "",
+    Some(p) => role_kinds.language_of_path(str.trim(p)),
+  }
+}
+
+# Say the language out loud, to the prompts that were only ever told not to
+# change it.
+#
+# Found live, twice on the same company. FormCo runs on the `lex-web-api` path
+# and its manifest says so three times over -- and still, the strategist wrote
+# "plus a pytest test suite" into the goal for iteration 3 AND iteration 4, and
+# the architect planned iteration 3 as py_build / py_test_author / py_qa. Both
+# prompts already carried a guard: the strategist's "THE STACK IS NOT YOURS TO
+# CHANGE" (#468) and metaspec's refusal of a mismatched graph (#478). Both say
+# the path fixes the language; neither says WHICH language, so the model had to
+# infer it -- while the architect's own role menu offers py_build and ts_build
+# beside build, lists pytest under AVAILABLE PYTHON PACKAGES, and writes every
+# Lex gate as `spec sh "python3 $LOOM_ROOT/bin/..."`. Inference lost, both
+# times, and cost an iteration each.
+#
+# So name it: the language, the tooling that is wrong for it, and the fact that
+# the python3 in a gate is loom's own checker rather than the language of the
+# build. An unrecognised path says nothing at all, exactly as the metaspec rule
+# does -- a new skeleton is never told it is something it is not.
+fn language_directive(language :: Str) -> Str {
+  if language == "lex" {
+    str.join(["THIS COMPANY BUILDS IN LEX. The operator started it on a `lex-*` stack path; its skeleton, lex.toml, Dockerfile and launch command are all Lex.\n\n", "WRONG FOR THIS COMPANY, in any goal, plan, spec or acceptance criterion you write: pytest, requirements.txt, pip, Flask, FastAPI, package.json, npm, node. Its test suite is Lex (`fn run_all() -> Int`, returning the number of failing tests) and its HTTP layer is lex-web.\n\n", "A `python3 $LOOM_ROOT/bin/check_*.py` inside a GATE is loom's own checker script reading the work dir. It is not the language the company builds in, and it never makes a node a Python node.\n\n"], "")
+  } else {
+    if language == "python" {
+      str.join(["THIS COMPANY BUILDS IN PYTHON. The operator started it on a `python-*` stack path; its skeleton, its dependencies and its launch command are all Python.\n\n", "WRONG FOR THIS COMPANY, in any goal, plan, spec or acceptance criterion you write: .lex files, `lex check`, lex-web, cargo, package.json, npm. Its test suite is pytest.\n\n"], "")
+    } else {
+      if language == "node" {
+        str.join(["THIS COMPANY BUILDS IN NODE/TYPESCRIPT. The operator started it on a node stack path; it runs on `node:*` built-in modules only -- there is no `npm install` here.\n\n", "WRONG FOR THIS COMPANY, in any goal, plan, spec or acceptance criterion you write: pytest, requirements.txt, pip, .lex files, `lex check`, cargo, third-party npm packages. Its test suite is `node:test`.\n\n"], "")
+      } else {
+        ""
+      }
+    }
+  }
+}
+
+# The same directive, plus the only thing the architect can do wrong with it:
+# cast another language's builders. Metaspec refuses that graph (#478), so this
+# is the difference between a sprint that plans right the first time and one
+# that pays for a re-plan to learn what its manifest already said.
+fn architect_language_directive(language :: Str) -> Str {
+  let roles_line := if language == "lex" {
+    "CAST ONLY THESE BUILD ROLES: build, test_author, qa. A graph containing py_build, py_test_author, py_qa, ts_build, ts_test_author or ts_qa is REFUSED by metaspec and this sprint pays for a re-plan. The AVAILABLE PYTHON PACKAGES and NODE/TS PATH sections below belong to other companies' paths; they are not available to you.\n\n"
+  } else {
+    if language == "python" {
+      "CAST ONLY THESE BUILD ROLES: py_build, py_test_author, py_qa. A graph containing build, test_author, qa, ts_build, ts_test_author or ts_qa is REFUSED by metaspec and this sprint pays for a re-plan. The AVAILABLE LEX PACKAGES and NODE/TS PATH sections below belong to other companies' paths; they are not available to you.\n\n"
+    } else {
+      if language == "node" {
+        "CAST ONLY THESE BUILD ROLES: ts_build, ts_test_author, ts_qa. A graph containing build, test_author, qa, py_build, py_test_author or py_qa is REFUSED by metaspec and this sprint pays for a re-plan. The AVAILABLE LEX PACKAGES and AVAILABLE PYTHON PACKAGES sections below belong to other companies' paths; they are not available to you.\n\n"
+      } else {
+        ""
+      }
+    }
+  }
+  str.concat(language_directive(language), roles_line)
+}
+
+fn architect_system_prompt_for(language :: Str) -> Str {
+  str.concat(architect_language_directive(language), architect_system_prompt())
+}
+
+fn strategist_system_prompt_for(language :: Str) -> Str {
+  str.concat(language_directive(language), strategist_system_prompt())
 }
 
 fn architect_system_prompt() -> Str {
@@ -1245,7 +1319,7 @@ fn pm(model :: Str) -> [env] runner.AgentDef {
 
 fn architect_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-architect", kind: "architect", system_prompt: architect_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
+  { id: "loom-architect", kind: "architect", system_prompt: architect_system_prompt_for(company_language()), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 # ── LLM-as-judge evaluator (the `spec judge "<criteria>"` gate) ────────────────
@@ -1269,7 +1343,7 @@ fn judge_agent(model :: Str, criteria :: Str) -> [env] runner.AgentDef {
 # recorded, so the company's direction changes are auditable, not silent.
 fn strategist_agent(model :: Str) -> [env] runner.AgentDef {
   let p := make_provider()
-  { id: "loom-strategist", kind: "strategist", system_prompt: strategist_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
+  { id: "loom-strategist", kind: "strategist", system_prompt: strategist_system_prompt_for(company_language()), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
 }
 
 fn strategist_system_prompt() -> Str {

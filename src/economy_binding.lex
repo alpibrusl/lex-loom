@@ -29,6 +29,8 @@ import "std.time" as time
 
 import "./budget" as budget
 
+import "./role_kinds" as role_kinds
+
 import "lex-trail/src/log" as tlog
 
 fn ensure_treasury(db :: conn.ConnDb, company_id :: Str, currency :: Str, opening_cents :: Int) -> [sql] Result[treasury.Treasury, Str] {
@@ -77,19 +79,7 @@ fn fund_from_total_envelope(db :: conn.ConnDb, company_id :: Str) -> [sql, fs_re
 # content-drafting/v1; the finance pack yields pricing-and-economics/v1.
 # Pure, so a manifest can be checked before anything runs.
 fn language_of_path(path :: Str) -> Str {
-  if str.starts_with(path, "python-") {
-    "python"
-  } else {
-    if str.starts_with(path, "lex-") {
-      "lex"
-    } else {
-      if str.starts_with(path, "node-") or str.starts_with(path, "nextjs") or str.starts_with(path, "web-") or str.starts_with(path, "rn-") {
-        "node"
-      } else {
-        ""
-      }
-    }
-  }
+  role_kinds.language_of_path(path)
 }
 
 fn offers_for(packs :: List[Str], path :: Str) -> List[capability.Offer] {

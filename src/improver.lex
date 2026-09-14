@@ -5,8 +5,23 @@
 # calls an LLM to generate an improved system prompt, and inserts
 # a new versioned agent into agent_pool.
 #
-# New agents start at attestation_count=0 — they earn trust through
-# future sprint acceptance, just like seeded specialists.
+# SAFE INHERITANCE. A successor inherits its parent's standing and nothing
+# more: it starts at exactly the parent's attestation_count, not above it, and
+# it records the parent it came from.
+#
+# It used to start at parent + 2. load_best_agent picks the highest count, so
+# a brand-new, unproven prompt outranked the proven agent it replaced the
+# moment it was written -- and this module's own comment claimed the opposite
+# ("new agents start at attestation_count=0"). formcolocal shipped
+# build-improved-formcolocal/iter-2-next that way, minted from a retro with no
+# lessons recorded at all, and it is the agent that then ran 549 steps and
+# wrote forty scratch files. Its parent build-v1 sat at -6 while it sat at -2,
+# not because it was better but because it had had fewer chances to fail.
+#
+# Starting level, plus a tie broken toward the newer agent, means the successor
+# IS tried -- and the first bounce drops it below its parent, which restores
+# the parent. That is the rollback: no separate mechanism, just no unearned
+# head start.
 #
 # ID convention: <role>-improved-<sprint_id>
 # e.g. build-improved-sprint-1
@@ -43,6 +58,28 @@ type ImprovementResult = { improved_roles :: List[Str], new_agent_ids :: List[St
 type AgentRow = { id :: Str, system_prompt :: Str, domain_tags_json :: Str, model_name :: Str, attestation_count :: Int }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+# What a successor is worth before it has done anything: exactly what its
+# parent was worth. Named, so that raising it again is an edit to a rule with
+# a test on it rather than a `+ 2` in the middle of a call.
+fn inherited_standing(parent_count :: Int) -> Int {
+  parent_count
+}
+
+# An "improvement" identical to what it replaces is a new id, a new row, and a
+# reset of nothing -- pure churn in the lineage. formcolocal minted four such
+# successors from a retro that recorded no lessons at all.
+fn says_nothing_new(current_prompt :: Str, improved :: Str) -> Bool {
+  str.trim(current_prompt) == str.trim(improved)
+}
+
+fn parent_label(parent_id :: Str) -> Str {
+  if str.is_empty(parent_id) {
+    "no parent"
+  } else {
+    parent_id
+  }
+}
+
 fn new_agent_id(role :: Str, sprint_id :: Str) -> Str {
   str.join([role, "-improved-", sprint_id], "")
 }
@@ -53,7 +90,7 @@ fn empty_result() -> ImprovementResult {
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[AgentRow] {
-  let qd := ormq.for_dialect({ sql: "SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role=? ORDER BY attestation_count DESC LIMIT 1", params: [PStr(role)] }, db.dialect)
+  let qd := ormq.for_dialect({ sql: "SELECT id, system_prompt, domain_tags_json, model_name, attestation_count FROM agent_pool WHERE role=? ORDER BY attestation_count DESC, created_at DESC LIMIT 1", params: [PStr(role)] }, db.dialect)
   let rows :: Result[List[AgentRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
   match rows {
     Err(_) => None,
@@ -61,9 +98,9 @@ fn load_best_agent(db :: conn.ConnDb, role :: Str) -> [sql, fs_read] Option[Agen
   }
 }
 
-fn save_improved_agent(db :: conn.ConnDb, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int) -> [sql, fs_write, time] Unit {
+fn save_improved_agent(db :: conn.ConnDb, new_id :: Str, role :: Str, prompt :: Str, tags_json :: Str, model_name :: Str, starting_count :: Int, parent_id :: Str) -> [sql, fs_write, time] Unit {
   let now := time.now_str()
-  let qd := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at) VALUES (?,?,?,?,?,?,?)", params: [PStr(new_id), PStr(role), PStr(prompt), PStr(model_name), PStr(tags_json), PInt(starting_count), PStr(now)] }, db.dialect)
+  let qd := ormq.for_dialect({ sql: "INSERT OR REPLACE INTO agent_pool (id, role, system_prompt, model_name, domain_tags_json, attestation_count, created_at, parent_id) VALUES (?,?,?,?,?,?,?,?)", params: [PStr(new_id), PStr(role), PStr(prompt), PStr(model_name), PStr(tags_json), PInt(starting_count), PStr(now), PStr(parent_id)] }, db.dialect)
   let __r := sql.exec(db.handle, qd.sql, qd.params)
   ()
 }
@@ -245,6 +282,10 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
     Some(a) => a.attestation_count,
     None => 0,
   }
+  let parent_id := match current_opt {
+    Some(a) => a.id,
+    None => "",
+  }
   let p := roles.make_provider()
   let improver_def := { id: "loom-improver", kind: "improver", system_prompt: improver_system_prompt(), model_name: model, provider: p, tools: [], proc_cmd: "", a2a_url: "", sprint_id: "" }
   let prompt := improvement_prompt(role, current_prompt, lesson, specs)
@@ -254,17 +295,22 @@ fn improve_role(db :: conn.ConnDb, sprint_id :: Str, role :: Str, specs :: List[
     let __log2 := io.print(str.join(["[loom/improver] empty output for role=", role, " — skipping"], ""))
     None
   } else {
-    match installs_a_gate_on_an_invented_artifact(current_prompt, improved_prompt) {
-      Some(why) => {
-        let __rej := io.print(str.join(["[loom/improver] REJECTED improvement for role=", role, ": ", why], ""))
-        None
-      },
-      None => {
-        let new_id := new_agent_id(role, sprint_id)
-        let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name, parent_count + 2)
-        let __log3 := io.print(str.join(["[loom/improver] saved agent ", new_id], ""))
-        Some(new_id)
-      },
+    if says_nothing_new(current_prompt, improved_prompt) {
+      let __same := io.print(str.join(["[loom/improver] improvement for role=", role, " is its parent's prompt — not minting a successor"], ""))
+      None
+    } else {
+      match installs_a_gate_on_an_invented_artifact(current_prompt, improved_prompt) {
+        Some(why) => {
+          let __rej := io.print(str.join(["[loom/improver] REJECTED improvement for role=", role, ": ", why], ""))
+          None
+        },
+        None => {
+          let new_id := new_agent_id(role, sprint_id)
+          let __save := save_improved_agent(db, new_id, role, improved_prompt, tags_json, model_name, inherited_standing(parent_count), parent_id)
+          let __log3 := io.print(str.join(["[loom/improver] saved agent ", new_id, " (inherits ", parent_label(parent_id), " at ", int.to_str(parent_count), ")"], ""))
+          Some(new_id)
+        },
+      }
     }
   }
 }

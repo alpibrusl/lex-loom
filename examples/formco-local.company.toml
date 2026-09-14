@@ -64,6 +64,15 @@ write deployment manifests, Kubernetes, or cloud provider config.
 path  = "lex-web-api"
 model = "qwen3.8:27b-mlx"
 
+# Where this company's repository would live, if the founder publishes it.
+# DECLARED INTENT ONLY: bootstrap creates and pushes it when the operator says
+# GITHUB_PUBLISH=1 (and [providers.vcs] in ~/.loom/profile.toml names a token);
+# without that the company still commits every iteration to its local repo and
+# nothing leaves the machine. Publishing is a human's decision, like sending
+# email or taking money.
+[infra]
+repo = "github:alpibrusl/formco"
+
 [roles]
 packs = ["core", "finance", "governance", "content", "ops"]
 

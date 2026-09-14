@@ -307,6 +307,38 @@ fn record_iteration(db :: conn.ConnDb, it :: CompanyIteration) -> [sql, fs_write
 }
 
 # Close an iteration row with a terminal status.
+# Commit what the iteration built, in the company's own workspace repo.
+#
+# bootstrap-company.sh runs `git init` and commits the scaffold, and until now
+# that was the only commit a company ever made: after four iterations,
+# formcolocal's repo still held exactly "Scaffold formcolocal from
+# company.toml" (2026-09-14). So `[infra] repo` could publish a skeleton and
+# nothing else, and there was no way to read what an iteration actually
+# changed except by diffing artifacts by hash.
+#
+# One commit per iteration, with the verdict in the message, authored as the
+# company rather than as whoever runs the machine. It never fails the
+# iteration: a workspace that is not a repo, or has nothing to commit, is not
+# a reason to lose a passing build. The subject is passed to the shell as an
+# argument and written to a file with printf -- it carries the iteration's
+# goal, which is model-written text and has no business on a command line.
+fn commit_iteration(company_id :: Str, idx :: Int, status :: Str, goal :: Str) -> [proc, io] Unit {
+  if str.is_empty(company_id) {
+    ()
+  } else {
+    let subject := str.join(["iteration ", int.to_str(idx), ": ", status, " -- ", str.slice(str.trim(one_line(goal)), 0, 72)], "")
+    let cmd := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; cd \"$WS/", company_id, "\" 2>/dev/null || exit 0; [ -d .git ] || exit 0; printf '%s' \"$1\" > .loom-commit-msg; git add -A -- ':!.loom-commit-msg' >/dev/null 2>&1; git diff --cached --quiet && exit 0; git -c user.email=company@loom -c user.name='", company_id, "' commit -q -F .loom-commit-msg >/dev/null 2>&1; rm -f .loom-commit-msg"], "")
+    match proc.run("bash", ["-c", cmd, "loom-commit", subject]) {
+      Err(_) => (),
+      Ok(_) => io.print(str.join(["[company] committed iteration ", int.to_str(idx), " in the company workspace"], "")),
+    }
+  }
+}
+
+fn one_line(s :: Str) -> Str {
+  str.replace(str.replace(s, "\n", " "), "\"", "'")
+}
+
 fn finish_iteration(db :: conn.ConnDb, company_id :: Str, idx :: Int, status :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
   let q := ormq.for_dialect({ sql: "UPDATE company_iterations SET status=?, ended_at=? WHERE company_id=? AND idx=?", params: [PStr(status), PStr(now), PStr(company_id), PInt(idx)] }, db.dialect)

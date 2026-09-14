@@ -599,6 +599,15 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     Err(m) => io.print(str.join(["[company] cost recording failed: ", m], "")),
   }
   let ctx := company.derive_ctx(db, ccfg.id, sprint_id, k, result.success)
+  let __commit := company.commit_iteration(ccfg.id, k, if result.parked {
+    "parked"
+  } else {
+    if result.success {
+      "passed"
+    } else {
+      "failed"
+    }
+  }, current_goal)
   let __fin := company.finish_iteration(db, ccfg.id, k, if result.parked {
     "parked"
   } else {

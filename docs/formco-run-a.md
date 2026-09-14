@@ -104,6 +104,30 @@ node at all.
     # dashboard: Companies -> New company -> kind `company` -> paste
     # examples/formco-local.company.toml
 
+### The code, and publishing it
+
+Everything the company builds lives in its own workspace repo on the runner:
+`$LOOM_WORKSPACE/cloud-<uuid>/<company-id>/`, `git init`-ed by bootstrap and
+committed once per iteration with the verdict in the message. Nothing leaves
+the machine on its own.
+
+The manifest declares where the repository WOULD live:
+
+    [infra]
+    repo = "github:alpibrusl/formco"
+
+That is intent, not an action. Bootstrap creates and pushes it only with
+`GITHUB_PUBLISH=1` in the environment (and `[providers.vcs]` in
+`~/.loom/profile.toml` naming the token variable) -- like every other
+outward-facing step, a person decides it:
+
+    printf 'GITHUB_PUBLISH=1\n' >> ~/.loom/needs.env
+
+Loom's own database (`company.db`, next to the code) is the trail, the
+artifacts, the graphs and the treasury -- not product data. The product keeps
+its own store under `data/`; the build prompts say so, because a company once
+wrote its `submissions` table straight into company.db.
+
 ### Steps are time, not money, on a local model
 
 A node's tool-call budget defaults to 40 steps for a build and 20 elsewhere.

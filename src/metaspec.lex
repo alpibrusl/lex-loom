@@ -680,11 +680,80 @@ fn rule_document_path_has_no_code_roles(g :: graph.SprintGraph, document_only ::
 # The company-level check: structure + semantics, then the two facts only
 # the company knows -- whether a deploy target exists, and whether its path
 # delivers a document.
+# The build roles a stack path can actually support.
+#
+# Found live (formcolocal, 2026-09-13): after two hard iterations on the
+# lex-web-api path, the architect planned iteration 3 as py-build-1,
+# py-build-2 and py-test-author -- Python nodes for a company whose skeleton,
+# lex.toml and Dockerfile are Lex, and whose own goal still said "on the
+# lex-web-api path". Nothing refused it, so the company spent an iteration
+# building a product it could not ship: `spec compiles` on a py_build node
+# runs py_compile, which knows nothing about the Lex the launch node must
+# start.
+#
+# The language comes from the path the operator chose, and a graph that casts
+# another language's builder is rejected before it runs -- the architect gets
+# the reason and re-plans, exactly as for any other metaspec violation.
+fn roles_for_language(language :: Str) -> List[Str] {
+  if language == "lex" {
+    ["build", "test_author", "qa"]
+  } else {
+    if language == "python" {
+      ["py_build", "py_test_author", "py_qa"]
+    } else {
+      if language == "node" {
+        ["ts_build", "ts_test_author", "ts_qa", "fe_build"]
+      } else {
+        []
+      }
+    }
+  }
+}
+
+fn language_build_roles() -> List[(Str, List[Str])] {
+  [("lex", roles_for_language("lex")), ("python", roles_for_language("python")), ("node", roles_for_language("node"))]
+}
+
+# Which language a build role belongs to, or "" for a role that is not a
+# builder (pm, demo, ops, ...).
+fn language_of_role(role :: Str) -> Str {
+  list.fold(language_build_roles(), "", fn (acc :: Str, entry :: (Str, List[Str])) -> Str {
+    match entry {
+      (lang, roles) => if str.is_empty(acc) and not list.is_empty(list.filter(roles, fn (r :: Str) -> Bool {
+        r == role
+      })) {
+        lang
+      } else {
+        acc
+      },
+    }
+  })
+}
+
+fn rule_build_roles_match_the_path(g :: graph.SprintGraph, language :: Str) -> List[Violation] {
+  if str.is_empty(language) {
+    []
+  } else {
+    list.fold(g.nodes, [], fn (acc :: List[Violation], n :: graph.Node) -> List[Violation] {
+      let role_lang := language_of_role(n.role)
+      if str.is_empty(role_lang) or role_lang == language {
+        acc
+      } else {
+        list.concat(acc, [{ rule: "build-role-matches-stack-path", message: str.join(["node ", n.id, " is cast as '", n.role, "', which builds ", role_lang, ", but this company's stack path is ", language, ". Use ", str.join(roles_for_language(language), ", "), " instead: the skeleton, its lex.toml or requirements, its Dockerfile and the launch command are all ", language, "."], "") }])
+      }
+    })
+  }
+}
+
 fn check_for_company(g :: graph.SprintGraph, deploy_allowed :: Bool, document_only :: Bool) -> MetaspecResult {
+  check_for_company_on(g, deploy_allowed, document_only, "")
+}
+
+fn check_for_company_on(g :: graph.SprintGraph, deploy_allowed :: Bool, document_only :: Bool, language :: Str) -> MetaspecResult {
   match check_for_target(g, deploy_allowed) {
     Invalid(vs) => Invalid(vs),
     Valid => {
-      let extra := rule_document_path_has_no_code_roles(g, document_only)
+      let extra := list.concat(rule_document_path_has_no_code_roles(g, document_only), rule_build_roles_match_the_path(g, language))
       if list.is_empty(extra) {
         Valid
       } else {

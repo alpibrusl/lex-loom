@@ -40,6 +40,8 @@ import "./roles" as roles
 
 import "./agent/runner" as runner
 
+import "./role_kinds" as role_kinds
+
 import "./transport" as tr
 
 import "./delegation" as delegation
@@ -254,14 +256,42 @@ fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id ::
 # tzc18 iter 3 "fix the tzconvert test suite so QA passes" -- and the sprint
 # then produced only the delta: nothing to launch, QA fail, iteration lost.
 # Until artifacts carry forward (#364) the goal states the premise (#365).
-fn iteration_goal(goal :: Str, k :: Int, carried :: Str) -> Str {
-  if k <= 1 {
-    goal
+# Which work dir this iteration seeds, or "" for none. The policy in one named
+# place: a product carried forward from a passing iteration is the later truth
+# and is never overwritten by a skeleton; otherwise the path's language decides
+# which build dir the skeleton belongs in.
+fn seed_role_for(carried_files :: Int, company_path :: Str) -> Str {
+  if carried_files > 0 {
+    ""
   } else {
-    if str.is_empty(str.trim(carried)) {
-      str.join([goal, "\n\nNOTE: this iteration starts from an EMPTY work dir. Nothing built or tested in earlier iterations is on disk. Build everything this goal needs to run and be verified -- the server, its tests, its requirements -- not only the change described above."], "")
+    runner.build_role_for_language(role_kinds.language_of_path(company_path))
+  }
+}
+
+# LOOM_ROOT and COMPANY_PATH are set by bootstrap for every company process.
+fn env_or(key :: Str, fallback :: Str) -> [env] Str {
+  match env.get(key) {
+    None => fallback,
+    Some(v) => if str.is_empty(str.trim(v)) {
+      fallback
     } else {
-      str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product (it passed its verdict). These files are on disk:\n", carried, "\nModify this product: read files before rewriting them, keep what works, change what the goal asks, keep the tests passing."], "")
+      str.trim(v)
+    },
+  }
+}
+
+fn iteration_goal(goal :: Str, k :: Int, carried :: Str, seeded :: Str) -> Str {
+  if not str.is_empty(str.trim(carried)) {
+    str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product (it passed its verdict). These files are on disk:\n", carried, "\nModify this product; do not start again from nothing."], "")
+  } else {
+    if not str.is_empty(str.trim(seeded)) {
+      str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the vetted skeleton for this stack path. These files are on disk:\n", seeded, "\nRead them first and BUILD ON THEM. In particular the entry point and the package manifest are already written and already correct -- do not invent your own, and do not rename them."], "")
+    } else {
+      if k <= 1 {
+        goal
+      } else {
+        str.join([goal, "\n\nNOTE: this iteration starts from an EMPTY work dir. Nothing built or tested in earlier iterations is on disk. Build everything this goal needs to run and be verified -- the server, its tests, its requirements -- not only the change described above."], "")
+      }
     }
   }
 }
@@ -558,13 +588,28 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
   } else {
     ""
   }
+  let seeded_files := if carried_files > 0 {
+    0
+  } else {
+    runner.seed_work_dir_from_path(sprint_id, env_or("COMPANY_PATH", ""), env_or("LOOM_ROOT", "."), seed_role_for(carried_files, env_or("COMPANY_PATH", "")))
+  }
+  let seeded_listing := if seeded_files > 0 {
+    orch.launch_file_listing(sprint_id)
+  } else {
+    ""
+  }
+  let __ps := if seeded_files > 0 {
+    io.print(str.join(["[company] seeded ", int.to_str(seeded_files), " skeleton file(s) for path '", env_or("COMPANY_PATH", ""), "' into ", sprint_id, "'s work dir"], ""))
+  } else {
+    ()
+  }
   let __pc := if carried_files > 0 {
     let __t := tr.trail(db, sprint_id, "product_carried_forward", str.join(["{\"from\":\"", parent_sprint, "\",\"files\":", int.to_str(carried_files), "}"], ""))
     io.print(str.join(["[company] carried ", int.to_str(carried_files), " product file(s) from ", parent_sprint, " into ", sprint_id], ""))
   } else {
     ()
   }
-  let current_goal := iteration_goal(current_goal, k, carried_listing)
+  let current_goal := iteration_goal(current_goal, k, carried_listing, seeded_listing)
   let __carry := if k > 1 {
     let n := company.carry_specs_forward(db, str.concat(parent_sprint, "-next"), sprint_id)
     io.print(str.join(["[company] carried ", int.to_str(n), " tightened spec(s) into ", sprint_id], ""))

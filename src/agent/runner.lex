@@ -675,6 +675,62 @@ fn quarantine_test_files(role :: Str, sprint_id :: Str) -> [proc] Int {
 # iteration's, minus caches, scratch `_*` files and quarantined tests, so the
 # build modifies a product instead of rebuilding one. Returns the number of
 # files carried.
+# What a build starts from when nothing carried forward: the vetted skeleton
+# for its stack path.
+#
+# bootstrap lays paths/<path>/ into the COMPANY WORKSPACE, and the build agent
+# works in /tmp/loom-*-work-<sprint>, which begins empty. So every iteration
+# has re-derived files loom already ships, and formcolocal/iter-8 shows what
+# that costs: 293 steps, a dozen guesses at the name of a package manifest
+# (_lextoml.lex, lex.toml.lex, manifest.toml.lex, tmp_lex.toml.lex), and then a
+# server.lex that passed `lex check --strict` and had NO `fn main` -- so the
+# launch node booted it and got
+#
+#   error: runtime: runtime panic: no function `main`
+#
+# after four nodes had already been attested. paths/lex-web-api/main.lex
+# declares that entry point on line 114. The agent never saw it.
+#
+# This is the rule deploy_scaffold.lex already states -- deterministic
+# infrastructure is code, not agent output -- applied to the one directory
+# where the tokens are actually spent.
+#
+# Seeds an ABSENT or EMPTY dir only: a work dir that already holds a carried
+# product is never touched, and neither is one a build has begun writing to.
+fn seed_work_dir_from_path(sprint_id :: Str, company_path :: Str, loom_root :: Str, role :: Str) -> [proc] Int {
+  let target := tool_work_dir_for_role(role, sprint_id)
+  if str.is_empty(target) or str.is_empty(company_path) {
+    0
+  } else {
+    let script := str.join(["S='", loom_root, "/paths/", company_path, "'\n", "T='", target, "'\n", "[ -d \"$S\" ] || { echo 0; exit 0; }\n", "if [ -d \"$T\" ] && [ -n \"$(ls -A \"$T\" 2>/dev/null)\" ]; then echo 0; exit 0; fi\n", "mkdir -p \"$T\" || { echo 0; exit 0; }\n", "cp -R \"$S\"/. \"$T\"/ 2>/dev/null || true\n", "find \"$T\" -type f | wc -l\n"], "")
+    match proc.run("bash", ["-c", script]) {
+      Err(_) => 0,
+      Ok(res) => match str.to_int(str.trim(res.stdout)) {
+        Some(n) => n,
+        None => 0,
+      },
+    }
+  }
+}
+
+# The build role a stack path's language casts, which is also the work dir its
+# skeleton belongs in.
+fn build_role_for_language(language :: Str) -> Str {
+  if language == "python" {
+    "py_build"
+  } else {
+    if language == "node" {
+      "ts_build"
+    } else {
+      if language == "lex" {
+        "build"
+      } else {
+        ""
+      }
+    }
+  }
+}
+
 fn carry_artifact_forward(prev_sprint_id :: Str, sprint_id :: Str) -> [proc] Int {
   let pairs := list.map(["py_build", "ts_build", "build"], fn (role :: Str) -> (Str, Str) {
     (tool_work_dir_for_role(role, prev_sprint_id), tool_work_dir_for_role(role, sprint_id))

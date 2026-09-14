@@ -98,6 +98,25 @@ rc=$?
 [ "$(git -C "$WS/deadco" log --oneline | wc -l | tr -d ' ')" = "2" ] && ok "the commit stands locally" || bad "the commit was lost"
 echo "$OUT" | grep -q "the push to origin failed" && ok "and the log says the commit is local" || bad "log did not report the failure: $OUT"
 
+say "8. a database is state, not source"
+mkdir -p "$WS/dbco"
+( cd "$WS/dbco" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Scaffold dbco" )
+printf 'fn main() -> Unit { () }\n' > "$WS/dbco/main.lex"
+head -c 4096 /dev/urandom > "$WS/dbco/company.db"
+head -c 4096 /dev/urandom > "$WS/dbco/company.db.bak-0914-0954"
+head -c 1024 /dev/urandom > "$WS/dbco/company.db-wal"
+LOOM_WORKSPACE="$WS" CID=dbco STATUS=passed GOAL='build the endpoint' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main >/dev/null 2>&1
+FILES="$(git -C "$WS/dbco" show --name-only --format= HEAD | tr '\n' ' ')"
+echo "$FILES" | grep -q "main.lex" && ok "the source is committed" || bad "the source was not committed: $FILES"
+echo "$FILES" | grep -q "company.db" && bad "loom's own database went into the product repo: $FILES" || ok "loom's database stays out of the product repo"
+
+say "9. an iteration whose only change is the database commits nothing"
+head -c 8192 /dev/urandom > "$WS/dbco/company.db"
+BEFORE="$(git -C "$WS/dbco" log --oneline | wc -l | tr -d ' ')"
+LOOM_WORKSPACE="$WS" CID=dbco STATUS=failed GOAL='nothing was built' lex run --max-steps 0 --allow-effects "$E" demo/gc1_probe.lex main >/dev/null 2>&1
+AFTER="$(git -C "$WS/dbco" log --oneline | wc -l | tr -d ' ')"
+[ "$BEFORE" = "$AFTER" ] && ok "a busier database is not a build" || bad "a database write produced a commit"
+
 rm -f demo/gc1_probe.lex
 printf '\n== %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

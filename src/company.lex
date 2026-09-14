@@ -341,7 +341,13 @@ fn record_iteration(db :: conn.ConnDb, it :: CompanyIteration) -> [sql, fs_write
 #      terminal prompts disabled and ssh in BatchMode, so an unreachable or
 #      credential-hungry remote fails in a minute instead of holding a company
 #      open on a password prompt nobody is watching.
-#   3. A failed push is not a failed iteration. The commit stands locally and
+#   3. It stages source, not state. loom's own company.db lives in the company
+#      directory (DB_PATH points at it), so `git add -A` swept 13MB of loom
+#      bookkeeping into the product's repo the first time it ran -- and nothing
+#      else, because that iteration failed and its build output never left
+#      /tmp. bootstrap writes a .gitignore for new companies; the pathspec here
+#      covers the ones created before it.
+#   4. A failed push is not a failed iteration. The commit stands locally and
 #      the log says so, because losing a green build to a network blip would
 #      be a worse outcome than a stale remote.
 fn commit_iteration(company_id :: Str, idx :: Int, status :: Str, goal :: Str) -> [proc, io] Unit {
@@ -349,7 +355,7 @@ fn commit_iteration(company_id :: Str, idx :: Int, status :: Str, goal :: Str) -
     ()
   } else {
     let subject := str.join(["iteration ", int.to_str(idx), ": ", status, " -- ", str.slice(str.trim(one_line(goal)), 0, 72)], "")
-    let cmd := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; cd \"$WS/", company_id, "\" 2>/dev/null || exit 0; [ -d .git ] || exit 0; printf '%s' \"$1\" > .loom-commit-msg; git add -A -- ':!.loom-commit-msg' >/dev/null 2>&1; if git diff --cached --quiet; then rm -f .loom-commit-msg; exit 0; fi; git -c user.email=company@loom -c user.name='", company_id, "' commit -q -F .loom-commit-msg >/dev/null 2>&1 || { rm -f .loom-commit-msg; exit 0; }; rm -f .loom-commit-msg; echo COMMITTED; git remote get-url origin >/dev/null 2>&1 || exit 0; if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new' perl -e 'alarm shift; exec @ARGV' 60 git push -q origin HEAD >/dev/null 2>&1; then echo PUSHED; else echo PUSH_FAILED; fi"], "")
+    let cmd := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; cd \"$WS/", company_id, "\" 2>/dev/null || exit 0; [ -d .git ] || exit 0; printf '%s' \"$1\" > .loom-commit-msg; git add -A -- ':!.loom-commit-msg' ':!*.db' ':!*.db-wal' ':!*.db-shm' ':!*.db.bak-*' >/dev/null 2>&1; if git diff --cached --quiet; then rm -f .loom-commit-msg; exit 0; fi; git -c user.email=company@loom -c user.name='", company_id, "' commit -q -F .loom-commit-msg >/dev/null 2>&1 || { rm -f .loom-commit-msg; exit 0; }; rm -f .loom-commit-msg; echo COMMITTED; git remote get-url origin >/dev/null 2>&1 || exit 0; if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new' perl -e 'alarm shift; exec @ARGV' 60 git push -q origin HEAD >/dev/null 2>&1; then echo PUSHED; else echo PUSH_FAILED; fi"], "")
     match proc.run("bash", ["-c", cmd, "loom-commit", subject]) {
       Err(_) => (),
       Ok(r) => report_iteration_commit(idx, str.concat(r.stdout, r.stderr)),

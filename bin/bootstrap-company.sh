@@ -265,6 +265,27 @@ Scaffolded from \`company.toml\` — see it for the full manifest.
 EOF
 fi
 
+# A company's repo holds its SOURCE. A database is runtime state, and loom's
+# own company.db lives right here in the company dir (DB_PATH points at it), so
+# the first thing an iteration commit ever swept up was 13MB of loom's
+# bookkeeping and none of the product: formcolocal's iteration 5 committed
+# company.db and a backup of it, nothing else, because the build output was
+# still in /tmp (lex-loom#484). Written at setup, where anything deterministic
+# and knowable from the manifest belongs.
+if [ ! -e "$DIR/.gitignore" ]; then
+  cat > "$DIR/.gitignore" <<'IGNORE'
+# Runtime state, never source -- loom's own bookkeeping (company.db) lives in
+# this directory, and so does whatever store the product opens for itself.
+*.db
+*.db-wal
+*.db-shm
+*.db.bak-*
+
+# The file commit_iteration writes the message into.
+.loom-commit-msg
+IGNORE
+fi
+
 # Git: init locally; optionally create a private GitHub repo (declared-intent
 # in infra.repo, only realized on explicit opt-in — outward-facing action).
 if [ ! -d "$DIR/.git" ]; then

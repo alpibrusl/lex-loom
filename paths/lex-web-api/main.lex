@@ -10,6 +10,11 @@
 # any port. Build agents EXTEND this file (add routes to app(), add std.sql
 # persistence, add middleware) rather than inventing a fresh layout.
 #
+# Persistence: this skeleton keeps nothing. When the product needs a store,
+# open `data/<name>.sqlite` under this directory (sql.open creates it) -- never
+# the path in DB_PATH, which is loom's own database for the company building
+# you.
+#
 # Run:  PORT=8080 lex run --allow-effects env,net,io,time,crypto,random,sql,fs_read,fs_write,concurrent,llm,proc,approval main.lex main
 # Try:  curl -i localhost:8080/health
 #       curl -i -d 'name=Ada&email=ada@example.eu' localhost:8080/submit

@@ -30,6 +30,35 @@ import "std.process" as proc
 
 # A stray "/" in sprint_id (company iterations are ids like "<company>/iter-N")
 # would otherwise split into a nested path component; flatten it instead.
+# What lex_run may grant: exactly what the program under test declares.
+#
+# The list used to be fixed -- io, fs_read, fs_write, time, random, crypto,
+# net -- and it cannot run a web service. A lex-web app reads PORT from the
+# environment and opens a database, so its row includes `env` and `sql` at
+# minimum, and Lex rows are PER-PROGRAM: importing lex-web unions in its whole
+# transitive closure, which is 13 effects including llm, proc and approval. So
+# QA could type-check a product and never once execute it.
+#
+# Found live and it had been costing verdicts for longer than it looked. A
+# company's QA refused a working form server with
+#
+#   main.lex returns ok='false' from lex_run (effect-gating errors for
+#   env/sql/concurrent/llm/proc/approval not in --allow-effects, EXIT 3)
+#
+# and the hand-written product of an earlier iteration -- row `env, fs_write,
+# io, net, sql` -- was equally unrunnable, short by `env` and `sql`. QA was
+# never judging behaviour on this path; it was reporting a sandbox mismatch.
+#
+# `lex check` prints the row the program declares, and that row is IN THE
+# SOURCE, reviewable, and the thing Lex's own effect system enforces. Granting
+# exactly it is narrower than any fixed list wide enough to be useful, and it
+# adapts as a product's imports change. A file that does not compile yields no
+# row and falls back to the old list, so a broken file still runs and still
+# reports its own error rather than an effects error on top.
+fn declared_effects_prelude(path :: Str) -> Str {
+  str.join(["EFFECTS=$(${LEX:-lex} check --strict '", path, "' 2>&1 | sed -n 's/^required effects: //p' | tr -d ' ' | head -1)\n", "[ -n \"$EFFECTS\" ] || EFFECTS='io,fs_read,fs_write,time,random,crypto,net'\n"], "")
+}
+
 fn sanitize_sprint_id(sprint_id :: Str) -> Str {
   str.replace(sprint_id, "/", "_")
 }
@@ -874,7 +903,7 @@ fn make_lex_run_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       _ => "",
     }
     let path := str.join([dir, "/", filename], "")
-    let cmd := str.join(["${LEX:-lex} run --allow-effects io,fs_read,fs_write,time,random,crypto,net ", path, " ", fn_name, " ", extra, " 2>&1; echo '##EXIT:'$?"], "")
+    let cmd := str.join([declared_effects_prelude(path), "${LEX:-lex} run --allow-effects \"$EFFECTS\" ", path, " ", fn_name, " ", extra, " 2>&1; echo '##EXIT:'$?"], "")
     match proc.run("bash", ["-c", cmd]) {
       Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
       Ok(r) => {

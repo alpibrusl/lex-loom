@@ -234,8 +234,67 @@ fn parse_digest_json(j :: jv.Json, sprint_id :: Str, next_sprint_id :: Str) -> D
 }
 
 # ── Scribe prompt ─────────────────────────────────────────────────────────────
-fn scribe_prompt(sprint_id :: Str, trail_text :: Str, next_sprint_id :: Str) -> Str {
-  str.join(["You are the Scribe. Sprint `", sprint_id, "` has completed.\n\n", "Sprint trail:\n```\n", trail_text, "\n```\n\n", "Produce a JSON digest with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"summary\": \"<2-3 paragraph stakeholder-facing retrospective: what was built, key outcomes, what to improve next — write for a non-technical audience>\",\n", "  \"lessons\": \"<1-3 sentences: what worked, what failed, key technical insight for the engineering team>\",\n", "  \"tightened_specs\": [\n", "    {\n", "      \"node_role\": \"<role that needs a tighter gate>\",\n", "      \"spec_src\": \"<new gate predicate, e.g. spec json-verdict-pass>\",\n", "      \"reason\": \"<why this gate was added based on sprint evidence>\"\n", "    }\n", "  ],\n", "  \"seed_graph\": {\n", "    \"id\": \"", next_sprint_id, "-seed\",\n", "    \"phase\": \"Intake\",\n", "    \"nodes\": [ { \"id\": \"...\", \"role\": \"...\", \"gate\": \"spec non-empty\" } ],\n", "    \"edges\": [ { \"from\": \"...\", \"to\": \"...\", \"handoff\": \"schema {}\" } ]\n", "  }\n", "}\n\n", "Rules for seed_graph: must be a valid SprintGraph — no cycles, every demo node must ", "have a qa ancestor, every node needs a non-empty gate. Use 'spec json-verdict-pass' for qa nodes.\n", "Add a tightened_spec entry for every node_role that produced a gate denial or empty output.\n", "Output only JSON."], "")
+# Who fed whom, so the Scribe can attribute a failure to the role that caused
+# it rather than the role that hit it.
+#
+# The Scribe decides every tightened_spec, and it decides from the trail, which
+# reports which NODE failed. A node that fails is often not the node at fault:
+# a company shipped a working product at iteration 9 -- verified by curl -- and
+# QA refused it three iterations running because the PRD it was judging against
+# pinned response bodies the goal never specified and swapped the goal's SQLite
+# store for an in-memory vector. Every retro blamed qa and test_author. In ten
+# iterations the pm was never tightened once, and ended holding the highest
+# attestation_count in the company while both qa successors sat at -5, one
+# decrement from retirement (lex-loom#496).
+#
+# The graph knows what fed what. Handing the Scribe the edges turns attribution
+# from a guess into a reading.
+fn upstream_listing(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] Str {
+  let rows := load_graphs_for(db, sprint_id)
+  let lines := list.fold(rows, [], fn (acc :: List[Str], gj :: Str) -> List[Str] {
+    match graph.from_json_str(gj) {
+      Err(_) => acc,
+      Ok(g) => list.concat(acc, list.map(g.edges, fn (e :: graph.Edge) -> Str {
+        str.join(["  ", e.to, "  <-  ", e.from, "   (", role_of(g, e.from), " fed ", role_of(g, e.to), ")"], "")
+      })),
+    }
+  })
+  if list.is_empty(lines) {
+    ""
+  } else {
+    str.join(["\n\nWHAT FED WHAT in this sprint (node <- the node whose artifact it worked from):\n", str.join(lines, "\n"), "\n"], "")
+  }
+}
+
+fn role_of(g :: graph.SprintGraph, node_id :: Str) -> Str {
+  list.fold(g.nodes, "?", fn (acc :: Str, n :: graph.Node) -> Str {
+    if n.id == node_id {
+      n.role
+    } else {
+      acc
+    }
+  })
+}
+
+type GraphRow = { graph_json :: Str }
+
+fn load_graphs_for(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_read] List[Str] {
+  let qd := ormq.for_dialect({ sql: "SELECT graph_json FROM sprint_graphs WHERE sprint_id=? ORDER BY rowid DESC LIMIT 3", params: [PStr(sprint_id)] }, db.dialect)
+  let rows :: Result[List[GraphRow], SqlError] := sql.query(db.handle, qd.sql, qd.params)
+  match rows {
+    Err(_) => [],
+    Ok(rs) => list.map(rs, fn (r :: GraphRow) -> Str {
+      r.graph_json
+    }),
+  }
+}
+
+fn attribution_rule() -> Str {
+  str.join(["\n\nATTRIBUTION -- the node that FAILED is often not the role at fault.\n", "A tightened_spec names the role that must change, and that is the role that CAUSED the failure, not the one that reported it. Before you name a role, follow the chain above from the failing node back to whatever it was working from, and ask what the failure was really about:\n", "- a build that could not satisfy its spec, where the spec asked for something the goal never did -> tighten the role that WROTE the spec\n", "- a QA that refused a product which does what the GOAL asked -> the acceptance criteria were wrong; tighten the role that wrote them, not qa\n", "- a test author whose suite disagrees with a working product -> tighten whoever specified the behaviour the suite was written from\n", "- a build that simply got its own work wrong -> tighten build, as before\n", "Naming the reporting role every time is how a role with a weak gate goes ten iterations without ever being corrected, while the roles that keep catching its mistakes are retired for it.\n"], "")
+}
+
+fn scribe_prompt(sprint_id :: Str, trail_text :: Str, next_sprint_id :: Str, upstream :: Str) -> Str {
+  str.join(["You are the Scribe. Sprint `", sprint_id, "` has completed.\n\n", "Sprint trail:\n```\n", trail_text, "\n```\n", upstream, attribution_rule(), "\n", "Produce a JSON digest with this exact shape (no prose, no markdown fences):\n", "{\n", "  \"summary\": \"<2-3 paragraph stakeholder-facing retrospective: what was built, key outcomes, what to improve next — write for a non-technical audience>\",\n", "  \"lessons\": \"<1-3 sentences: what worked, what failed, key technical insight for the engineering team>\",\n", "  \"tightened_specs\": [\n", "    {\n", "      \"node_role\": \"<role that needs a tighter gate>\",\n", "      \"spec_src\": \"<new gate predicate, e.g. spec json-verdict-pass>\",\n", "      \"reason\": \"<why this gate was added based on sprint evidence>\"\n", "    }\n", "  ],\n", "  \"seed_graph\": {\n", "    \"id\": \"", next_sprint_id, "-seed\",\n", "    \"phase\": \"Intake\",\n", "    \"nodes\": [ { \"id\": \"...\", \"role\": \"...\", \"gate\": \"spec non-empty\" } ],\n", "    \"edges\": [ { \"from\": \"...\", \"to\": \"...\", \"handoff\": \"schema {}\" } ]\n", "  }\n", "}\n\n", "Rules for seed_graph: must be a valid SprintGraph — no cycles, every demo node must ", "have a qa ancestor, every node needs a non-empty gate. Use 'spec json-verdict-pass' for qa nodes.\n", "Add a tightened_spec entry for every node_role that produced a gate denial or empty output.\n", "Output only JSON."], "")
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -253,7 +312,7 @@ fn run_digest(sprint_id :: Str, next_sprint_id :: Str, model :: Str, db :: conn.
     None => default_scribe,
     Some(a) => cast.pool_agent_to_config(a, default_scribe, model),
   }
-  let prompt := scribe_prompt(sprint_id, trail_text, next_sprint_id)
+  let prompt := scribe_prompt(sprint_id, trail_text, next_sprint_id, upstream_listing(db, sprint_id))
   let output := runner.step(db, agent_cfg, prompt, sprint_id, "")
   let __to := io.print(str.join(["[loom/digest] scribe output_len=", int.to_str(str.len(output))], ""))
   let __tt := trace.record(db, sprint_id, sprint_id, "digest_produced", str.join(["{\"output_len\":", int.to_str(str.len(output)), "}"], ""))

@@ -44,6 +44,17 @@ if [ "$busy" -gt 0 ]; then
   exit 1
 fi
 
+# Only one suite at a time, and say so with a PID rather than a name. An
+# earlier watcher used `pgrep -f eval-suite.sh`, which matched its own command
+# line and waited on itself for two hours while reporting "still running".
+PIDFILE=evals/.running.pid
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+  echo "another eval run is live (pid $(cat "$PIDFILE")). Wait for it, or remove $PIDFILE if it is stale." >&2
+  exit 1
+fi
+echo $$ > "$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
+
 # The label matches the runtime decision (#427): LiteLLM unless named.
 PROVIDER="${LOOM_PROVIDER:-${MLX_URL:+mlx}}"
 PROVIDER="${PROVIDER:-litellm}"
@@ -51,9 +62,22 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="evals/results/$STAMP.tsv"
 
+# A baseline that does not record its own preconditions is not reproducible,
+# and cannot say so. The 2026-09-07 baseline recorded model NAME, provider and
+# commit; every comparison against it on 2026-09-15 also exported
+# OLLAMA_THINK=false and three step knobs from a file created six days LATER,
+# and nothing could report the mismatch. `qwen3.8:27b-mlx` is also a tag: a
+# re-pull changes the weights and every number with them.
+ENVSIG="OLLAMA_THINK=${OLLAMA_THINK:-unset} MAX_STEPS_BUILD=${MAX_STEPS_BUILD:-unset} MAX_STEPS_NODE=${MAX_STEPS_NODE:-unset} MAX_STEPS_LAUNCH=${MAX_STEPS_LAUNCH:-unset} LLM_TIMEOUT_MS=${LLM_TIMEOUT_MS:-unset}"
+DIGEST=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null \
+  | python3 -c "import sys,json;ms=json.load(sys.stdin).get('models',[]);print(next((m.get('digest','')[:12] for m in ms if m.get('name')=='$MODEL'),'unknown'))" 2>/dev/null || echo unknown)
+[ -n "$DIGEST" ] || DIGEST=unknown
+
 { echo "# model	$MODEL"
+  echo "# digest	$DIGEST"
   echo "# provider	$PROVIDER"
   echo "# commit	$COMMIT"
+  echo "# env	$ENVSIG"
   echo "# date	$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$OUT"
 
@@ -404,6 +428,25 @@ if [ -z "${ROLES:-}" ] || printf ',%s,' "$ROLES" | grep -qE ',(launch|deploy),';
     echo "Free the port — or confirm it is yours and kill it — then re-run." >&2
     exit 1
   fi
+  # Across the rest of the convention range, the only listeners this suite can
+  # speak about are LOOM'S OWN: a company stopped with SIGKILL skips
+  # reap_company_servers (#338) and leaves its product server behind. One sat
+  # on :8080 for 3h38m and turned a launch measurement into a measurement of
+  # that orphan. A pid in a loom registry is loom's to reap and is named here;
+  # anything else on those ports is the operator's business, not this script's.
+  #
+  # Identified by REGISTERED PID, never by grepping command lines: a text match
+  # on "PORT=... python3" also matches the shell that launched this suite, which
+  # is the same self-match that made `pgrep -f eval-suite.sh` wait on itself.
+  for port in 8080 8082 8083 8084 8085; do
+    h=$(lsof -ti "tcp:$port" 2>/dev/null | head -1 || true)
+    [ -n "$h" ] || continue
+    if cat /tmp/loom-servers-*.pids 2>/dev/null | grep -qx "$port:$h"; then
+      echo "port $port is held by pid $h, one of loom's own product servers left by a company that did not exit cleanly." >&2
+      echo "Reap it (or stop companies with TERM so reap_company_servers runs), then re-run." >&2
+      exit 1
+    fi
+  done
 fi
 
 echo "== eval suite: model=$MODEL provider=$PROVIDER commit=$COMMIT"
@@ -436,7 +479,12 @@ if [ "$UPDATE" = "1" ]; then
   else
     grep -v '^#' "$OUT" > "$BASELINE"
   fi
+  # The preconditions travel WITH the numbers, in the machine-readable form the
+  # comparison reads back. A baseline that records only prose about itself
+  # cannot refuse a comparison it should refuse.
   { echo "# baseline recorded $(date -u +%Y-%m-%dT%H:%M:%SZ) — model $MODEL, provider $PROVIDER, commit $COMMIT"
+    echo "# digest	$DIGEST"
+    echo "# env	$ENVSIG"
     cat "$BASELINE"
   } > "$BASELINE.tmp" && mv "$BASELINE.tmp" "$BASELINE"
   echo "== baseline updated: $BASELINE"
@@ -448,25 +496,78 @@ if [ ! -f "$BASELINE" ]; then
   exit 0
 fi
 
-echo "== against $BASELINE (tolerance: $TOLERANCE sample)"
+# A role's result is a RATE. Comparing accepted counts across different sample
+# sizes inverts the verdict: raising launch from 4 samples to 20 turned 5/20
+# (25%) into "improved from 4 (+1)" against a baseline of 4/4 (100%), and the
+# run exited 0 reporting no regressions. Every number in this suite was read as
+# a fact while the comparison producing it had never been checked.
+#
+# TOLERANCE stays expressed in samples, of the BASELINE's sample size, so the
+# knob means what it always meant when n is unchanged.
+# A comparison across different preconditions is not a comparison. Refuse it
+# rather than print a number that looks like one.
+base_env=$(awk -F'\t' '/^# env/{print $2; exit}' "$BASELINE")
+base_digest=$(awk -F'\t' '/^# digest/{print $2; exit}' "$BASELINE")
+drift=""
+[ -n "$base_env" ] && [ "$base_env" != "$ENVSIG" ] && drift="environment"
+[ -n "$base_digest" ] && [ "$base_digest" != "unknown" ] && [ "$DIGEST" != "unknown" ] && [ "$base_digest" != "$DIGEST" ] && drift="${drift:+$drift and }model weights"
+if [ -n "$drift" ] && [ "${ALLOW_DRIFT:-0}" != "1" ]; then
+  echo "== results: $OUT"
+  echo "refusing to compare: the $drift differ from the baseline's." >&2
+  [ -n "$base_env" ] && { echo "  baseline env: $base_env" >&2; echo "  this run env: $ENVSIG" >&2; }
+  [ -n "$base_digest" ] && [ "$base_digest" != "$DIGEST" ] && echo "  baseline digest: $base_digest   this run: $DIGEST" >&2
+  echo "Re-record with --update under these conditions, or set ALLOW_DRIFT=1 to compare anyway." >&2
+  exit 1
+fi
+if [ -z "$base_env" ]; then
+  echo "== note: this baseline predates environment recording, so the comparison assumes conditions matched" >&2
+fi
+
+echo "== against $BASELINE (tolerance: $TOLERANCE sample of the baseline's n)"
 regressed=0
+pipeline_num=1
+pipeline_den=1
+pipeline_roles=0
 while IFS=$'\t' read -r role got samples; do
   case "$role" in ''|\#*) continue ;; esac
-  base=$(awk -F'\t' -v r="$role" '$1==r{print $2}' "$BASELINE" | head -1)
-  if [ -z "$base" ]; then
-    printf '  %-16s %s/%s  (no baseline for this role)\n' "$role" "$got" "$samples"
+  base_got=$(awk -F'\t' -v r="$role" '$1==r{print $2}' "$BASELINE" | head -1)
+  base_n=$(awk -F'\t' -v r="$role" '$1==r{print $3}' "$BASELINE" | head -1)
+  rate_now=$(awk -v a="$got" -v b="$samples" 'BEGIN{printf "%.0f", (b>0? 100*a/b : 0)}')
+  pipeline_num=$((pipeline_num * got))
+  pipeline_den=$((pipeline_den * samples))
+  pipeline_roles=$((pipeline_roles + 1))
+  if [ -z "$base_got" ] || [ -z "$base_n" ] || [ "$base_n" = "0" ]; then
+    printf '  %-16s %s/%s (%s%%)  (no baseline for this role)\n' "$role" "$got" "$samples" "$rate_now"
     continue
   fi
-  delta=$((got - base))
-  if [ "$delta" -lt "-$TOLERANCE" ]; then
-    printf '  %-16s %s/%s  REGRESSED from %s (%s)\n' "$role" "$got" "$samples" "$base" "$delta"
-    regressed=$((regressed + 1))
-  elif [ "$delta" -gt 0 ]; then
-    printf '  %-16s %s/%s  improved from %s (+%s)\n' "$role" "$got" "$samples" "$base" "$delta"
-  else
-    printf '  %-16s %s/%s  (baseline %s)\n' "$role" "$got" "$samples" "$base"
-  fi
+  rate_base=$(awk -v a="$base_got" -v b="$base_n" 'BEGIN{printf "%.0f", 100*a/b}')
+  # Cross-multiplied integers, not floats: 4/5 - 1/5 is 0.6000000000000001 in
+  # floating point, so a held 3/5 compared as a regression. And the verdict is
+  # deliberately ASYMMETRIC, as it always was -- any better rate is worth
+  # naming, only a drop beyond tolerance fails the run.
+  verdict=$(awk -v g="$got" -v n="$samples" -v bg="$base_got" -v bn="$base_n" -v tol="$TOLERANCE" \
+    'BEGIN{ if (g*bn < (bg-tol)*n) print "REGRESSED";
+            else if (g*bn > bg*n)  print "improved";
+            else                   print "held" }')
+  case "$verdict" in
+    REGRESSED)
+      printf '  %-16s %s/%s (%s%%)  REGRESSED from %s/%s (%s%%)\n' "$role" "$got" "$samples" "$rate_now" "$base_got" "$base_n" "$rate_base"
+      regressed=$((regressed + 1)) ;;
+    improved)
+      printf '  %-16s %s/%s (%s%%)  improved from %s/%s (%s%%)\n' "$role" "$got" "$samples" "$rate_now" "$base_got" "$base_n" "$rate_base" ;;
+    *)
+      printf '  %-16s %s/%s (%s%%)  (baseline %s/%s, %s%%)\n' "$role" "$got" "$samples" "$rate_now" "$base_got" "$base_n" "$rate_base" ;;
+  esac
 done < <(grep -v '^#' "$OUT")
+
+# An iteration passes only if EVERY gated node is accepted, so the pipeline is
+# the PRODUCT of the rates, not their average. The suite reported factors and
+# never the product, so six roles at 0.9 -- a 53% pipeline -- read as six green
+# rows (lex-loom#499).
+if [ -z "${ROLES:-}" ] && [ "$pipeline_roles" -gt 1 ]; then
+  awk -v n="$pipeline_num" -v d="$pipeline_den" -v k="$pipeline_roles" \
+    'BEGIN{ printf "== pipeline: %.1f%% of iterations would pass if all %d measured roles gated one (product of the rates)\n", 100*n/d, k }'
+fi
 
 echo "== results: $OUT"
 if [ "$regressed" -gt 0 ]; then

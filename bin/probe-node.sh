@@ -33,6 +33,12 @@ case "$ROLE" in
   py_qa|qa|ts_qa)          DEFAULT_GATE='spec json-verdict-pass' ;;
   launch|deploy)           DEFAULT_GATE='spec json-ok-true' ;;
   opportunity_research)    DEFAULT_GATE='spec sh "python3 $LOOM_ROOT/bin/check_research_report.py ."' ;;
+  # The pm had no row until the gate could fail. `spec len-gt 50` accepted any
+  # 51 characters, so its accept rate was 5/5 by construction and said nothing.
+  # LOOM_GOAL_FILE is what the contradiction check compares against; the probe
+  # sets it, the real pipeline does not yet (lex-loom#513), so a probe measures
+  # a STRICTER gate than production until that lands.
+  pm)                      DEFAULT_GATE='spec sh "bash $LOOM_ROOT/bin/check-prd.sh prd.md \"$LOOM_GOAL_FILE\""' ;;
   *)                       DEFAULT_GATE='spec non-empty' ;;
 esac
 GATE="${GATE:-$DEFAULT_GATE}"

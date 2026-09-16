@@ -102,10 +102,45 @@ fn pins_a_prose_body(text :: Str) -> Bool {
   }
 }
 
+# Sections where a PRD DECIDES. Tech Notes and Out of Scope are where it
+# EXCLUDES, and the two readings of the same word are opposite.
+#
+# Live, on the first measurement of this gate: three consecutive pm attempts
+# were refused for writing, in Tech Notes, "a local SQLite database (not an
+# in-memory or networked database)" and "do not substitute an in-memory store".
+# Every one of them had obeyed the goal exactly, and the last was quoting the
+# goal back to warn the build off substituting. The checker was asking whether
+# a category term APPEARED; the question is whether the PRD DECIDED it.
+# Acceptance Criteria ALONE, because that is the section QA judges against and
+# therefore the only place a wrong decision does damage. Goal and User Stories
+# are prose the build reads for intent; Tech Notes and Out of Scope are where a
+# PRD EXCLUDES things, and the two readings of the same word are opposite.
+#
+# Widening this to Goal + User Stories looked equally correct against the first
+# fixtures and is not: #495's PRD restated SQLite in its Goal and then wrote
+# criteria about "the in-memory vector length". Any rule that lets a correct
+# Goal excuse wrong criteria misses the bug this check exists for.
+fn decision_sections() -> List[Str] {
+  ["Acceptance Criteria"]
+}
+
+fn decision_text(text :: Str) -> Str {
+  str.to_lower(str.join(list.map(decision_sections(), fn (h :: Str) -> Str {
+    section_of(text, h)
+  }), "\n"))
+}
+
 # The grounding check: the goal is the ledger. A decision it made cannot be
 # reversed here.
+#
+# A reversal needs BOTH halves -- the criteria name a different member of the
+# category, AND they never name the goal's member. Criteria naming both are
+# contrasting ("persisted to SQLite, not held in memory"), which is allowed and
+# usually helpful. Both halves are load-bearing and each has its own test:
+# without the section scope, an exclusion in Tech Notes reads as a decision;
+# without the restates-goal half, an exclusion written INSIDE a criterion does.
 fn contradicts_goal(text :: Str, goal :: Str) -> Str {
-  let body := str.to_lower(text)
+  let body := decision_text(text)
   let g := str.to_lower(goal)
   let chose_in_goal := list.filter(storage_terms(), fn (t :: Str) -> Bool {
     str.contains(g, t)
@@ -113,19 +148,30 @@ fn contradicts_goal(text :: Str, goal :: Str) -> Str {
   if list.is_empty(chose_in_goal) {
     ""
   } else {
-    let conflicting := list.filter(storage_terms(), fn (t :: Str) -> Bool {
-      if str.contains(body, t) {
-        not list.fold(chose_in_goal, false, fn (acc :: Bool, c :: Str) -> Bool {
-          if acc {
-            true
-          } else {
-            c == t
-          }
-        })
+    let restates_goal := list.fold(chose_in_goal, false, fn (acc :: Bool, c :: Str) -> Bool {
+      if acc {
+        true
       } else {
-        false
+        str.contains(body, c)
       }
     })
+    let conflicting := if restates_goal {
+      []
+    } else {
+      list.filter(storage_terms(), fn (t :: Str) -> Bool {
+        if str.contains(body, t) {
+          not list.fold(chose_in_goal, false, fn (acc :: Bool, c :: Str) -> Bool {
+            if acc {
+              true
+            } else {
+              c == t
+            }
+          })
+        } else {
+          false
+        }
+      })
+    }
     match list.head(conflicting) {
       None => "",
       Some(t) => str.join(["the PRD decides storage as `", t, "`; the goal decided `", str.join(chose_in_goal, ", "), "`"], ""),

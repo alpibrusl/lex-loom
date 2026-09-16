@@ -133,8 +133,79 @@ fn test_structure_is_still_checked_without_a_goal() -> Result[Unit, Str] {
   }
 }
 
+# THE LIVE FALSE POSITIVE. Measuring the pm against this gate refused three
+# consecutive attempts that were RIGHT. All three named SQLite exactly as the
+# goal asked and then said so again in Tech Notes, excluding the alternatives:
+#
+#   "Persistence is a local, file-based SQLite database (not an in-memory or
+#    networked database)."
+#   "The only persistent store is a local SQLite database file on disk; no
+#    external DB server (Postgres, MySQL, etc.)."
+#   "Persistence layer must be a local SQLite database (as stated in the goal);
+#    do not substitute an in-memory store or a file-based log."
+#
+# The third one is the pm quoting the goal back and warning the build not to
+# substitute -- the single most correct PRD of the twelve, refused hardest. The
+# checker was scanning the whole document for a category term and never asked
+# whether the PRD was DECIDING it or EXCLUDING it.
+#
+# I had a test for paraphrase and none for negation, so this shipped. These are
+# the real strings.
+fn test_excluding_the_alternative_in_tech_notes_is_not_a_contradiction() -> Result[Unit, Str] {
+  let with_notes := str.join([good_prd(), "\n## Tech Notes\n- Persistence is a local, file-based SQLite database (not an in-memory or networked database).\n"], "")
+  if accepts(prd.verdict(with_notes, goal())) {
+    Ok(())
+  } else {
+    Err("a PRD that named SQLite and then EXCLUDED in-memory was refused for mentioning the thing it excluded — the pm punished for being precise")
+  }
+}
+
+fn test_naming_a_rejected_store_to_forbid_it_is_not_a_contradiction() -> Result[Unit, Str] {
+  let with_notes := str.join([good_prd(), "\n## Tech Notes\n- Persistence layer must be a local SQLite database (as stated in the goal); do not substitute an in-memory store or a file-based log.\n"], "")
+  if accepts(prd.verdict(with_notes, goal())) {
+    Ok(())
+  } else {
+    Err("the PRD quoted the goal back and told the build not to substitute, and the gate refused it")
+  }
+}
+
+fn test_excluding_a_server_db_is_not_a_contradiction() -> Result[Unit, Str] {
+  let with_notes := str.join([good_prd(), "\n## Tech Notes\n- The only persistent store is a local SQLite database file on disk; no external DB server (Postgres, MySQL, etc.).\n"], "")
+  if accepts(prd.verdict(with_notes, goal())) {
+    Ok(())
+  } else {
+    Err("naming Postgres in order to rule it out was read as choosing it")
+  }
+}
+
+# DISCRIMINATING TESTS. The first fix had two halves -- scope the scan to the
+# decision section, and treat criteria that name BOTH options as contrasting --
+# and mutating either half away still passed every test above. Two sufficient
+# rules, neither proven necessary, which is the same weak-suite shape as a
+# membership helper that passes on any element. These two force each half.
+# Without the restates-goal half this refuses: the criterion names in-memory.
+fn test_an_exclusion_inside_a_criterion_is_not_a_contradiction() -> Result[Unit, Str] {
+  let contrasting := str.replace(good_prd(), "3. A valid submission is persisted to the SQLite store with a timestamp.", "3. A valid submission is persisted to the SQLite store with a timestamp, not held in an in-memory buffer.")
+  if accepts(prd.verdict(contrasting, goal())) {
+    Ok(())
+  } else {
+    Err("a criterion that named SQLite and ruled out in-memory in the same sentence was refused")
+  }
+}
+
+# Without the Acceptance-Criteria scope this is ACCEPTED, because the Goal
+# section restates SQLite and would excuse the criteria. That is #495 exactly:
+# a correct Goal, criteria QA then judged against that said something else.
+fn test_a_correct_goal_section_does_not_excuse_reversed_criteria() -> Result[Unit, Str] {
+  let split_brain := str.replace(str.replace(good_prd(), "## Goal\nA minimal Lex HTTP server storing form submissions.", "## Goal\nA minimal Lex HTTP server storing form submissions in a local SQLite database."), "3. A valid submission is persisted to the SQLite store with a timestamp.", "3. After a 200 response the in-memory vector length increases by exactly one.")
+  match accepts(prd.verdict(split_brain, goal())) {
+    true => Err("the Goal said SQLite, the criteria said in-memory vector, and the gate passed it — #495, which is the failure this check exists for"),
+    false => Ok(()),
+  }
+}
+
 fn run_all() -> [io] Int {
-  let results := [("a PRD that narrows the goal is accepted", test_a_prd_that_narrows_the_goal_is_accepted()), ("paraphrase is not a contradiction", test_paraphrase_is_not_a_contradiction()), ("a PRD that reverses a goal decision is refused", test_a_prd_that_reverses_a_goal_decision_is_refused()), ("prose acceptance criteria are refused", test_prose_acceptance_criteria_are_refused()), ("a missing section is refused", test_a_missing_section_is_refused()), ("a pinned prose body is refused", test_a_pinned_prose_body_is_refused()), ("a pinned JSON body is allowed", test_a_pinned_json_body_is_allowed()), ("structure is still checked without a goal", test_structure_is_still_checked_without_a_goal())]
+  let results := [("a PRD that narrows the goal is accepted", test_a_prd_that_narrows_the_goal_is_accepted()), ("paraphrase is not a contradiction", test_paraphrase_is_not_a_contradiction()), ("a PRD that reverses a goal decision is refused", test_a_prd_that_reverses_a_goal_decision_is_refused()), ("prose acceptance criteria are refused", test_prose_acceptance_criteria_are_refused()), ("a missing section is refused", test_a_missing_section_is_refused()), ("a pinned prose body is refused", test_a_pinned_prose_body_is_refused()), ("a pinned JSON body is allowed", test_a_pinned_json_body_is_allowed()), ("structure is still checked without a goal", test_structure_is_still_checked_without_a_goal()), ("excluding the alternative in tech notes is not a contradiction", test_excluding_the_alternative_in_tech_notes_is_not_a_contradiction()), ("naming a rejected store to forbid it is not a contradiction", test_naming_a_rejected_store_to_forbid_it_is_not_a_contradiction()), ("excluding a server db is not a contradiction", test_excluding_a_server_db_is_not_a_contradiction()), ("an exclusion inside a criterion is not a contradiction", test_an_exclusion_inside_a_criterion_is_not_a_contradiction()), ("a correct goal section does not excuse reversed criteria", test_a_correct_goal_section_does_not_excuse_reversed_criteria())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

@@ -330,13 +330,28 @@ fn test_a_415_on_get_proves_the_route_exists() -> [env, net, io, proc, fs_write]
 # The agent can only use a parameter it has been told about. tzc14's launch
 # never passed method/body because neither the tool description nor its
 # prompt named them.
-fn test_launch_is_told_run_server_can_post() -> Result[Unit, Str] {
-  let tool := roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-runserver-test")
-  let prompt := roles.launch_system_prompt("sprint-runserver-test")
-  if str.contains(tool.description, "method") and str.contains(tool.description, "body") and str.contains(prompt, "method:") {
-    Ok(())
+# The launch agent is no longer TOLD to pass method/body, because there is no
+# launch agent: the node derives the verb from the route's own declaration and
+# runs as a function (#508). The property this case has always guarded is
+# unchanged and is now checkable directly -- a POST-only route must not be
+# probed with GET, or a live product is reported dead.
+#
+# This assertion used to read the prompt for the string "method:". That passed
+# for as long as the sentence existed and said nothing about whether a POST
+# route was ever actually POSTed.
+fn test_launch_is_told_run_server_can_post() -> [proc] Result[Unit, Str] {
+  let dir := "/tmp/loom-rse-method-probe"
+  let __mk := proc.run("bash", ["-c", str.join(["rm -rf '", dir, "'; mkdir -p '", dir, "'; printf 'def do_POST(self):\\n    if self.path == \"/f/demo\":\\n        pass\\n' > '", dir, "/svc.py'"], "")])
+  let verb := roles.probe_method_for(dir, "svc.py", "/f/demo")
+  let __rm := proc.run("bash", ["-c", str.concat("rm -rf ", dir)])
+  if verb == "POST" {
+    if str.contains(roles.make_run_server_tool("/tmp/loom-launch-evidence-test.json", "sprint-runserver-test").description, "method") {
+      Ok(())
+    } else {
+      Err("run_server no longer accepts a method, so a derived POST cannot be sent")
+    }
   } else {
-    Err("run_server's description or the launch prompt no longer names method/body -- the launch agent will GET a POST route again")
+    Err(str.join(["a route declared under do_POST was probed with ", verb, " -- a live product will be reported dead"], ""))
   }
 }
 

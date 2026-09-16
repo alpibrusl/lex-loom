@@ -172,6 +172,228 @@ fn work_dirs_in_language_order(sprint_id :: Str, language :: Str) -> List[Str] {
   }
 }
 
+# ── launch, without a model deciding anything ────────────────────────────────
+#
+# The launch role is clerical work, and a model does it 4 times in 44
+# (lex-loom#508). Its whole job was: find the entry point, pick the command
+# template for the language, use the port the pipeline already assigned, call
+# run_server once, and transcribe the result as JSON. Every one of those is
+# already known to loom -- and `build`, measured the same day at n=20, scored
+# 20/20. The node that writes Lex from a spec is fine; the node that types a
+# command line is not.
+#
+# The failures were procedural, never intellectual: "the agent ran out of step
+# budget before answering"; a rule reading "Do NOT call run_server again for any
+# reason" that exists because models re-called it inside a four-step budget; and
+# a Lex branch demanding a fifteen-effect row be transcribed VERBATIM.
+#
+# run_server itself is sound -- called by hand on the eval's own fixture it
+# returns ok=true first try, every time. So this derives every argument and
+# calls that same tool. The model's remaining job is to call this once and
+# echo what comes back.
+fn entry_point_for(dir :: Str, language :: Str) -> [proc] Str {
+  let pattern := if language == "python" {
+    "^if __name__|serve_forever|app\\.run\\("
+  } else {
+    if language == "node" {
+      "createServer|\\.listen\\("
+    } else {
+      "^fn main"
+    }
+  }
+  let ext := if language == "python" {
+    "*.py"
+  } else {
+    if language == "node" {
+      "*.ts"
+    } else {
+      "*.lex"
+    }
+  }
+  let script := str.join(["cd '", dir, "' 2>/dev/null || exit 0\n", "grep -lE '", pattern, "' ", ext, " 2>/dev/null | grep -vE '_test|test_' | head -1\n"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "",
+    Ok(r) => str.trim(r.stdout),
+  }
+}
+
+# A Lex program needs the union of every effect its imports declare, and
+# `lex check` prints exactly that row. Asking a model to transcribe it verbatim
+# is how a node fails on a typo (#498 already derives it for lex_run).
+fn effect_row_for(dir :: Str, file :: Str) -> [proc] Str {
+  let script := str.join(["${LEX:-lex} check --strict '", dir, "/", file, "' 2>&1 | sed -n 's/^required effects: //p' | tr -d ' ' | head -1"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "env,io,net,sql,fs_read,fs_write,time,crypto,random",
+    Ok(r) => {
+      let row := str.trim(r.stdout)
+      if str.is_empty(row) {
+        "env,io,net,sql,fs_read,fs_write,time,crypto,random"
+      } else {
+        row
+      }
+    },
+  }
+}
+
+fn launch_command_for(dir :: Str, file :: Str, language :: Str, port :: Int) -> [proc] Str {
+  let p := int.to_str(port)
+  if language == "python" {
+    str.join(["cd '", dir, "' && PORT=", p, " python3 ", file], "")
+  } else {
+    if language == "node" {
+      str.join(["cd '", dir, "' && PORT=", p, " node --experimental-strip-types ", file], "")
+    } else {
+      str.join(["cd '", dir, "' && PORT=", p, " ${LEX:-lex} run --allow-effects ", effect_row_for(dir, file), " ", file, " main"], "")
+    }
+  }
+}
+
+fn launch_port_for(language :: Str) -> Int {
+  if language == "python" {
+    8081
+  } else {
+    if language == "node" {
+      8082
+    } else {
+      8083
+    }
+  }
+}
+
+# The path to probe, read out of what the build actually wrote.
+#
+# A model choosing this was the last judgement left in the node, and it is not
+# judgement -- the routes are literals in the source. Health-style paths first
+# because they answer GET with no body, then any other declared path, then "/".
+# The language of the dir the build actually wrote into.
+#
+# COMPANY_PATH is the pipeline's answer and it is right whenever it is set --
+# but it is NOT set in an eval probe, and an empty language fell through to the
+# Lex branch, so the node grepped *.lex for `fn main` inside a Python work dir
+# and reported "no entry point found" twenty times out of twenty. The first
+# version of the test passed the language explicitly and never exercised the
+# derivation that the orchestrator actually uses.
+#
+# The dir name already carries the answer. Reading it there needs no
+# environment at all, and agrees with COMPANY_PATH whenever both exist.
+fn language_of_work_dir(dir :: Str, sprint_id :: Str) -> Str {
+  if dir == lexskill.py_work_dir(sprint_id) {
+    "python"
+  } else {
+    if dir == lexskill.ts_work_dir(sprint_id) {
+      "node"
+    } else {
+      if dir == lexskill.work_dir(sprint_id) {
+        "lex"
+      } else {
+        ""
+      }
+    }
+  }
+}
+
+fn probe_endpoint_for(dir :: Str, file :: Str) -> [proc] Str {
+  let script := str.join(["cd '", dir, "' 2>/dev/null || { echo /; exit 0; }\n", "PATHS=$(grep -ohE '\"/[a-zA-Z0-9_/-]*\"' '", file, "' 2>/dev/null | tr -d '\"' | sort -u)\n", "for p in $PATHS; do case \"$p\" in */health|*/healthz|*/ping) echo \"$p\"; exit 0 ;; esac; done\n", "for p in $PATHS; do [ \"$p\" = \"/\" ] || { echo \"$p\"; exit 0; }; done\n", "echo /\n"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "/",
+    Ok(r) => {
+      let p := str.trim(r.stdout)
+      if str.is_empty(p) {
+        "/"
+      } else {
+        p
+      }
+    },
+  }
+}
+
+# The verb the route is declared under.
+#
+# Probing a POST route with GET earns a 405 or a 404, and the node reports a
+# live product as dead. The first deterministic version always GET-ed, which
+# would have failed the form backend whose only route is `POST /f/demo` --
+# caught by the case in test_run_server_evidence that exists for precisely this
+# ("the launch agent will GET a POST route again").
+#
+# run_server's `ok` means the server started AND the endpoint answered, not
+# that it answered 200. So a POST probed with an empty body returning 400
+# "missing field" is a perfectly good liveness proof, and needs no knowledge of
+# what the route wants.
+fn probe_method_for(dir :: Str, file :: Str, endpoint :: Str) -> [proc] Str {
+  let script := str.join(["cd '", dir, "' 2>/dev/null || { echo GET; exit 0; }\n", "if grep -nE '\"", endpoint, "\"' '", file, "' 2>/dev/null | grep -qiE 'post'; then echo POST; exit 0; fi\n", "LINE=$(grep -nE '\"", endpoint, "\"' '", file, "' 2>/dev/null | head -1 | cut -d: -f1)\n", "if [ -n \"$LINE\" ]; then\n", "  START=$(( LINE > 6 ? LINE - 6 : 1 ))\n", "  if sed -n \"${START},${LINE}p\" '", file, "' 2>/dev/null | grep -qiE 'do_POST|\"POST\"|methods=.*POST'; then echo POST; exit 0; fi\n", "fi\n", "echo GET\n"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "GET",
+    Ok(r) => {
+      let m := str.trim(r.stdout)
+      if m == "POST" {
+        "POST"
+      } else {
+        "GET"
+      }
+    },
+  }
+}
+
+fn make_launch_product_tool(evidence_path :: Str, sprint_id :: Str, language :: Str) -> t.Tool {
+  let params := { title: "LaunchProduct", description: "endpoint: the path to probe, e.g. /health or /f/demo. Omit it and / is used.", fields: [s.optional(s.required_str("endpoint", []))] }
+  t.define("launch_product", "Start the built product and confirm it answers. Everything except the endpoint is derived from what the build actually wrote -- call this ONCE and report the JSON it returns.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+    let dir := first_non_empty_work_dir(sprint_id, language)
+    let lang := if str.is_empty(language) {
+      language_of_work_dir(dir, sprint_id)
+    } else {
+      language
+    }
+    let file := entry_point_for(dir, lang)
+    let endpoint := match jv.get_field(args, "endpoint") {
+      Some(JStr(v)) => if str.is_empty(str.trim(v)) {
+        probe_endpoint_for(dir, file)
+      } else {
+        str.trim(v)
+      },
+      _ => probe_endpoint_for(dir, file),
+    }
+    if str.is_empty(dir) or str.is_empty(file) {
+      Ok(JObj([("ok", JBool(false)), ("error", JStr(str.join(["no entry point found in ", dir, " -- the build wrote nothing that starts a server"], ""))), ("url", JStr("")), ("endpoint", JStr(endpoint))]))
+    } else {
+      let port := launch_port_for(lang)
+      let cmd := launch_command_for(dir, file, lang, port)
+      let rs := make_run_server_tool_for(evidence_path, sprint_id, language)
+      let method := probe_method_for(dir, file, endpoint)
+      let probe_args := if method == "POST" {
+        JObj([("cmd", JStr(cmd)), ("port", JInt(port)), ("endpoint", JStr(endpoint)), ("timeout_s", JInt(45)), ("method", JStr("POST")), ("body", JStr("{}"))])
+      } else {
+        JObj([("cmd", JStr(cmd)), ("port", JInt(port)), ("endpoint", JStr(endpoint)), ("timeout_s", JInt(45))])
+      }
+      match rs.execute(probe_args) {
+        Err(errs) => Err(errs),
+        Ok(out) => {
+          let ok := match jv.get_field(out, "ok") {
+            Some(JBool(b)) => b,
+            Some(JStr(v)) => v == "true",
+            _ => false,
+          }
+          let resp := match jv.get_field(out, "response") {
+            Some(JStr(v)) => v,
+            _ => "",
+          }
+          Ok(JObj([("ok", JBool(ok)), ("url", JStr(str.join(["http://localhost:", int.to_str(port), endpoint], ""))), ("endpoint", JStr(endpoint)), ("entry_point", JStr(file)), ("method", JStr(method)), ("response", JStr(str.slice(resp, 0, 400)))]))
+        },
+      }
+    }
+  })
+}
+
+# The dir the build actually wrote into, in the order this company's language
+# makes likely (#481).
+fn first_non_empty_work_dir(sprint_id :: Str, language :: Str) -> [proc] Str {
+  let dirs := work_dirs_in_language_order(sprint_id, language)
+  let script := str.join(["for D in ", str.join(dirs, " "), "; do\n", "  if [ -d \"$D\" ] && [ -n \"$(ls -A \"$D\" 2>/dev/null)\" ]; then echo \"$D\"; exit 0; fi\n", "done\n"], "")
+  match proc.run("bash", ["-c", script]) {
+    Err(_) => "",
+    Ok(r) => str.trim(r.stdout),
+  }
+}
+
 fn make_run_server_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
   make_run_server_tool_for(evidence_path, sprint_id, "")
 }
@@ -1005,25 +1227,29 @@ fn tool_by_name(name :: Str, evidence_path :: Str, sprint_id :: Str) -> [env] Op
                   if name == "run_code" {
                     Some(make_run_code_tool(evidence_path, sprint_id))
                   } else {
-                    if name == "run_server" {
-                      Some(make_run_server_tool_for(evidence_path, sprint_id, company_language()))
+                    if name == "launch_product" {
+                      Some(make_launch_product_tool(evidence_path, sprint_id, company_language()))
                     } else {
-                      if name == "deploy_hetzner" {
-                        Some(make_deploy_hetzner_tool(evidence_path, sprint_id))
+                      if name == "run_server" {
+                        Some(make_run_server_tool_for(evidence_path, sprint_id, company_language()))
                       } else {
-                        if name == "security_scan" {
-                          Some(lexskill.make_security_scan_tool(sprint_id))
+                        if name == "deploy_hetzner" {
+                          Some(make_deploy_hetzner_tool(evidence_path, sprint_id))
                         } else {
-                          if name == "publish_content" {
-                            Some(make_publish_content_tool())
+                          if name == "security_scan" {
+                            Some(lexskill.make_security_scan_tool(sprint_id))
                           } else {
-                            if name == "fetch_support_items" {
-                              Some(make_fetch_support_tool())
+                            if name == "publish_content" {
+                              Some(make_publish_content_tool())
                             } else {
-                              if name == "web_search" {
-                                Some(make_web_search_tool())
+                              if name == "fetch_support_items" {
+                                Some(make_fetch_support_tool())
                               } else {
-                                None
+                                if name == "web_search" {
+                                  Some(make_web_search_tool())
+                                } else {
+                                  None
+                                }
                               }
                             }
                           }
@@ -1511,7 +1737,7 @@ fn security_agent(model :: Str, sprint_id :: Str) -> [env] runner.AgentDef {
 # py_work_dir) so the Launch agent's cd targets the exact directory Build
 # actually wrote to for THIS sprint, never a global shared path (#156).
 fn launch_system_prompt(sprint_id :: Str) -> Str {
-  str.join(["THE PORT COMES FROM YOUR CONTEXT, NOT FROM THE GOAL: if the goal or the build's notes mention a port (8000, 8080, ...), ignore it and use the convention port for this stack; pass it as PORT=<port> in the command. On this host 8000 and 8080 are permanently held by something that is not loom's.\n\nYou are the Launch agent for a software sprint. Your job is to actually start the built server and confirm it responds — producing live evidence for the Demo.\n\nWORKFLOW (mandatory):\n1. Read the build output to identify: (a) the entry point file/command, (b) the port assigned to this launch node (from context — Lex gets PORT=8080, Python gets PORT=8081, Node/TS gets PORT=8082 by convention unless specified), (c) at least one HTTP endpoint to test.\n2. Call run_server with cmd, port and an endpoint the build DEFINES ONCE. If that endpoint is a POST route, also pass method:\"POST\" and body:\"<JSON the route accepts>\" -- probing a POST route with GET only earns a 405/415. Do not probe / or /health unless the build defines them. The tool already runs your command INSIDE the sprint work directory that holds the built files, and frees the port before starting — so give a bare command: no `cd`, no absolute paths, no fuser/kill. Name the file by its plain filename:\n   - For Lex server: cmd=\"PORT=<port> lex run --allow-effects env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,approval,stream,vcs <filename> <fn_name>\", port=<port>, timeout_s=45 -- pass that row VERBATIM. A Lex program needs the union of every effect its imports declare, and a library supplies more than the handler seems to use: a lex-web server reaches crypto and random inside its own request-id middleware, so a shorter row lets the process START and then fails EVERY request, which reads as a 404 from a server that is plainly running (found live, 2026-09-12)\n   - For Python server: cmd=\"PORT=<port> python3 <filename>\", port=<port>, timeout_s=20\n   - For Node/TS server: cmd=\"PORT=<port> node --experimental-strip-types <filename>\", port=<port>, timeout_s=20\n3. STOP calling tools the moment run_server returns. Do NOT call run_server again for any reason — not to re-check, not to test a second endpoint, not because the response looks incomplete. One call, ever. Whatever it returned (READY or TIMEOUT) is your ONLY evidence — proceed straight to step 4.\n4. Output ONLY a JSON object — no prose, no markdown:\n{\"ok\":true,\"url\":\"http://localhost:<port>\",\"endpoint\":\"<tested path>\",\"response\":\"<first 300 chars of live response>\",\"pid\":\"<pid>\"}\n\nIf the server fails to start (run_server returned TIMEOUT, or errored), output — do NOT retry, just report it:\n{\"ok\":false,\"url\":\"http://localhost:<port>\",\"error\":\"<what went wrong>\"}\n\nFORBIDDEN: Do not invent a response. Only report what run_server actually returned. Never call run_server more than once."], "")
+  str.join(["You are the Launch agent. The product this sprint built is on disk and the pipeline has already decided everything about how to start it.\n\n", "WORKFLOW (the whole of it):\n", "1. Call launch_product ONCE. If the spec names a route the build defines, pass it as `endpoint` -- e.g. endpoint=\"/f/demo\". Otherwise call it with no arguments.\n", "2. Output ONLY the JSON it returned, verbatim. No prose, no markdown fences, no second call.\n\n", "You do not choose the entry point, the command, the effect row or the port. launch_product derives each from what the build actually wrote, because a model transcribing a fifteen-effect command line is how this node used to fail four times in forty-four (lex-loom#508).\n\n", "If launch_product returns ok=false, output that JSON unchanged. A launch that did not answer is a real result and the sprint needs to see it -- do not retry, and do not edit the reply to say it worked."], "")
 }
 
 # evidence_path was hardcoded to "" here, so run_server's record_launch_evidence

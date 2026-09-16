@@ -145,14 +145,27 @@ fn test_opreport_json() -> Result[Unit, Str] {
   }
 }
 
-# Regression (#47 review): the `launch` role carries a `run_server` tool, which
-# the verifier's old hand-copied policy omitted — so every HTTP-server sprint got
-# a spurious VIOLATION. With one shared policy (role_tools), the grant verifies.
+# Regression (#47 review): the `launch` role carries a server-starting tool,
+# which the verifier's old hand-copied policy omitted — so every HTTP-server
+# sprint got a spurious VIOLATION. With one shared policy (role_tools), the
+# grant verifies.
+#
+# The tool's NAME is deliberately not written here twice. It changed once
+# already: launch moved from `run_server` to `launch_product` when the node
+# stopped calling a model (#508), and this assertion failed -- correctly, and
+# for the wrong reason. A test that hard-codes the answer is testing the copy
+# it made, not the policy. Asking role_tools what the role holds is the
+# property that actually matters: the verifier must agree with roles, whatever
+# roles say.
 fn test_launch_authority_regression() -> Result[Unit, Str] {
-  if verify.grant_ok("launch", "run_server") {
-    Ok(())
-  } else {
-    Err("launch/run_server flagged as a violation — verifier policy drifted from roles")
+  let held := rt.tools_for("launch")
+  match list.head(held) {
+    None => Err("the launch role holds no tools at all — it cannot start anything"),
+    Some(tool) => if verify.grant_ok("launch", tool) {
+      Ok(())
+    } else {
+      Err(str.join(["launch/", tool, " flagged as a violation — verifier policy drifted from roles"], ""))
+    },
   }
 }
 

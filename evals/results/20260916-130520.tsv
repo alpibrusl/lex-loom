@@ -1,10 +1,9 @@
-# baseline recorded 2026-09-16T18:29:20Z — model qwen3.8:27b-mlx, provider ollama, commit 6660c4a
+# model	qwen3.8:27b-mlx
 # digest	5642e97495e1
+# provider	ollama
+# commit	6660c4a
 # env	OLLAMA_THINK=unset MAX_STEPS_BUILD=unset MAX_STEPS_NODE=unset MAX_STEPS_LAUNCH=unset LLM_TIMEOUT_MS=unset
-py_test_author	5	5
-py_build	5	5
-py_qa	5	5
-opportunity_research	4	4
+# date	2026-09-16T11:05:20Z
 launch	1	20
 build	20	20
 test_author	17	20

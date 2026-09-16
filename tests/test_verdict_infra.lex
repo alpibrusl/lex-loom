@@ -57,10 +57,15 @@ fn test_qa_and_pm_prompts_keep_the_pipeline_out_of_the_product() -> Result[Unit,
 # `pytest tests/` and the suite sat at the root; launch used PORT=8000
 # because the goal said "binds to 0.0.0.0:8000". Paths and ports are the
 # pipeline's, not the spec's.
+# launch no longer needs telling where the port comes from: it does not choose
+# one. launch_port_for decides it from the language and the node runs as a
+# function (#508), so "use the pipeline's port, not the goal's" went from an
+# instruction a model could ignore to something it cannot express. What the
+# prompt must still say is that the agent decides none of it.
 fn test_prompts_keep_paths_and_ports_out_of_the_spec() -> Result[Unit, Str] {
   let qa_ok := str.contains(roles.py_qa_system_prompt(), "JUDGE BEHAVIOUR, NOT LAYOUT") and str.contains(roles.qa_system_prompt(), "JUDGE BEHAVIOUR, NOT LAYOUT")
   let pm_ok := str.contains(roles.pm_system_prompt(), "no port numbers")
-  let launch_ok := str.contains(roles.launch_system_prompt("t/iter-1"), "NOT FROM THE GOAL")
+  let launch_ok := str.contains(roles.launch_system_prompt("t/iter-1"), "You do not choose the entry point, the command, the effect row or the port")
   if qa_ok and pm_ok and launch_ok {
     Ok(())
   } else {

@@ -2,8 +2,8 @@
 py_test_author	5	the derived-values gate; the most frequently denied node across tzc4-tzc8
 py_build	5	spec compiles; where real code defects surface
 py_qa	5	json-verdict-pass; verifies the build's own files since #323
-launch	4	json-ok-true; the whole #312/#316/#320/#321 chain lands here
-build	5	spec compiles via lex_check; the Lex half of the pipeline had no baseline
-test_author	5	the derived-values gate on .lex tests
-qa	5	json-verdict-pass on a Lex module; lex_check + run_all on disk
+launch	20	json-ok-true; the whole #312/#316/#320/#321 chain lands here
+build	20	spec compiles via lex_check; the Lex half of the pipeline had no baseline
+test_author	20	the derived-values gate on .lex tests
+qa	20	json-verdict-pass on a Lex module; lex_check + run_all on disk
 opportunity_research	4	check_research_report over a fenced report.md; ResearchCo's only deliverable (consortium run 1)

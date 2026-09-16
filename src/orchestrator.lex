@@ -421,6 +421,36 @@ fn is_infra_outcome(output :: Str) -> Bool {
   }
 }
 
+# A node with no judgement in it does not reach a model.
+#
+# launch starts what the build wrote and reports whether it answered. The entry
+# point, the command, the effect row, the port and the path to probe are all
+# derivable from the work dir and from decisions the pipeline already made --
+# and a model doing that clerical work was accepted 4 times in 44 (#508), while
+# `build`, measured the same day at n=20, scored 20/20. Every failure captured
+# was procedural: a step budget spent before answering, a tool called twice, a
+# fifteen-effect row mistyped.
+#
+# Judging whether a RESPONSE is correct is a different question and still wants
+# a model where the answer is generated text -- that is qa's job and qa keeps
+# it. launch's own gate (`spec json-ok-true`) only ever asked whether the thing
+# answered at all.
+#
+# Everything downstream of `output` -- gate evaluation, contracts, attestation,
+# sealing -- is executor-agnostic, so this is one branch rather than a second
+# pipeline.
+fn deterministic_output(n :: graph.Node, cfg :: SprintCfg) -> [env, io, net, proc] Option[Str] {
+  if n.role == "launch" {
+    let tool := roles.make_launch_product_tool(runner.qa_evidence_path(cfg.id, n.id), cfg.id, roles.company_language())
+    match tool.execute(JObj([])) {
+      Err(_) => Some("{\"ok\":false,\"error\":\"launch_product could not run\"}"),
+      Ok(out) => Some(jv.stringify(out)),
+    }
+  } else {
+    None
+  }
+}
+
 fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   match blocking_precheck(n, cfg) {
     Some(outcome) => outcome,
@@ -485,7 +515,10 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
         } else {
           ()
         }
-        let output := runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
+        let output := match deterministic_output(n, cfg) {
+          Some(o) => o,
+          None => runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation),
+        }
         let infra := is_infra_outcome(output)
         if str.is_empty(output) or infra {
           if attempt > max_node_retries() {

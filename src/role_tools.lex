@@ -53,7 +53,7 @@ fn tools_for(role :: Str) -> List[Str] {
                         ["run_node_code"]
                       } else {
                         if role == "launch" {
-                          ["run_server"]
+                          ["launch_product"]
                         } else {
                           if role == "deploy" {
                             ["deploy_hetzner"]

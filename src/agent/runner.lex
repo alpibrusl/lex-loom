@@ -455,9 +455,20 @@ fn steps_env(name :: Str, fallback :: Int) -> [env] Int {
   }
 }
 
+# The launch budget was a hardcoded 4 -- the smallest of any role, for a node
+# that has to pick a port, compose a command, call run_server and read back what
+# it returned. Four steps leaves no room to recover from one mistake.
+#
+# Measured at that budget: 2 accepts in 16 samples, about 12%, which is the
+# single largest term in the iteration's product (lex-loom#499, #502). The one
+# failure reason captured verbatim from a company run was "the agent ran out of
+# step budget before answering".
+#
+# Configurable like the others, so the value is an operator decision and the
+# experiment that sets it is repeatable.
 fn max_steps_for(kind :: Str) -> [env] Int {
   if kind == "launch" {
-    4
+    steps_env("MAX_STEPS_LAUNCH", 12)
   } else {
     if is_build_kind(kind) {
       steps_env("MAX_STEPS_BUILD", 40)

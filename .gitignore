@@ -20,3 +20,6 @@ __pycache__/
 /sqlite::memory:
 # Generated benchmark output
 /bench/results/
+
+# The eval suite's run-lock. Live state, never source.
+evals/.running.pid

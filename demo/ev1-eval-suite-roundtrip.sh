@@ -82,5 +82,34 @@ else
   bad "results omit:$missing — a rate without them is comparable to nothing"
 fi
 
+echo "== 7. a rate, not a raw count: changing the sample size must not invert the verdict"
+# The defect this suite existed to prevent, in its own instrument. launch was
+# raised from 4 samples to 20; 5/20 (25%) against a baseline of 4/4 (100%) was
+# reported as "improved from 4 (+1)" and the run exited 0 saying no
+# regressions, because the comparison read accepted COUNTS and never the
+# denominators.
+printf 'launch\t20\tthe role whose n changed\n' > "$W/repo/evals/suite.tsv"
+printf '# baseline recorded 2000-01-01T00:00:00Z — model stub, provider stub, commit 0000000\nlaunch\t4\t4\n' > "$W/repo/evals/baseline.tsv"
+out=$( (cd "$W/repo" && STUB_RATE=5 TOLERANCE=1 ALLOW_DRIFT=1 bash bin/eval-suite.sh 2>&1) || true )
+case "$out" in
+  *REGRESSED*) ok "5/20 against 4/4 is a regression, not an improvement" ;;
+  *improved*)  bad "raising the sample size inverted the verdict — the exact bug this checks for" ;;
+  *)           bad "no verdict at all for a changed sample size: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-90)" ;;
+esac
+
+echo "== 8. it refuses to compare across preconditions it did not share"
+# Deliberately a comparison that would otherwise SUCCEED (5/5 against 4/5 is an
+# improvement, exit 0), so the only thing that can fail this run is the refusal
+# itself -- an earlier version of this case inherited the 20-sample suite above
+# and passed on the regression exit instead, which is a test that cannot fail
+# for the reason it claims.
+printf 'launch\t5\tthe role under test\n' > "$W/repo/evals/suite.tsv"
+printf '# baseline recorded 2000-01-01T00:00:00Z — model stub, provider stub, commit 0000000\n# env\tOLLAMA_THINK=unset MAX_STEPS_BUILD=unset MAX_STEPS_NODE=unset MAX_STEPS_LAUNCH=unset LLM_TIMEOUT_MS=unset\nlaunch\t4\t5\n' > "$W/repo/evals/baseline.tsv"
+if (cd "$W/repo" && STUB_RATE=5 OLLAMA_THINK=false bash bin/eval-suite.sh >/dev/null 2>&1); then
+  bad "it compared against a baseline recorded under different knobs and said nothing"
+else
+  ok "a changed environment refuses the comparison instead of reporting a number"
+fi
+
 printf '\n== RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = "0" ]

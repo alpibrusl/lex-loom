@@ -33,7 +33,7 @@ the same machine, one at a time. Wall-clock: a SoftwareCo iteration is about
 role is in `evals/suite.tsv` so its gate pass rate is measured the same way
 as the software roles before the run (see `evals/baseline.tsv`).
 
-Web search: `bin/web_search.py` (DuckDuckGo, then Brave, then Bing; each
+Web search: `bin/web_search.lex` (DuckDuckGo, then Brave, then Bing; each
 result carries its URL). DuckDuckGo has bot-blocked this host since
 2026-09-09; without the fallbacks every research query returned nothing.
 

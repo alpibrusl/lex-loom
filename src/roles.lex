@@ -704,7 +704,7 @@ fn make_deploy_hetzner_tool(evidence_path :: Str, sprint_id :: Str) -> [env] t.T
 # `src/server/content_a2a.lex`) can reuse the exact same tested logic
 # instead of re-implementing it — the same factoring SA2/SA4 already did
 # for `fetch_support_items`/`fetch_web_search`. Web search runs
-# bin/web_search.py (DuckDuckGo, then Brave, then Bing; every result carries
+# bin/web_search.lex (DuckDuckGo, then Brave, then Bing; every result carries
 # its URL) so a report can cite what it read.
 fn publish_content_core(url :: Str, title :: Str, body :: Str) -> [net, io, proc] jv.Json {
   if str.is_empty(url) or str.is_empty(title) or str.is_empty(body) {
@@ -817,7 +817,7 @@ fn fetch_web_search(query :: Str) -> [net, io, proc] jv.Json {
   if str.is_empty(query) {
     JObj([("results", JStr("")), ("error", JStr("query is required"))])
   } else {
-    match proc.run("python3", ["bin/web_search.py", query]) {
+    match proc.run("bash", ["bin/web-search.sh", query]) {
       Err(msg) => JObj([("results", JStr("")), ("error", JStr(str.concat("search failed to run: ", msg)))]),
       Ok(r) => {
         let out := str.trim(r.stdout)

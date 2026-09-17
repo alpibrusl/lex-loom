@@ -94,17 +94,19 @@ if [ "$rc" != 0 ] && [[ "$out" == *"checkable:sources-grounded"* ]] && [[ "$out"
 mkdir -p "$W/slash"; good | sed 's|https://cloudmersive.com/convert/validate-csv-api|https://cloudmersive.com/convert/validate-csv-api/|' > "$W/slash/report.md"
 if (cd "$W/slash" && bash "$OLDPWD/bin/check-research-report.sh" . >/dev/null 2>&1); then ok "a trailing slash is the same source"; else bad "a trailing slash was treated as a different URL"; fi
 
-echo "== 3c. web_search records every URL it returns in the ledger"
-python3 - "$W" <<'PY' && ok "the tool appends each returned URL to LOOM_SEARCH_LEDGER" || bad "the tool did not record its URLs, so nothing could ever be grounded"
-import importlib.util, io, contextlib, os, sys
-spec = importlib.util.spec_from_file_location("ws", "bin/web_search.py"); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
-os.environ["LOOM_SEARCH_LEDGER"] = sys.argv[1] + "/ledger-tool.txt"
-brave = '<div class="snippet s" data-pos="0" data-type="web"><a href="https://example.com/recorded"><div class="title t">R</div></a><div class="content c">S</div></div>'
-ws.fetch = lambda url, data=None: brave if "brave" in url else "<html>" + "anomaly " * 40
-sys.argv = ["web_search.py", "q"]
-with contextlib.redirect_stdout(io.StringIO()): ws.main()
-assert open(os.environ["LOOM_SEARCH_LEDGER"]).read().strip() == "https://example.com/recorded"
-PY
+echo "== 3c/7. the search backends, the ledger, the bot-check page and the fallback order"
+# Four legs collapse to one. Each loaded bin/web_search.py through importlib
+# from inside another python3 and monkeypatched its `fetch`, so every test
+# depended on the module's private shape. The Lex parsers are pure functions of
+# the response body and the ledger append is a plain call, so
+# tests/test_web_search.lex exercises all of it directly -- same fixtures, same
+# assertions, no introspection.
+if LOOM_SEARCH_LEDGER="$W/ledger-tool.txt" lex run --allow-effects env,fs_read,fs_write,io,net \
+     tests/test_web_search.lex run_all 2>&1 | grep -q '^FAIL'; then
+  bad "a search parser, the ledger, the bot-check page or the fallback order regressed (run tests/test_web_search.lex)"
+else
+  ok "brave + bing + duckduckgo + yahoo parsers, the ledger, the bot-check page, and the fallback order"
+fi
 
 echo "== 4. no report on disk is a denial that says what to write"
 mkdir -p "$W/none"; out=$(cd "$W/none" && bash "$OLDPWD/bin/check-research-report.sh" . 2>&1) && rc=0 || rc=$?
@@ -119,47 +121,8 @@ mkdir -p "$W/fence"; { printf 'Here is the report.\n\n```report.md\n'; good; pri
 mkdir -p "$W/fence/w"; bash bin/extract-fenced.sh "$W/fence/art.txt" "$W/fence/w" >/dev/null 2>&1 || true
 if [ -f "$W/fence/w/report.md" ] && (cd "$W/fence/w" && bash "$OLDPWD/bin/check-research-report.sh" . >/dev/null 2>&1); then ok "a fenced report.md lands on disk and passes"; else bad "the fenced report did not reach the gate: $(ls "$W/fence/w" 2>/dev/null)"; fi
 
-echo "== 7. the search backend parses result URLs from each engine's html (fixtures, offline)"
-python3 - <<'PY' && ok "brave + bing + duckduckgo + yahoo parsers each return title/snippet/url from fixture html" || bad "a search parser returned nothing from its fixture"
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("ws", "bin/web_search.py"); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
-brave = '<div class="snippet svelte-x" data-pos="0" data-type="web" data-keynav="true"><div><a href="https://example.com/a" target="_self" class="l1"><div class="title search-snippet-title line-clamp-1 svelte-y">Example <b>A</b></div></a><div class="content desktop-default-regular t-primary line-clamp-2 svelte-z"><!---->Snippet of A</div></div></div>'
-bing = '<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=x&amp;u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9i&amp;ntb=1" h="ID">Example B</a></h2><div><p class="b_lineclamp2">Snippet of B</p></div></li>'
-ddg = '<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fc&amp;rut=1">Example C</a><a class="result__snippet" href="x">Snippet of C</a>'
-yahoo = '<div class="dd algo algo-sr Sr"><div class="compTitle"><a class="x" href="https://r.search.yahoo.com/_ylt=A;_ylu=B/RV=2/RE=1/RO=10/RU=https%3a%2f%2fexample.com%2fd/RK=2/RS=z"><div>example.com</div><h3 class="title fc-2015C2-imp"><span>Example <b>D</b></span></h3></a></div><div class="compText aAbs"><p class="fc-dustygray"><span>Aug 9, 2025 · </span> Snippet of D</p></div></div>'
-ws.fetch = lambda url, data=None: brave if "brave" in url else bing if "bing" in url else yahoo if "yahoo" in url else ddg
-r = {n: f("q") for n, f in (("brave", ws.brave), ("bing", ws.bing), ("duckduckgo", ws.duckduckgo), ("yahoo", ws.yahoo))}
-assert r["brave"] == [("Example A", "Snippet of A", "https://example.com/a")], r["brave"]
-assert r["bing"] == [("Example B", "Snippet of B", "https://example.com/b")], r["bing"]
-assert r["duckduckgo"] == [("Example C", "Snippet of C", "https://example.com/c")], r["duckduckgo"]
-assert r["yahoo"] == [("Example D", "Aug 9, 2025 · Snippet of D", "https://example.com/d")], r["yahoo"]
-PY
 
-echo "== 7b. yahoo answers before brave and bing (bing answers a bot with the query's first word only)"
-python3 - <<'PY' && ok "the fallback order is duckduckgo, yahoo, brave, bing" || bad "yahoo is not tried before brave/bing -- a blocked duckduckgo would fall to the engines that fail live"
-import importlib.util, io, contextlib, sys, os
-spec = importlib.util.spec_from_file_location("ws", "bin/web_search.py"); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
-os.environ.pop("BRAVE_SEARCH_API_KEY", None)
-calls = []
-def fetch(url, data=None):
-    calls.append(url.split("/")[2]); return "<html>" + "anomaly " * 40 if "duckduckgo" in url else '<div class="dd algo x"><a href="https://example.com/y"><h3 class="title">Y</h3></a><div class="compText"><p>S</p></div></div>'
-ws.fetch = fetch; sys.argv = ["web_search.py", "q"]
-with contextlib.redirect_stdout(io.StringIO()): ws.main()
-assert calls == ["html.duckduckgo.com", "search.yahoo.com"], calls
-PY
 
-echo "== 8. a bot-check page is an error, not an empty answer, so the next backend runs"
-python3 - <<'PY' && ok "duckduckgo's anomaly page raises; the chain falls through to a backend with results" || bad "the anomaly page was taken as a real (empty) answer"
-import importlib.util, io, contextlib
-spec = importlib.util.spec_from_file_location("ws", "bin/web_search.py"); ws = importlib.util.module_from_spec(spec); spec.loader.exec_module(ws)
-anomaly = "<html>" + "anomaly " * 40 + "</html>"
-brave = '<div class="snippet s" data-pos="0" data-type="web"><a href="https://example.com/z"><div class="title t">Z</div></a><div class="content c">S</div></div>'
-ws.fetch = lambda url, data=None: anomaly if "duckduckgo" in url else brave
-import sys; sys.argv = ["web_search.py", "q"]
-buf = io.StringIO()
-with contextlib.redirect_stdout(buf): ws.main()
-assert "https://example.com/z" in buf.getvalue(), buf.getvalue()
-PY
 
 echo; echo "RESULT: $pass passed, $fail failed"
 [ "$fail" = 0 ]

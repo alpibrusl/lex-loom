@@ -7,7 +7,7 @@
 # Six legs, each one `lex-os exec` over a loom rootfs:
 #   MODEL       the grant's model endpoint answers /v1/models from inside the box
 #   COMPLETION  a real chat completion comes back from inside the box
-#   SEARCH      bin/web_search.py returns results with URLs from inside the box
+#   SEARCH      bin/web_search.lex returns results with URLs from inside the box
 #   CHECK       bin/check_research_report.lex verifies a report + ledger in the box
 #   DROP        a host the grant does not list is unreachable from the same box
 #   REFUSE      the pre-#417 grant shape (exec: None) is refused before spawn
@@ -42,7 +42,7 @@ echo "== 0. preconditions"
 [ -x "$LEXOS" ] || { echo "no $LEXOS -- build lex-os first (cargo build -p lex-os)" >&2; exit 2; }
 [ -f "$ASSETS/rootfs.ext4" ] && [ -f "$ASSETS/vmlinux" ] || { echo "no assets in $ASSETS -- run demo/setup-assets.sh (as user, then as root)" >&2; exit 2; }
 [ -n "$JAIL_GID" ] || { echo "no kvm group" >&2; exit 2; }
-for f in research-manifest.json old-shape-manifest.json bin/web_search.py bin/check_research_report.lex; do [ -f "$JT_DIR/$f" ] || { echo "missing $JT_DIR/$f (the Mac-side driver ships these)" >&2; exit 2; }; done
+for f in research-manifest.json old-shape-manifest.json bin/web_search.lex bin/web-search.sh bin/check_research_report.lex; do [ -f "$JT_DIR/$f" ] || { echo "missing $JT_DIR/$f (the Mac-side driver ships these)" >&2; exit 2; }; done
 ls -la /dev/kvm >/dev/null
 
 echo "== 1. the research grant, with the model endpoint pointed at the real LiteLLM host"
@@ -145,7 +145,7 @@ content=$(field stdout | python3 -c 'import sys,json; print((json.load(sys.stdin
 if is_ok && [ -n "$content" ]; then ok "COMPLETION: model said '$content' from inside the microVM"; else bad "COMPLETION: empty or no answer: $(field stdout | cut -c1-200)"; fi
 
 echo "== 5. SEARCH: loom's web_search.py runs inside the box and reaches an allowlisted engine"
-run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem /opt/python/bin/python3 /opt/loom/bin/web_search.py "phone number validation API pricing"'
+run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem sh /opt/loom/bin/web-search.sh "phone number validation API pricing"'
 if is_ok && field stdout | command grep -q ' -- http' && ! field stdout | command grep -q '^ERROR\|NO_RESULTS'; then ok "SEARCH: $(field stdout | head -1 | cut -c1-110)"; else bad "SEARCH: $(field stdout | head -2 | tr '\n' ' ' | cut -c1-200) $(field stderr | tail -2 | tr '\n' ' ' | cut -c1-200)"; fi
 
 echo "== 6. CHECK: the report gate verifies a report against its ledger inside the box (ReadWrite fs, sandboxed exec)"

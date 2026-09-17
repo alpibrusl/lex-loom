@@ -73,13 +73,8 @@ echo "$CLEAN" | grep -q '"verdict":"authority-ok"' && ok "authority recomputed" 
 
 say "4. a tampered record cannot pass the same endpoint"
 cp "$WS/company.db" "$WS/tampered.db"
-python3 - "$WS/tampered.db" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-c.execute("UPDATE artifacts SET content = content || ' [quietly improved]' "
-          "WHERE hash = (SELECT hash FROM artifacts LIMIT 1)")
-c.commit()
-PY
+# Tamper with a sealed artifact, to prove verification notices.
+bin/sql-exec.sh "$WS/tampered.db" "UPDATE artifacts SET content = content || ' [quietly improved]' WHERE hash = (SELECT hash FROM artifacts LIMIT 1)"
 payload "$WS/tampered.db"
 TAMPERED="$(curl -s -X POST "http://localhost:$PORT/verify?sprint_id=$SPRINT" \
   -H "Authorization: Bearer $TOKEN" --data-binary @"$WS/payload.b64")"

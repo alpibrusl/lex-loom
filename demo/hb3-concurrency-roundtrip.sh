@@ -47,7 +47,7 @@ say()  { printf '\n== %s\n' "$*"; }
 ok()   { echo "   OK: $*"; pass=$((pass+1)); }
 bad()  { echo "   FAIL: $*"; fail=$((fail+1)); }
 q() { "$(dirname "$0")/../bin/sql-scalar.sh" "$1" "$2" 2>/dev/null || echo ""; }
-qall() { python3 -c "import sqlite3,sys; print('\n'.join(str(r[0]) for r in sqlite3.connect(sys.argv[1]).execute(sys.argv[2])))" "$1" "$2" 2>/dev/null || echo ""; }
+qall() { "$(dirname "$0")/../bin/sql-rows.sh" "$1" "$2" 2>/dev/null; }
 
 QDB="$WS/qco/company.db"
 SPRINT="hb3co/iter-1"

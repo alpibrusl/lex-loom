@@ -81,7 +81,7 @@ OUT="$(DB_PATH="$CEILDB" COMPANY_ID=lockedco POLICY_ISOLATION=ceiling:Demo lex r
 echo "$OUT" | grep -q "saved" || { bad "ceiling company save failed"; exit 1; }
 OUT="$(DB_PATH="$CEILDB" COMPANY_ID=lockedco KIND=growth_hacker PRESET=Implementation BY=ceo lex run --max-steps 0 --allow-effects "$EFFECTS" demo/org5_seed.lex propose_cmd 2>&1)"
 echo "$OUT" | grep -q "exceeds the company ceiling 'Demo'" && ok "over-grant proposal refused at write time" || bad "over-grant not refused: $OUT"
-N="$(python3 -c "import sqlite3; print(sqlite3.connect('$CEILDB').execute(\"SELECT COUNT(*) FROM traces WHERE event_kind='role_refused'\").fetchone()[0])")"
+N="$("$HERE/sql-scalar.sh" "$CEILDB" "SELECT COUNT(*) FROM traces WHERE event_kind='role_refused'")"
 [ "$N" = "1" ] && ok "structural refusal is on the trail" || bad "role_refused trail missing"
 N="$("$HERE/sql-scalar.sh" "$CEILDB" "SELECT COUNT(*) FROM role_defs")"
 [ "$N" = "0" ] && ok "refusal wrote no role definition" || bad "refused proposal leaked a row"

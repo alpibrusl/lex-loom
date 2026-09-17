@@ -60,7 +60,7 @@ PORT="$(free_port 8098 8102 8103 8104)"
   R="$(curl -s -m 3 -d 'name=Ada&email=ada%40example.eu' localhost:$PORT/submit)"
   [[ "$R" == *'"email":"ada@example.eu"'* ]] && ok "form POST without next answers JSON" || bad "json: $R"
   [ "$(curl -s -o /dev/null -w '%{http_code}' -m 3 -d 'name=Ada' localhost:$PORT/submit)" = "400" ] && ok "missing email is a 400" || bad "missing email not refused"
-  C="$(python3 -c 'print("email=a%40b.eu&pad="+"x"*70000)' | curl -s -o /dev/null -w '%{http_code}' -m 5 --data-binary @- -H 'content-type: application/x-www-form-urlencoded' localhost:$PORT/submit)"
+  C="$({ printf 'email=a%%40b.eu&pad='; head -c 70000 /dev/zero | tr '\0' 'x'; } | curl -s -o /dev/null -w '%{http_code}' -m 5 --data-binary @- -H 'content-type: application/x-www-form-urlencoded' localhost:$PORT/submit)"
   [ "$C" = "413" ] && ok "a 70 KB body is a 413 (body_limit middleware)" || bad "oversize: $C"
   kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null || true; SP=""
 }

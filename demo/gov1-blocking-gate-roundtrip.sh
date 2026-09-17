@@ -35,7 +35,7 @@ one_pass() { # $1 = sprint id
 }
 
 pending_id() { # $1 = sprint id
-  python3 -c "import sqlite3,sys; r=sqlite3.connect(sys.argv[1]).execute(\"SELECT id FROM attention_queue WHERE sprint_id=? AND verdict='pending'\", (sys.argv[2],)).fetchone(); print(r[0] if r else '')" "$DB" "$1"
+  "$(dirname "$0")/../bin/sql-scalar.sh" "$DB" "SELECT id FROM attention_queue WHERE sprint_id='$1' AND verdict='pending'"
 }
 
 say "pass 1: blocking gate parks; dependent held; independent completes"
@@ -49,7 +49,7 @@ echo "$P1" | grep -q "PHASE|success"                                    && ok "p
 say "pass 2 (fresh process, gate still pending): parks again, no duplicates"
 P2="$(one_pass demo-approve)"
 echo "$P2" | grep -q "legal_review|held|PARKED awaiting" && ok "still parked — no auto-approve path" || bad "gate did not stay parked"
-N_ITEMS="$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM attention_queue WHERE sprint_id='demo-approve'\").fetchone()[0])" "$DB")"
+N_ITEMS="$("$(dirname "$0")/../bin/sql-scalar.sh" "$DB" "SELECT count(*) FROM attention_queue WHERE sprint_id='demo-approve'")"
 [ "$N_ITEMS" = "1" ] && ok "exactly one attention item (no duplicate push)" || bad "expected 1 attention item, got $N_ITEMS"
 
 say "board approves via the real CLI resolve path"
@@ -74,7 +74,7 @@ echo "$R2" | sed 's/^/   | /'
 echo "$R2" | grep -q "legal_review|held|cancelled by board-jane: not legally publishable" && ok "rejection cancels with the board's reason" || bad "no cancellation reason"
 echo "$R2" | grep -q "PHASE|failed" && ok "rejection fails the phase (subtree cancelled)" || bad "phase did not fail"
 echo "$R2" | grep -q "publish|attested" && bad "downstream ran after rejection" || ok "nothing downstream of the rejected gate ran"
-CANCELLED="$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM traces WHERE event_kind='node_cancelled' AND agent_id='demo-reject'\").fetchone()[0])" "$DB")"
+CANCELLED="$("$(dirname "$0")/../bin/sql-scalar.sh" "$DB" "SELECT count(*) FROM traces WHERE event_kind='node_cancelled' AND agent_id='demo-reject'")"
 [ "${CANCELLED:-0}" -ge 1 ] && ok "cancellation is on the trail (node_cancelled)" || bad "no node_cancelled trail event"
 
 printf '\n== result: %d passed, %d failed\n' "$pass" "$fail"

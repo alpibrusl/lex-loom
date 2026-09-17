@@ -61,7 +61,19 @@ say "3. an unknown pack still fails the launch loudly"
 OUT="$(DB_PATH="$WS/growthco/other.db" COMPANY_ID=badco MAX_ITERATIONS=0 EVOLVE=0 ROLE_PACKS=core,growthhacking \
   lex run --max-steps 0 --allow-effects "$EFFECTS" src/main.lex run_company_cmd 2>&1)"
 echo "$OUT" | grep -q "unknown role pack 'growthhacking'" && ok "unknown pack refused, launch aborted" || bad "unknown pack not refused: $OUT"
-ROWS="$(python3 -c "import sqlite3,os,sys; p=sys.argv[1]; c=sqlite3.connect(p) if os.path.exists(p) else None; print(0 if c is None else sum(c.execute('select count(*) from '+t).fetchone()[0] for (t,) in c.execute(\"select name from sqlite_master where type='table'\")))" "$WS/growthco/other.db")"
+# Total rows across every table, or 0 for a database that was never created.
+# One SQL statement cannot sum across tables it has to discover, so the table
+# list comes back first and each count is asked for by name.
+total_rows() {
+  [ -f "$1" ] || { echo 0; return 0; }
+  t=0
+  for tbl in $("$(dirname "$0")/../bin/sql-rows.sh" "$1" "select name from sqlite_master where type='table'" 2>/dev/null); do
+    n=$("$(dirname "$0")/../bin/sql-scalar.sh" "$1" "select count(*) from \"$tbl\"" 2>/dev/null || echo 0)
+    t=$((t + ${n:-0}))
+  done
+  echo "$t"
+}
+ROWS="$(total_rows "$WS/growthco/other.db")"
 [ "$ROWS" = "0" ] && ok "refused launch saved nothing (schema only, zero rows)" || bad "refused launch wrote $ROWS rows"
 
 say "4. community keeps web_search; lifecycle needs nothing"

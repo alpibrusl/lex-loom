@@ -46,60 +46,7 @@ classify() {
 echo "== evidence report: $(basename "$(dirname "$DB")")"
 echo
 
-python3 - "$DB" <<'PY'
-import json, sqlite3, sys
-
-db = sqlite3.connect(sys.argv[1])
-
-# node -> gate comes from the STORED GRAPHS, not from denial records. Reading it
-# off denials only would leave every node that passed first time labelled
-# "gate not recorded" and counted as unwitnessed -- a report that misreports,
-# which is the failure these books are about. Checked: the first version of this
-# script did exactly that.
-gates = {}
-for (gj,) in db.execute("select graph_json from sprint_graphs"):
-    try:
-        g = json.loads(gj)
-    except Exception:
-        continue
-    for n in g.get("nodes", []):
-        if n.get("id") and n.get("gate"):
-            gates.setdefault(n["id"], n["gate"])
-
-def strength(gate):
-    if gate is None:                       return ("unknown", "[NO GATE FOUND]")
-    if gate.startswith(("spec compiles", "spec json-verdict-pass", "spec json-ok-true", "spec sh ")):
-        return ("grounded", "[checkable]")
-    if gate.startswith("spec judge "):     return ("judged",   "[judged]")
-    if gate.startswith("human "):          return ("human",    "[human]")
-    if gate.startswith(("spec len-gt", "spec non-empty", "spec json")):
-        return ("presence", "[UNWITNESSED]")
-    return ("unknown", "[NO GATE FOUND]")
-
-accepted = []
-for (dj,) in db.execute("select data_json from traces where event_kind='node_accepted'"):
-    try:
-        n = json.loads(dj).get("node")
-    except Exception:
-        continue
-    if n and n not in accepted:
-        accepted.append(n)
-
-strong = weak = 0
-for n in accepted:
-    g = gates.get(n)
-    kind, tag = strength(g)
-    if kind in ("grounded", "human", "judged"):
-        strong += 1
-    else:
-        weak += 1
-    print(f"   {tag:<15} {n:<22} {g or '(no gate in any stored graph)'}")
-
-print()
-print(f"   sealed on a real check: {strong}    sealed on presence alone: {weak}")
-if weak:
-    print("   A claim sealed on 'output longer than N characters' is a claim nobody checked.")
-PY
+bash "$(dirname "$0")/evidence-report-nodes.sh" "$DB"
 echo
 echo "-- mechanisms present but never exercised in this run"
 none=1

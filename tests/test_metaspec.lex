@@ -557,7 +557,7 @@ fn test_a_prose_only_sprint_needs_no_build() -> Result[Unit, Str] {
 }
 
 fn research_only_graph() -> graph.SprintGraph {
-  { id: "doc", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "opp", role: "opportunity_research", gate: "spec sh \"python3 $LOOM_ROOT/bin/check_research_report.py .\"", expand: None, activate_when: "" }, { id: "scribe", role: "scribe", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "opp", handoff: "brief" }, { from: "opp", to: "scribe", handoff: "report" }] }
+  { id: "doc", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "opp", role: "opportunity_research", gate: "spec sh \"bash $LOOM_ROOT/bin/check-research-report.sh .\"", expand: None, activate_when: "" }, { id: "scribe", role: "scribe", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "opp", handoff: "brief" }, { from: "opp", to: "scribe", handoff: "report" }] }
 }
 
 fn code_graph_on_document_path() -> graph.SprintGraph {

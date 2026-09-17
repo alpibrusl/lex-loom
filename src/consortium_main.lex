@@ -15,7 +15,7 @@
 # loom's share a table name (attestations) with different columns.
 #
 # deliver runs the SAME checker the supplier's gate ran
-# (bin/check_research_report.py, against the same search ledger) and hands
+# (bin/check_research_report.lex, against the same search ledger) and hands
 # its output to the controller: the buyer re-derives the evidence rather
 # than trusting the supplier's word that its gate passed.
 
@@ -320,7 +320,7 @@ fn consortium_deliver_software_cmd() -> [env, io, sql, time, fs_read, fs_write, 
 }
 
 fn checker_script(report_dir :: Str, ledger :: Str) -> Str {
-  str.join(["ROOT=\"$PWD\"; cd '", report_dir, "' && LOOM_SEARCH_LEDGER='", ledger, "' python3 \"$ROOT/bin/check_research_report.py\" . 2>&1"], "")
+  str.join(["ROOT=\"$PWD\"; cd '", report_dir, "' && LOOM_SEARCH_LEDGER='", ledger, "' bash \"$ROOT/bin/check-research-report.sh\" . 2>&1"], "")
 }
 
 fn consortium_deliver_cmd() -> [env, io, sql, time, fs_read, fs_write, proc] Unit {

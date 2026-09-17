@@ -18,7 +18,7 @@ W="$(mktemp -d "${TMPDIR:-/tmp}/loom-jt1.XXXXXX")"; trap 'rm -rf "$W"' EXIT
 unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
 lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt1/iter-1"' | unquote > "$W/research-manifest.json"
 lex run src/manifests.lex manifest_json_for_kind '"demo"' '"jt1/iter-1"' | unquote > "$W/old-shape-manifest.json"
-mkdir -p "$W/bin"; cp bin/web_search.py bin/check_research_report.py bin/extract_fenced.lex bin/extract-fenced.sh "$W/bin/"
+mkdir -p "$W/bin"; cp bin/web_search.py bin/check_research_report.lex bin/check-research-report.sh bin/extract_fenced.lex bin/extract-fenced.sh "$W/bin/"
 cp demo/jt1-loom-tools-in-box.sh "$W/"
 echo "[jt1] model endpoint for the box: $MODEL_HOST ($MODEL_NAME); host: $HOST"
 curl -s --max-time 5 "http://$MODEL_HOST/v1/models" >/dev/null || { echo "[jt1] LiteLLM not answering at $MODEL_HOST from this Mac; start it (bin/litellm-up.sh) first" >&2; exit 1; }

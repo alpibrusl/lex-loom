@@ -7,7 +7,7 @@
 # that always passes is 5/5 forever). Meanwhile the pm caused five consecutive
 # QA refusals (lex-loom#495, #496).
 #
-# This is check_research_report.py's shape -- named sections, per-section
+# This is check_research_report's shape -- named sections, per-section
 # predicates, and a grounding check against something that actually happened --
 # applied to the PRD. There the ledger is the URLs web_search really returned;
 # here it is the GOAL the iteration was given.

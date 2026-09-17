@@ -23,7 +23,7 @@ lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt3/
 python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["mission"])' "$GOAL_TOML" > "$W/goal.txt"
 git archive --format=tar.gz -o "$W/loom.tgz" HEAD
 tar -czf "$W/packages.tgz" -C "$HOME/.lex" packages
-mkdir -p "$W/bin"; cp bin/check_research_report.py "$W/bin/"
+mkdir -p "$W/bin"; cp bin/check_research_report.lex bin/check-research-report.sh "$W/bin/"
 cp demo/jt3-build-company-rootfs.sh demo/jt3-company-in-box.sh "$W/"
 echo "[jt3] host=$HOST model=$MODEL_HOST ($MODEL_NAME); goal: $(head -c 90 "$W/goal.txt")..."
 curl -s --max-time 5 "http://$MODEL_HOST/v1/models" >/dev/null || { echo "[jt3] LiteLLM not answering at $MODEL_HOST" >&2; exit 1; }

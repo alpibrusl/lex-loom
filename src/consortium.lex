@@ -212,7 +212,7 @@ fn crit(attr :: Str, description :: Str) -> request_bid.Criterion {
 }
 
 # The first contract's criteria: the checkable attrs are exactly the names
-# bin/check_research_report.py prints, the human one is the founder's.
+# bin/check_research_report.lex prints, the human one is the founder's.
 fn run1_criteria() -> List[request_bid.Criterion] {
   [crit("checkable:problem-statement", "a ## Problem section stating the specific problem"), crit("checkable:target-user", "a ## Target user section naming one concrete user type"), crit("checkable:three-alternatives", "an ## Alternatives table with at least three real products"), crit("checkable:implementation-estimate", "an ## Implementation estimate in hours"), crit("checkable:dependencies", "a bulleted ## Dependencies list"), crit("checkable:two-sources", "at least two distinct http(s) sources"), crit("checkable:sources-grounded", "every cited URL was returned by web_search in this run"), crit("checkable:confidence", "a ## Confidence figure between 0 and 100"), crit("checkable:recommendation", "a ## Recommendation to build or not, with why"), crit(human_attr(), "Is the recommended opportunity one you would fund?")]
 }

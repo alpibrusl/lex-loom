@@ -671,7 +671,7 @@ fn rule_document_path_has_no_code_roles(g :: graph.SprintGraph, document_only ::
       })) {
         acc
       } else {
-        list.concat(acc, [{ rule: "document-path-no-code-roles", message: str.join(["node ", n.id, " (role '", n.role, "') builds, tests, judges or ships software, but this company's path delivers a DOCUMENT: use opportunity_research (gate: spec sh \"python3 $LOOM_ROOT/bin/check_research_report.py .\") and prose roles (pm, scribe) only -- no build, test author, QA, launch, deploy or devops node"], "") }])
+        list.concat(acc, [{ rule: "document-path-no-code-roles", message: str.join(["node ", n.id, " (role '", n.role, "') builds, tests, judges or ships software, but this company's path delivers a DOCUMENT: use opportunity_research (gate: spec sh \"bash $LOOM_ROOT/bin/check-research-report.sh .\") and prose roles (pm, scribe) only -- no build, test author, QA, launch, deploy or devops node"], "") }])
       }
     })
   }

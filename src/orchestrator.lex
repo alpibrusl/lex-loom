@@ -1532,7 +1532,7 @@ fn run_document_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, outcomes ::
     },
     Some(o) => {
       let content := resolve_input(cfg.db, o.artifact)
-      match runner.verify_shell_on_output_from("python3 $LOOM_ROOT/bin/check_research_report.py .", content, str.join([sanitize_id(cfg.id), "-acceptance"], ""), "") {
+      match runner.verify_shell_on_output_from("bash $LOOM_ROOT/bin/check-research-report.sh .", content, str.join([sanitize_id(cfg.id), "-acceptance"], ""), "") {
         Ok(_) => {
           let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed report re-checked in a clean dir by check_research_report\"}")
           Ok(())

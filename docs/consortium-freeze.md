@@ -25,7 +25,7 @@ once contracting between two works end to end.
 | Company | Mission | Path / roles | Sells | Buys |
 |---|---|---|---|---|
 | **SoftwareCo** | Turn an opportunity report into a working, tested, launched micro-API | `python-fastapi`, packs `core` (proven: 4 of 5 finished runs on 2026-09-08) | `software-delivery/v1` | `opportunity-research/v1` |
-| **ResearchCo** | Find one technically feasible micro-product opportunity and document it with evidence | packs `core` + `research`; the `opportunity_research` role writes a fenced `report.md`, gated by `bin/check_research_report.py` (mechanical, not judge-gated) | `opportunity-research/v1` | nothing in run 1 |
+| **ResearchCo** | Find one technically feasible micro-product opportunity and document it with evidence | packs `core` + `research`; the `opportunity_research` role writes a fenced `report.md`, gated by `bin/check_research_report.lex` (mechanical, not judge-gated) | `opportunity-research/v1` | nothing in run 1 |
 
 Both companies run on the same model (`qwen3.8:27b-mlx` through LiteLLM) and
 the same machine, one at a time. Wall-clock: a SoftwareCo iteration is about
@@ -83,7 +83,7 @@ price 40 000 cents, deadline 90 minutes).
 
 Criteria:
 
-- Checkable, one attr each, exactly as `bin/check_research_report.py` prints
+- Checkable, one attr each, exactly as `bin/check_research_report.lex` prints
   them on success (so the evidence bundle is the checker's own output):
   `checkable:problem-statement`, `checkable:target-user`,
   `checkable:three-alternatives` (a comparison table with ≥ 3 rows),

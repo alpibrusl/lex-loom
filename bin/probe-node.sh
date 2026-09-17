@@ -32,7 +32,7 @@ case "$ROLE" in
   py_build|build|ts_build) DEFAULT_GATE='spec compiles' ;;
   py_qa|qa|ts_qa)          DEFAULT_GATE='spec json-verdict-pass' ;;
   launch|deploy)           DEFAULT_GATE='spec json-ok-true' ;;
-  opportunity_research)    DEFAULT_GATE='spec sh "python3 $LOOM_ROOT/bin/check_research_report.py ."' ;;
+  opportunity_research)    DEFAULT_GATE='spec sh "bash $LOOM_ROOT/bin/check-research-report.sh ."' ;;
   # The pm had no row until the gate could fail. `spec len-gt 50` accepted any
   # 51 characters, so its accept rate was 5/5 by construction and said nothing.
   # LOOM_GOAL_FILE is what the contradiction check compares against; the probe

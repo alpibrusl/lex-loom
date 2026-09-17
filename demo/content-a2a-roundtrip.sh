@@ -51,26 +51,11 @@ echo "+ starting an independent federation node on :$FED_PORT"
 PIDS+=("$!")
 
 echo "+ starting a fake product /loom/content server on :$PRODUCT_PORT (counts real hits)"
-python3 - "$PRODUCT_PORT" "$HITS_FILE" <<'PY' &
-import http.server, json, sys
-port = int(sys.argv[1])
-hits_file = sys.argv[2]
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == "/loom/content":
-            n = int(open(hits_file).read().strip() or "0") + 1
-            open(hits_file, "w").write(str(n))
-            body = json.dumps({"ok": True, "post_count": n}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
-    def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
-PY
+# The publishing endpoint, which COUNTS what it received: post_count is how
+# this demo proves the content role really posted rather than reporting that it
+# did.
+FIXTURE_PORT="$PRODUCT_PORT" FIXTURE_PATH=/loom/content FIXTURE_BODY='{"ok": true}' \
+  FIXTURE_COUNTER="$HITS_FILE" bash bin/fixture-server.sh >/dev/null 2>&1 &
 PIDS+=("$!")
 
 echo "+ starting loom's content_creator A2A server on :$CONTENT_PORT (token-gated)"

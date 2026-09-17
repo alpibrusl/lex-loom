@@ -64,7 +64,7 @@ fn test_lex_architect_is_told_lex_and_refused_python() -> Result[Unit, Str] {
   all_ok([expect_contains(p, "THIS COMPANY BUILDS IN LEX", "lex architect"), expect_contains(p, "CAST ONLY THESE BUILD ROLES: build, test_author, qa", "lex architect"), expect_contains(p, "py_build", "lex architect"), expect_contains(p, "REFUSED by metaspec", "lex architect"), expect_contains(p, "pytest", "lex architect")])
 }
 
-# The gate text `spec sh "python3 $LOOM_ROOT/bin/check_derived_values.py ."` is
+# The gate text `spec sh "bash $LOOM_ROOT/bin/check-derived-values.sh ."` is
 # loom's own checker and appears on LEX nodes. It read as a vote for Python.
 fn test_lex_architect_is_told_a_gate_is_not_a_language() -> Result[Unit, Str] {
   expect_contains(roles.architect_system_prompt_for("lex"), "is loom's own checker script", "lex architect")

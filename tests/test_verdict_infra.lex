@@ -1,6 +1,6 @@
 # test_verdict_infra.lex -- a QA FAIL that cites loom's own pipeline is not a
 # verdict about the product (#372). tzc19 iter 3 failed a launched, 13-tests-
-# green build twice because QA tried to run $LOOM_ROOT/bin/check_derived_values.py
+# green build twice because QA tried to run $LOOM_ROOT/bin/check_derived_values.lex
 # inside its sandbox and treated the missing script as FAIL "per instructions".
 
 import "std.str" as str
@@ -14,7 +14,7 @@ import "../src/roles" as roles
 import "../src/role_tools" as role_tools
 
 fn infra_fail() -> Str {
-  "{\"verdict\":\"FAIL\",\"reason\":\"Step 2 (derived-value gate) failed: LOOM_ROOT is empty and bin/check_derived_values.py does not exist, so the mandated hardcoding check could not be executed\"}"
+  "{\"verdict\":\"FAIL\",\"reason\":\"Step 2 (derived-value gate) failed: LOOM_ROOT is empty and bin/check_derived_values.lex does not exist, so the mandated hardcoding check could not be executed\"}"
 }
 
 fn product_fail() -> Str {

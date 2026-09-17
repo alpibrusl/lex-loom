@@ -392,7 +392,7 @@ fn is_step_budget_exhausted(output :: Str) -> Bool {
 # (#372). tzc19 iter 3: the strategist's goal had absorbed pipeline words
 # ("collect-gated", "smoke-import gate"), the PM made "run the derived-value
 # gate" an acceptance criterion, and QA tried to execute
-# $LOOM_ROOT/bin/check_derived_values.py inside run_code -- where LOOM_ROOT
+# $LOOM_ROOT/bin/check_derived_values.lex inside run_code -- where LOOM_ROOT
 # is unset and the script is not in the work dir -- and FAILED a launched,
 # 13-tests-green build twice for it. Those gates run before QA, by the
 # pipeline; their availability inside QA's sandbox says nothing about the

@@ -28,7 +28,7 @@ EFFECTS="env,io,time,crypto,random,sql,fs_read,fs_write,net,concurrent,llm,proc,
 
 case "$ROLE" in
   py_test_author|test_author|ts_test_author)
-    DEFAULT_GATE='spec sh "python3 $LOOM_ROOT/bin/check_derived_values.py ."' ;;
+    DEFAULT_GATE='spec sh "bash $LOOM_ROOT/bin/check-derived-values.sh ."' ;;
   py_build|build|ts_build) DEFAULT_GATE='spec compiles' ;;
   py_qa|qa|ts_qa)          DEFAULT_GATE='spec json-verdict-pass' ;;
   launch|deploy)           DEFAULT_GATE='spec json-ok-true' ;;

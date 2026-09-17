@@ -46,12 +46,17 @@ fn recommended_verifiers() -> [env] List[Str] {
       Some(tok) => str.trim(tok),
     }
   }), fn (t :: Str) -> Bool {
-    str.ends_with(t, ".py")
+    str.ends_with(t, ".sh")
   })
 }
 
+# `bash`, because loom's verifiers are Lex programs behind a shell shim since
+# lex-loom#512. This test asserts a PROPERTY -- every verifier the Architect
+# prompt recommends is a gate metaspec accepts -- and the property survived the
+# port; only the spelling moved. It failed on the rename, which is what a test
+# of the prompt is for.
 fn gate_for(tool :: Str) -> Str {
-  str.join(["spec sh \"python3 $LOOM_ROOT/bin/", tool, " .\""], "")
+  str.join(["spec sh \"bash $LOOM_ROOT/bin/", tool, " .\""], "")
 }
 
 # A minimal graph that is valid in every other respect, so the only thing under

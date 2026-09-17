@@ -648,7 +648,7 @@ fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, St
 # already uses for post-hoc verification) and run the gate command there —
 # grounding it in what THIS node actually produced, for any role.
 # LOOM_ROOT is exported before the cd so a gate command can reach the repo's own
-# tools (bin/check_derived_values.py and friends). Without it a gate can only
+# tools (bin/check_derived_values.lex and friends). Without it a gate can only
 # run what happens to be on PATH, since the command executes inside the scratch
 # directory the artifact was materialised into.
 # The directory a role's own check tool writes into, or "" for a role that has

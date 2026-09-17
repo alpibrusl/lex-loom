@@ -1,0 +1,9 @@
+# model	
+# digest	unknown
+# provider	litellm
+# commit	f7a6dfc
+# env	OLLAMA_THINK=unset MAX_STEPS_BUILD=unset MAX_STEPS_NODE=unset MAX_STEPS_LAUNCH=unset LLM_TIMEOUT_MS=unset
+# date	2026-09-16T10:21:04Z
+py_test_author	0	5
+py_build	0	5
+py_qa	0	5

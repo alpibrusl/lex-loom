@@ -27,7 +27,11 @@ STUB
 
 setup() {
   rm -rf "$W/repo"; mkdir -p "$W/repo/bin" "$W/repo/evals"
-  cp bin/eval-suite.sh "$W/repo/bin/"
+  # eval-suite.sh reads the model digest through bin/json-find.sh now, so the
+  # scratch repo needs the tool and what it imports -- otherwise the suite dies
+  # on a missing file before printing anything, which is exactly what it did.
+  cp bin/eval-suite.sh bin/json-find.sh bin/_jsonarg.inc bin/query.lex "$W/repo/bin/"
+  cp lex.toml "$W/repo/" 2>/dev/null || true
   mkbin; cp "$W/bin/probe-node.sh" "$W/repo/bin/"
   printf 'py_test_author\t5\tnote\n' > "$W/repo/evals/suite.tsv"
   (cd "$W/repo" && git init -q 2>/dev/null && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m x 2>/dev/null) || true

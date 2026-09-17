@@ -147,6 +147,22 @@ fn main_obj(pairs :: Str) -> [io] Int {
   0
 }
 
+# A JSON array of strings, one per input line. Replaces
+# `python3 -c 'print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))'`
+# -- the shape `ls -1 paths | ...` needed to tell the control plane which
+# stack paths this runner can build.
+fn main_array(lines :: Str) -> [io] Int {
+  let items := list.map(list.filter(list.map(str.split(lines, "\n"), fn (l :: Str) -> Str {
+    str.trim(l)
+  }), fn (l :: Str) -> Bool {
+    not str.is_empty(l)
+  }), fn (l :: Str) -> jv.Json {
+    JStr(l)
+  })
+  let __ := io.print(jv.stringify(JList(items)))
+  0
+}
+
 # Set one field on an existing document. Replaces the `with_token` idiom, which
 # read a JSON body, added a credential and re-serialised it -- in a shell
 # function, with the token on the command line.

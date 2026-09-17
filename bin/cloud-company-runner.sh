@@ -312,7 +312,7 @@ PY
   # instead of "delivering" into a failure two steps later (#427).
   if [ ! -f "$ws/researchco/company.db" ]; then
     local why; why=$(command grep -E '^\s*FAIL |\[company\] FATAL|\[bootstrap\] preflight failed' "$ws/research.log" | head -3 | tr '\n' ' ' | cut -c1-300)
-    report "$uuid" "$(python3 -c 'import sys,json; print(json.dumps({"status":"failed","summary":"ResearchCo did not start: "+(sys.argv[1] or "see research.log")}))' "$why")"
+    report "$uuid" "$("$HERE/json-obj.sh" status=failed "summary=ResearchCo did not start: ${why:-see research.log}")"
     echo "[runner] ResearchCo did not start: ${why:-see $ws/research.log}"
     return
   fi
@@ -429,7 +429,7 @@ PY
       report_from_db "$uuid" "$ws/$cid/company.db" "failed" "" "the founder declined to provide $need; company stopped"
       return
     fi
-    report "$uuid" "$(python3 -c 'import json,sys; print(json.dumps({"status":"running","summary":"%s provided; company re-checking and resuming" % sys.argv[1]}))' "$need")"
+    report "$uuid" "$("$HERE/json-obj.sh" status=running "summary=$need provided; company re-checking and resuming")"
     load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" >> "$ws/company.log" 2>&1 || true
   done
   local v; v=$(command grep -o 'last_verdict=[a-z_]*' "$ws/company.log" | tail -1 | cut -d= -f2)
@@ -472,7 +472,7 @@ vocabulary() {
   # the same reason the roles are read from the runtime: the cloud validating
   # `[stack].path` against a list of its own could only drift from the machine
   # that has to scaffold it.
-  paths=$(ls -1 paths 2>/dev/null | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+  paths=$(ls -1 paths 2>/dev/null | "$HERE/json-array.sh")
   python3 -c 'import sys,json
 k=sys.argv[1]; p=sys.argv[2]; d=sys.argv[3]
 def arr(s):

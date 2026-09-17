@@ -34,4 +34,18 @@ if [ "$bad" -eq 1 ]; then
   echo "A .lex checker runs through its bin/<name>.sh shim (bash), not python3." >&2
   exit 1
 fi
-echo "interpreters: no file is handed to an interpreter that cannot run it"
+
+# A second shape of the same mistake: a demo script resolving $HERE to its own
+# directory and then calling a tool that lives in bin/. Found live in
+# demo/org5 -- "demo/sql-scalar.sh: No such file or directory", printed AFTER
+# the last OK line, so the demo still exited 0 and looked green.
+while IFS= read -r f; do
+  grep -q '\$HERE/\(json-\|sql-\|toml-\)' "$f" 2>/dev/null || continue
+  grep -q 'HERE="\$(cd "\$(dirname "\$0")" && pwd)"' "$f" 2>/dev/null || continue
+  case "$f" in bin/*) continue ;; esac
+  echo "  $f: \$HERE is its own directory, but it calls a tool that lives in bin/" >&2
+  bad=1
+done < <(find src tests demo bin -name '*.sh' 2>/dev/null)
+[ "${bad:-0}" -eq 0 ] || exit 1
+
+echo "interpreters: every tool is invoked by something that can run it, from a path that resolves"

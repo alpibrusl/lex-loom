@@ -24,6 +24,7 @@
 # Nothing here touches real money, a host, or a publish; the cloud never
 # executes anything.
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 : "${LOOM_SERVER:?LOOM_SERVER is required}"; : "${LOOM_RUNNER_TOKEN:?LOOM_RUNNER_TOKEN is required}"
 ONCE="${1:-}"
@@ -139,7 +140,7 @@ jpost() { # path json-file -> body (fails loudly on non-2xx)
   local out; out=$(curl -sS --max-time 40 -w '\n%{http_code}' -H 'Content-Type: application/json' -H "Authorization: Bearer $LOOM_RUNNER_TOKEN" -d @"$2" "$LOOM_SERVER$1"); local code="${out##*$'\n'}"; local body="${out%$'\n'*}"
   if [ "${code:0:1}" != "2" ]; then echo "[runner] $1 -> $code: $body" >&2; return 1; fi; printf '%s' "$body"
 }
-with_token() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["runner_token"]=sys.argv[2]; print(json.dumps(d))' "$1" "$LOOM_RUNNER_TOKEN"; }
+with_token() { printf '%s' "$1" | "$HERE/json-set.sh" runner_token "$LOOM_RUNNER_TOKEN"; }
 report() { # company-uuid json-fields
   local f; f=$(mktemp); with_token "$2" > "$f"; jpost "/api/companies/$1/report" "$f" >/dev/null; rm -f "$f"
 }
@@ -252,7 +253,7 @@ report_consortium() { # uuid status last_verdict summary phase
   local snap; snap=$(consortium_snapshot "$phase")
   if [ -f "$ws/softwareco/company.db" ]; then
     [ -f "$ws/researchco/company.db" ] && report_from_db "$uuid" "$ws/researchco/company.db" "running" "" "$summary"
-    local n; n=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from company_iterations").fetchone()[0])' "$ws/researchco/company.db" 2>/dev/null || echo 0)
+    local n; n=$("$HERE/sql-scalar.sh" "$ws/researchco/company.db" "select count(*) from company_iterations" 2>/dev/null || echo 0)
     IDX_OFFSET="$n" SEQ_OFFSET=10000 EXTRA_EVENTS_JSON="$snap" report_from_db "$uuid" "$ws/softwareco/company.db" "$status" "$verdict" "$summary"
   elif [ -f "$ws/researchco/company.db" ]; then
     EXTRA_EVENTS_JSON="$snap" report_from_db "$uuid" "$ws/researchco/company.db" "$status" "$verdict" "$summary"
@@ -330,8 +331,8 @@ PY
     sleep 10
     f=$(mktemp); with_token '{"item_id":"human:would-fund"}' > "$f"
     local resp; resp=$(jpost "/api/companies/$uuid/decisions/poll" "$f" || echo '{}'); rm -f "$f"
-    verdict=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print(ds[0]["verdict"] if ds else "")' "$resp")
-    reason=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print((ds[0].get("reason") or "") if ds else "")' "$resp")
+    verdict=$("$HERE/json-find.sh" --str "$resp" decisions status=decided verdict || true)
+    reason=$("$HERE/json-find.sh" --str "$resp" decisions status=decided reason || true)
   done
   echo "[runner] founder answered: $verdict ($reason)"
   ANSWER="$verdict" NOTE="founder via loom-cloud: $reason" bin/consortium-run.sh answer > "$ws/answer.log" 2>&1 || true
@@ -351,7 +352,7 @@ PY
 run_plain_company() { # uuid manifest-file stop_when
   local uuid="$1" manifest="$2" ws="$WS_ROOT/cloud-$1"; mkdir -p "$ws"
   export LOOM_WORKSPACE="$ws"
-  local cid; cid=$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["id"])' "$manifest")
+  local cid; cid=$("$HERE/toml-get.sh" "$manifest" identity.id)
   progress_start "$uuid" "$ws/$cid/company.db"
   report "$uuid" '{"status":"running"}'
   load_needs_file; STOP_WHEN="$3" bin/bootstrap-company.sh "$manifest" > "$ws/company.log" 2>&1 || true
@@ -377,10 +378,10 @@ PY
     local verdict="" reason=""
     while [ -z "$verdict" ]; do
       sleep 10
-      f=$(mktemp); with_token "$(python3 -c 'import json,sys; print(json.dumps({"item_id": sys.argv[1]}))' "$aid")" > "$f"
+      f=$(mktemp); with_token "$("$HERE/json-obj.sh" "item_id=$aid")" > "$f"
       local resp; resp=$(jpost "/api/companies/$uuid/decisions/poll" "$f" || echo '{}'); rm -f "$f"
-      verdict=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print(ds[0]["verdict"] if ds else "")' "$resp")
-      reason=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print((ds[0].get("reason") or "") if ds else "")' "$resp")
+      verdict=$("$HERE/json-find.sh" --str "$resp" decisions status=decided verdict || true)
+      reason=$("$HERE/json-find.sh" --str "$resp" decisions status=decided reason || true)
     done
     local lv; lv=$([ "$verdict" = yes ] && echo approved || echo rejected)
     echo "[runner] founder: $lv ($reason)"
@@ -416,10 +417,10 @@ PY
     local verdict="" reason=""
     while [ -z "$verdict" ]; do
       sleep 10
-      f=$(mktemp); with_token "$(python3 -c 'import json,sys; print(json.dumps({"item_id": sys.argv[1]}))' "$aid")" > "$f"
+      f=$(mktemp); with_token "$("$HERE/json-obj.sh" "item_id=$aid")" > "$f"
       local resp; resp=$(jpost "/api/companies/$uuid/decisions/poll" "$f" || echo '{}'); rm -f "$f"
-      verdict=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print(ds[0]["verdict"] if ds else "")' "$resp")
-      reason=$(python3 -c 'import sys,json; ds=[d for d in json.loads(sys.argv[1]).get("decisions",[]) if d.get("status")=="decided"]; print((ds[0].get("reason") or "") if ds else "")' "$resp")
+      verdict=$("$HERE/json-find.sh" --str "$resp" decisions status=decided verdict || true)
+      reason=$("$HERE/json-find.sh" --str "$resp" decisions status=decided reason || true)
     done
     local lv; lv=$([ "$verdict" = yes ] && echo approved || echo rejected)
     echo "[runner] founder on $need: $lv ($reason)"
@@ -491,7 +492,7 @@ while :; do
   f=$(mktemp); with_token "$VOCAB" > "$f"
   if ! resp=$(jpost /api/runners/poll-company "$f"); then rm -f "$f"; echo "[runner] poll failed against $LOOM_SERVER (see above); retrying in 15s"; sleep 15; continue; fi
   rm -f "$f"
-  uuid=$(python3 -c 'import sys,json; c=json.loads(sys.argv[1]).get("company"); print(c["id"] if c else "")' "$resp")
+  uuid=$("$HERE/json-get.sh" --str "$resp" company.id || true)
   if [ "$polls" = 0 ]; then echo "[runner] connected to $LOOM_SERVER: runner key accepted; waiting for a queued company (queue one under Companies -> New company)"; fi
   polls=$((polls+1))
   if [ -z "$uuid" ]; then
@@ -499,8 +500,8 @@ while :; do
     [ $((polls % 10)) = 0 ] && echo "[runner] $(date +%H:%M:%S) still connected, nothing queued ($polls polls)"
     sleep 15; continue
   fi
-  kind=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"]["kind"])' "$resp")
-  stop=$(python3 -c 'import sys,json; print(json.loads(sys.argv[1])["company"].get("stop_when") or "verdict-passed")' "$resp")
+  kind=$("$HERE/json-get.sh" --str "$resp" company.kind)
+  stop=$("$HERE/json-get.sh" --str "$resp" company.stop_when || echo "verdict-passed")
   # BSD mktemp (macOS) only substitutes X's at the END of the template: given
   # "cloud-company.XXXXXX.toml" it creates a file called exactly that, and the
   # NEXT claim fails with "File exists" -- which, under set -e, killed the
@@ -508,7 +509,7 @@ while :; do
   # `running` forever with nobody behind it. GNU mktemp substitutes in the
   # middle, so Linux CI never saw it. Found live, 2026-09-13.
   mfdir=$(mktemp -d "${TMPDIR:-/tmp}/cloud-company.XXXXXX")
-  mf="$mfdir/company.toml"; python3 -c 'import sys,json; sys.stdout.write(json.loads(sys.argv[1])["company"]["manifest_toml"])' "$resp" > "$mf"
+  mf="$mfdir/company.toml"; "$HERE/json-get.sh" --str "$resp" company.manifest_toml > "$mf"
   echo "[runner] claimed company $uuid kind=$kind"
   case "$kind" in
     consortium-research) run_consortium_research "$uuid" "$mf" ;;

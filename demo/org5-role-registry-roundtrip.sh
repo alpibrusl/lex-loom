@@ -19,6 +19,8 @@
 #
 # Run from the repo root:  bash demo/org5-role-registry-roundtrip.sh
 set -euo pipefail
+# The tools live in bin/, and this script runs from demo/.
+HERE="$(cd "$(dirname "$0")/../bin" && pwd)"
 cd "$(dirname "$0")/.."
 # There is no default model any more, so this demo names one like any
 # operator would. Nothing here calls it: the model string only ends up in the
@@ -81,7 +83,7 @@ OUT="$(DB_PATH="$CEILDB" COMPANY_ID=lockedco KIND=growth_hacker PRESET=Implement
 echo "$OUT" | grep -q "exceeds the company ceiling 'Demo'" && ok "over-grant proposal refused at write time" || bad "over-grant not refused: $OUT"
 N="$(python3 -c "import sqlite3; print(sqlite3.connect('$CEILDB').execute(\"SELECT COUNT(*) FROM traces WHERE event_kind='role_refused'\").fetchone()[0])")"
 [ "$N" = "1" ] && ok "structural refusal is on the trail" || bad "role_refused trail missing"
-N="$(python3 -c "import sqlite3; print(sqlite3.connect('$CEILDB').execute('SELECT COUNT(*) FROM role_defs').fetchone()[0])")"
+N="$("$HERE/sql-scalar.sh" "$CEILDB" "SELECT COUNT(*) FROM role_defs")"
 [ "$N" = "0" ] && ok "refusal wrote no role definition" || bad "refused proposal leaked a row"
 
 say "3. bounded creation: propose -> board approves -> castable, ledgered"

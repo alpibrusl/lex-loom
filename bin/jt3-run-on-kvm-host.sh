@@ -9,6 +9,7 @@
 #   4. run the company in the box and bring back what it wrote (evals/jt3/)
 #   HOST=<kvm-host> MODEL_HOST=<mac>:4000 LEXOS_REF=main bin/jt3-run-on-kvm-host.sh
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 HOST="${HOST:?HOST is required: the ssh alias of your KVM host}"
 MODEL_HOST="${MODEL_HOST:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1):4000}"
@@ -18,9 +19,9 @@ if [ -z "$MODEL_NAME" ]; then
 fi
 GOAL_TOML="${GOAL_TOML:-$HOME/loom-companies/run2-awaiting-answer-archive/researchco.company.toml}"
 W="$(mktemp -d "${TMPDIR:-/tmp}/loom-jt3.XXXXXX")"; trap 'rm -rf "$W"' EXIT
-unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
+unquote() { "$(cd "$(dirname "$0")" && pwd)/json-get.sh" - ""; }
 lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt3/iter-1"' | unquote > "$W/research-manifest.json"
-python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["mission"])' "$GOAL_TOML" > "$W/goal.txt"
+"$HERE/toml-get.sh" "$GOAL_TOML" identity.mission > "$W/goal.txt"
 git archive --format=tar.gz -o "$W/loom.tgz" HEAD
 tar -czf "$W/packages.tgz" -C "$HOME/.lex" packages
 mkdir -p "$W/bin"; cp bin/check_research_report.lex bin/check-research-report.sh "$W/bin/"

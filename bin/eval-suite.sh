@@ -70,7 +70,7 @@ OUT="evals/results/$STAMP.tsv"
 # re-pull changes the weights and every number with them.
 ENVSIG="OLLAMA_THINK=${OLLAMA_THINK:-unset} MAX_STEPS_BUILD=${MAX_STEPS_BUILD:-unset} MAX_STEPS_NODE=${MAX_STEPS_NODE:-unset} MAX_STEPS_LAUNCH=${MAX_STEPS_LAUNCH:-unset} LLM_TIMEOUT_MS=${LLM_TIMEOUT_MS:-unset}"
 DIGEST=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null \
-  | python3 -c "import sys,json;ms=json.load(sys.stdin).get('models',[]);print(next((m.get('digest','')[:12] for m in ms if m.get('name')=='$MODEL'),'unknown'))" 2>/dev/null || echo unknown)
+  | bin/json-find.sh models "name=$MODEL" digest 2>/dev/null | cut -c1-12)
 [ -n "$DIGEST" ] || DIGEST=unknown
 
 { echo "# model	$MODEL"

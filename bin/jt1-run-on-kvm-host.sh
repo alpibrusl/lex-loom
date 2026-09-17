@@ -15,7 +15,7 @@ if [ -z "$MODEL_NAME" ]; then
   echo "FATAL: MODEL_NAME is required (there is no default model)." >&2; exit 2
 fi
 W="$(mktemp -d "${TMPDIR:-/tmp}/loom-jt1.XXXXXX")"; trap 'rm -rf "$W"' EXIT
-unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
+unquote() { "$(cd "$(dirname "$0")" && pwd)/json-get.sh" - ""; }
 lex run src/manifests.lex manifest_json_for_kind '"opportunity_research"' '"jt1/iter-1"' | unquote > "$W/research-manifest.json"
 lex run src/manifests.lex manifest_json_for_kind '"demo"' '"jt1/iter-1"' | unquote > "$W/old-shape-manifest.json"
 mkdir -p "$W/bin"; cp bin/web_search.lex bin/web-search.sh bin/check_research_report.lex bin/check-research-report.sh bin/extract_fenced.lex bin/extract-fenced.sh "$W/bin/"

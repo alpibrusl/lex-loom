@@ -55,12 +55,14 @@ Build it: the gap between a free syntax validator and a $599/month suite is real
 MD
 }
 
+. "$(dirname "$0")/_fixtures.sh"
+
 echo "== 1. open: treasuries funded, research bought from ResearchCo, price reserved"
 out=$(bin/consortium-run.sh open 2>&1) || true
 if [[ "$out" == *"c-research-1 awarded: softwareco buys opportunity-research/v1 from researchco for 40000c"* ]] && [[ "$out" == *"softwareco: balance=200000c committed=40000c available=160000c"* ]] && [[ "$out" == *"researchco: balance=100000c committed=0c"* ]]; then ok "contract awarded and 40000c reserved on the buyer"; else bad "open did not award/reserve: $out"; fi
 case "$out" in *"[answered by a human, not by you] human:would-fund"*) ok "the goal marks the human criterion as not the machine's" ;; *) bad "the goal does not mark the human criterion" ;; esac
 if [ -f "$LOOM_WORKSPACE/researchco.company.toml" ] && command grep -q 'packs = \["core", "research"\]' "$LOOM_WORKSPACE/researchco.company.toml" && command grep -q 'path  = "research-report"' "$LOOM_WORKSPACE/researchco.company.toml"; then ok "ResearchCo manifest written with the research pack and the document path"; else bad "no usable ResearchCo manifest"; fi
-python3 -c 'import tomllib,sys; m=tomllib.load(open(sys.argv[1],"rb")); assert "checkable:sources-grounded" in m["identity"]["mission"]' "$LOOM_WORKSPACE/researchco.company.toml" && ok "the manifest parses as TOML and its mission carries the criteria" || bad "the manifest does not parse or lost the criteria"
+( manifest_has "$LOOM_WORKSPACE/researchco.company.toml" "checkable:sources-grounded" ) && ok "the manifest parses as TOML and its mission carries the criteria" || bad "the manifest does not parse or lost the criteria"
 
 echo "== 2. open again is refused and reserves nothing more"
 out=$(bin/consortium-run.sh open 2>&1) || true
@@ -80,19 +82,13 @@ case "$out" in *"answer FAILED"*) ok "a second answer on a settled contract is r
 echo "== 4b. SoftwareCo contracts itself to build the settled report's product"
 out=$(bin/consortium-run.sh open-software 2>&1) || true
 if [[ "$out" == *"c-software-1 awarded: softwareco builds software-delivery/v1 itself for 60000c"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=60000c available=100000c"* ]]; then ok "software contract awarded as an internal build; 60000c reserved"; else bad "open-software did not award/reserve: $out"; fi
-python3 -c 'import tomllib,sys; m=tomllib.load(open(sys.argv[1],"rb")); assert m["stack"]["path"]=="python-fastapi" and "CSV schema validation API" in m["identity"]["mission"] and "checkable:acceptance-passed" in m["identity"]["mission"]' "$LOOM_WORKSPACE/softwareco.company.toml" && ok "SoftwareCo manifest carries the report and the delivery criteria" || bad "SoftwareCo manifest missing or without the report"
+( [ "$(bin/toml-get.sh "$LOOM_WORKSPACE/softwareco.company.toml" stack.path)" = "python-fastapi" ] \
+    && manifest_has "$LOOM_WORKSPACE/softwareco.company.toml" "CSV schema validation API" \
+    && manifest_has "$LOOM_WORKSPACE/softwareco.company.toml" "checkable:acceptance-passed" ) && ok "SoftwareCo manifest carries the report and the delivery criteria" || bad "SoftwareCo manifest missing or without the report"
 
 echo "== 4c. deliver-software re-derives the evidence from the company's trail and workspace"
 SW="$LOOM_WORKSPACE/softwareco"; mkdir -p "$SW/tests"
-python3 - "$SW/company.db" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-c.execute("CREATE TABLE company_iterations (company_id TEXT, idx INTEGER, sprint_id TEXT, parent_sprint_id TEXT DEFAULT '', status TEXT, started_at TEXT DEFAULT '', ended_at TEXT DEFAULT '')")
-c.execute("CREATE TABLE traces (id INTEGER PRIMARY KEY, run_id TEXT, agent_id TEXT, event_kind TEXT, data_json TEXT, ts TEXT)")
-c.execute("INSERT INTO company_iterations VALUES ('softwareco', 1, 'softwareco/iter-1', '', 'success', '', '')")
-c.execute("INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('softwareco/iter-1', 'orch', 'acceptance_passed', '{}', '2026-09-09T00:00:00Z')")
-c.commit()
-PY
+seed_trail "$SW/company.db" 2026-09-09T00:00:00Z
 # Run 1 live: the product landed in main.py, app.py stayed the skeleton's.
 cp paths/python-fastapi/app.py "$SW/app.py"
 printf 'from fastapi import FastAPI\napp = FastAPI()\n\n@app.post("/validate")\ndef validate(row: dict):\n    return {"ok": True}\n' > "$SW/main.py"
@@ -104,15 +100,7 @@ echo "== 4d. sabotage: a workspace still holding the skeleton's app.py is half a
 rm -rf "$LOOM_WORKSPACE"; mkdir -p "$LOOM_WORKSPACE/researchco"
 bin/consortium-run.sh open >/dev/null 2>&1; report > "$LOOM_WORKSPACE/researchco/report.md"; bin/consortium-run.sh deliver >/dev/null 2>&1; ANSWER=yes bin/consortium-run.sh answer >/dev/null 2>&1; bin/consortium-run.sh open-software >/dev/null 2>&1
 SW="$LOOM_WORKSPACE/softwareco"; mkdir -p "$SW/tests"
-python3 - "$SW/company.db" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-c.execute("CREATE TABLE company_iterations (company_id TEXT, idx INTEGER, sprint_id TEXT, parent_sprint_id TEXT DEFAULT '', status TEXT, started_at TEXT DEFAULT '', ended_at TEXT DEFAULT '')")
-c.execute("CREATE TABLE traces (id INTEGER PRIMARY KEY, run_id TEXT, agent_id TEXT, event_kind TEXT, data_json TEXT, ts TEXT)")
-c.execute("INSERT INTO company_iterations VALUES ('softwareco', 1, 'softwareco/iter-1', '', 'success', '', '')")
-c.execute("INSERT INTO traces (run_id, agent_id, event_kind, data_json, ts) VALUES ('softwareco/iter-1', 'orch', 'acceptance_passed', '{}', '2026-09-09T00:00:00Z')")
-c.commit()
-PY
+seed_trail "$SW/company.db" 2026-09-09T00:00:00Z
 cp paths/python-fastapi/app.py "$SW/app.py"; cp paths/python-fastapi/tests/test_app.py "$SW/tests/test_app.py"
 out=$(bin/consortium-run.sh deliver-software 2>&1) || true
 if [[ "$out" == *"partially fulfilled; unmet: checkable:app-present, checkable:tests-present"* ]] && [[ "$out" == *"softwareco: balance=160000c committed=0c"* ]]; then ok "skeleton-only workspace pays 50%: the trail said passed, the workspace says nothing was built"; else bad "a skeleton-only workspace was paid in full: $out"; fi

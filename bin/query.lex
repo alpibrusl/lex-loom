@@ -184,6 +184,77 @@ fn main_set(text :: Str, field :: Str, value :: Str) -> [io] Int {
   }
 }
 
+# Set a field at a dotted PATH, list indices included:
+# `resource_changes.1.provider_name`. main_set only reached the top level,
+# which was enough until a demo needed to forge one resource's provider inside
+# a plan to prove the gate catches it.
+fn set_at(j :: jv.Json, segments :: List[Str], value :: jv.Json) -> jv.Json {
+  match list.head(segments) {
+    None => value,
+    Some(seg) => {
+      let rest := list.tail(segments)
+      match index_of(seg) {
+        Some(i) => match j {
+          JList(items) => JList(replace_nth(items, i, set_at(match nth(items, i) {
+            None => JNull,
+            Some(c) => c,
+          }, rest, value))),
+          _ => j,
+        },
+        None => match j {
+          JObj(fields) => JObj(upsert(fields, seg, set_at(match jv.get_field(j, seg) {
+            None => JNull,
+            Some(c) => c,
+          }, rest, value))),
+          _ => j,
+        },
+      }
+    },
+  }
+}
+
+fn replace_nth(items :: List[jv.Json], i :: Int, v :: jv.Json) -> List[jv.Json] {
+  list.map(list.enumerate(items), fn (iv :: (Int, jv.Json)) -> jv.Json {
+    match iv {
+      (k, item) => if k == i {
+        v
+      } else {
+        item
+      },
+    }
+  })
+}
+
+fn upsert(fields :: List[(Str, jv.Json)], key :: Str, v :: jv.Json) -> List[(Str, jv.Json)] {
+  if list.fold(fields, false, fn (f :: Bool, kv :: (Str, jv.Json)) -> Bool {
+    match kv {
+      (k, _) => f or k == key,
+    }
+  }) {
+    list.map(fields, fn (kv :: (Str, jv.Json)) -> (Str, jv.Json) {
+      match kv {
+        (k, old) => if k == key {
+          (k, v)
+        } else {
+          (k, old)
+        },
+      }
+    })
+  } else {
+    list.concat(fields, [(key, v)])
+  }
+}
+
+fn main_set_path(text :: Str, path :: Str, value :: Str) -> [io] Int {
+  match jv.parse(text) {
+    Err(_) => 1,
+    Ok(j) => {
+      let __ := io.print(jv.stringify(set_at(j, segments_of(path), JStr(value))))
+      0
+    },
+  }
+}
+
 # The first element of a list whose field equals a value, then a path into it.
 # Replaces the decision-reading idiom repeated six times in the cloud runner:
 # `ds=[d for d in json.loads(x).get("decisions",[]) if d.get("status")=="decided"]`

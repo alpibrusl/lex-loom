@@ -496,6 +496,28 @@ fn main_sql_rows(db :: Str, query :: Str) -> [sql, fs_read, fs_write, io] Int {
   }
 }
 
+# Fold the WAL back into the database file, so the database is ONE file again.
+#
+# loom opens its databases through lex-orm, which sets journal_mode=WAL --
+# correctly, because a company runs an orchestrator and workers against one
+# file. The price is that a commit lives in a `-wal` sidecar until something
+# checkpoints, so anyone who hands the database over AS A FILE gets one missing
+# the most recent writes.
+#
+# Found exactly that way, twice. lex-orm's own comment records the first: the
+# pilot-verification demo does `cp company.db received.db` and the copy had no
+# artifacts table. The second was this tool: demo/hosted-verify tampers with a
+# sealed artifact and base64s the file, and the tamper was invisible -- the row
+# changed, the file's bytes did not, and the demo reported "tamper not caught"
+# against a verifier that was working perfectly.
+#
+# Python's sqlite3 checkpointed for free here, because closing the last
+# connection checkpoints and the interpreter exits after every call.
+fn checkpoint(h :: Db) -> [sql] Unit {
+  let __ck :: Result[List[ValRow], SqlError] := sql.query(h, "PRAGMA wal_checkpoint(TRUNCATE)", [])
+  ()
+}
+
 # Run statements against a database, writes allowed. This is the WRITE
 # counterpart to main_sql, and it is deliberately a separate entry point: a
 # script that only counts rows should not be able to drop a table by typo.
@@ -516,20 +538,24 @@ fn main_sql_exec(db :: Str, script :: Str) -> [sql, fs_read, fs_write, io] Int {
       let __ := io.print(str.concat("sql-exec: ", e.message))
       1
     },
-    Ok(h) => list.fold(str.split(script, ";"), 0, fn (rc :: Int, stmt :: Str) -> [sql, io] Int {
-      if rc != 0 or str.is_empty(str.trim(stmt)) {
-        rc
-      } else {
-        let r :: Result[List[ValRow], SqlError] := sql.query(h, stmt, [])
-        match r {
-          Err(e) => {
-            let __ := io.print(str.join(["sql-exec: ", e.message, " in: ", str.trim(stmt)], ""))
-            1
-          },
-          Ok(_) => 0,
+    Ok(h) => {
+      let rc := list.fold(str.split(script, ";"), 0, fn (acc :: Int, stmt :: Str) -> [sql, io] Int {
+        if acc != 0 or str.is_empty(str.trim(stmt)) {
+          acc
+        } else {
+          let r :: Result[List[ValRow], SqlError] := sql.query(h, stmt, [])
+          match r {
+            Err(e) => {
+              let __ := io.print(str.join(["sql-exec: ", e.message, " in: ", str.trim(stmt)], ""))
+              1
+            },
+            Ok(_) => 0,
+          }
         }
-      }
-    }),
+      })
+      let __ck := checkpoint(h)
+      rc
+    },
   }
 }
 

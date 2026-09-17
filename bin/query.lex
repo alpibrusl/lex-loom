@@ -225,6 +225,43 @@ fn segments_of(path :: Str) -> List[Str] {
   })
 }
 
+# Run statements against a database, writes allowed. This is the WRITE
+# counterpart to main_sql, and it is deliberately a separate entry point: a
+# script that only counts rows should not be able to drop a table by typo.
+#
+# It exists because loom's demos seeded their fixtures through
+# `python3 - <<PY / import sqlite3 / CREATE TABLE ... / INSERT INTO ...`. The
+# SQL was always the real content; Python was there to hold a connection. Now
+# the SQL is the file and nothing holds it.
+#
+# Split on ";" because std.sql takes one statement at a time. A ";" inside a
+# string literal would split wrongly -- no fixture here has one, and a checker
+# that silently mangled such a statement would be worse than one that cannot
+# take it, so an empty or unparseable fragment stops the run with its own
+# error rather than being skipped.
+fn main_sql_exec(db :: Str, script :: Str) -> [sql, fs_read, fs_write, io] Int {
+  match sql.open(db) {
+    Err(e) => {
+      let __ := io.print(str.concat("sql-exec: ", e.message))
+      1
+    },
+    Ok(h) => list.fold(str.split(script, ";"), 0, fn (rc :: Int, stmt :: Str) -> [sql, io] Int {
+      if rc != 0 or str.is_empty(str.trim(stmt)) {
+        rc
+      } else {
+        let r :: Result[List[ValRow], SqlError] := sql.query(h, stmt, [])
+        match r {
+          Err(e) => {
+            let __ := io.print(str.join(["sql-exec: ", e.message, " in: ", str.trim(stmt)], ""))
+            1
+          },
+          Ok(_) => 0,
+        }
+      }
+    }),
+  }
+}
+
 # One scalar from one SELECT, opened read-only. Read-only because a script
 # asking "how many nodes were cancelled" has no business being able to write,
 # and because these run against a company's live trail while it is running.

@@ -80,7 +80,7 @@ rows = sqlite3.connect(db).execute("SELECT content FROM artifacts WHERE content 
 if not rows:
     print("no report artifact in the company trail", file=sys.stderr); sys.exit(1)
 art = pathlib.Path(out) / "delivered-art.txt"; art.write_text(rows[0][0])
-subprocess.run(["python3", "bin/extract_fenced.py", str(art), out], check=False)
+subprocess.run(["bash", "bin/extract-fenced.sh", str(art), out], check=False)
 PY
     fi
     [ -f "$DIR/report.md" ] || { echo "no report.md delivered in $DIR" >&2; exit 1; }

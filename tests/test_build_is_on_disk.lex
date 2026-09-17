@@ -111,7 +111,7 @@ fn test_a_non_build_role_still_counts_fenced_output() -> [io, proc, random] Resu
 fn test_a_build_gate_ignores_fenced_prose() -> [io, proc, random] Result[Unit, Str] {
   let sprint := str.concat("t-gate-prose/", crypto.random_str_hex(4))
   let __s := seed_dir(sprint, "")
-  let r := runner.verify_shell_for_role("python3 $LOOM_ROOT/bin/check_imports.py .", "py_build", "```python\nimport definitely_not_a_module\n```\n", str.concat("t-gate-prose-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let r := runner.verify_shell_for_role("bash $LOOM_ROOT/bin/check-imports.sh .", "py_build", "```python\nimport definitely_not_a_module\n```\n", str.concat("t-gate-prose-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
   let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
   match r {
     Ok(_) => Err("with nothing on disk a build gate passed — it can only have judged the fenced prose, or nothing"),
@@ -126,7 +126,7 @@ fn test_a_build_gate_ignores_fenced_prose() -> [io, proc, random] Result[Unit, S
 fn test_a_build_gate_judges_the_disk() -> [io, proc, random] Result[Unit, Str] {
   let sprint := str.concat("t-gate-disk/", crypto.random_str_hex(4))
   let __s := seed_dir(sprint, "server.py")
-  let r := runner.verify_shell_for_role("python3 $LOOM_ROOT/bin/check_imports.py .", "py_build", "", str.concat("t-gate-disk-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let r := runner.verify_shell_for_role("bash $LOOM_ROOT/bin/check-imports.sh .", "py_build", "", str.concat("t-gate-disk-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
   let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(sprint), "'"], "")])
   match r {
     Ok(_) => Ok(()),

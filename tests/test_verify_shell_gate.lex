@@ -6,9 +6,9 @@
 # was denied every attempt, because verify_shell(cmd, kind) resolved
 # work_dir_for("devops") to the Lex build dir devops never wrote to. The fix
 # (runner.verify_shell_on_output) re-materializes the node's fenced output via
-# extract_fenced.py into a scratch dir and runs the gate there instead.
+# extract_fenced into a scratch dir and runs the gate there instead.
 #
-# Also covers a second bug found while fixing the first: extract_fenced.py
+# Also covers a second bug found while fixing the first: extract_fenced
 # mapped a ```Dockerfile fence to the generic "file1.txt" (no "." in the tag,
 # not in LANG_EXT), so even a correctly-scoped gate would miss a file docker
 # build looks for by exact name. Fixed via NO_EXT_FILENAME.
@@ -166,7 +166,7 @@ fn test_verdict_suite_allows_an_empty_work_dir() -> [io, proc] Result[Unit, Str]
 # difference is mechanically visible.
 fn test_pasted_expected_value_is_rejected() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_convert.py\ndef test_epoch():\n    assert convert(\"x\") == \"1705340400\"\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-pasted") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-pasted") {
     Ok(_) => Err("a hand-written epoch is an unverifiable oracle and must be rejected"),
     Err(_) => Ok(()),
   }
@@ -174,7 +174,7 @@ fn test_pasted_expected_value_is_rejected() -> [io, proc] Result[Unit, Str] {
 
 fn test_derived_expected_value_is_allowed() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_convert.py\nfrom datetime import datetime\nfrom zoneinfo import ZoneInfo\n\ndef test_epoch():\n    expected = int(datetime(2024,1,15,12,0,0, tzinfo=ZoneInfo(\"America/New_York\")).timestamp())\n    assert convert(\"x\") == str(expected)\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-derived") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-derived") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a test that computes its expected value must pass: ", e)),
   }
@@ -185,7 +185,7 @@ fn test_derived_expected_value_is_allowed() -> [io, proc] Result[Unit, Str] {
 # goes unchecked too.
 fn test_inputs_and_plain_constants_are_not_flagged() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_api.py\ndef test_rejects_bad_tz():\n    r = post(\"/convert\", {\"timestamp\": \"2024-01-15T12:00:00\", \"from_tz\": \"Nowhere\"})\n    assert r.status_code == 400\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-inputs") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-inputs") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a timestamp used as INPUT and a status code are not pasted oracles: ", e)),
   }
@@ -237,7 +237,7 @@ fn pinned_test_output() -> Str {
 }
 
 fn test_pinned_literal_is_allowed() -> [io, proc] Result[Unit, Str] {
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", pinned_test_output(), "dv-pinned") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", pinned_test_output(), "dv-pinned") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a literal pinned to a derivation is checkable and must pass: ", e)),
   }
@@ -247,7 +247,7 @@ fn test_pinned_literal_is_allowed() -> [io, proc] Result[Unit, Str] {
 # still a bare paste, or the rule above would accept anything.
 fn test_unpinned_literal_is_still_rejected() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_convert.py\ndef test_iso():\n    assert body[\"result\"] == \"2025-07-11T08:00:00-04:00\"\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-unpinned") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-unpinned") {
     Ok(_) => Err("a bare pasted timestamp is still an unverifiable oracle"),
     Err(_) => Ok(()),
   }
@@ -256,7 +256,7 @@ fn test_unpinned_literal_is_still_rejected() -> [io, proc] Result[Unit, Str] {
 # Pinning one value must not launder a DIFFERENT unpinned one.
 fn test_pinning_one_value_does_not_excuse_another() -> [io, proc] Result[Unit, Str] {
   let out := str.join([pinned_test_output(), "\n```test_epoch.py\ndef test_epoch():\n    assert body[\"result\"] == 1752249600\n```\n"], "")
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-partial") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-partial") {
     Ok(_) => Err("an unpinned epoch in another file must still be caught"),
     Err(_) => Ok(()),
   }
@@ -267,7 +267,7 @@ fn test_pinning_one_value_does_not_excuse_another() -> [io, proc] Result[Unit, S
 # retries later with "NO TEST FILE", wearing the blame. Watched happen in tzpin.
 fn test_no_test_file_is_a_failure() -> [io, proc] Result[Unit, Str] {
   let out := "I would write tests covering the three output formats and both error paths.\n\n```notes.md\nplan\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-notests") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-notests") {
     Ok(_) => Err("a test author that produced no test file must not pass its gate"),
     Err(_) => Ok(()),
   }
@@ -277,7 +277,7 @@ fn test_no_test_file_is_a_failure() -> [io, proc] Result[Unit, Str] {
 # nobody installed compiles clean and then fails at launch, several nodes away.
 fn test_import_gate_catches_a_missing_package() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\nimport nonexistent_pkg_xyz\n\ndef convert(x):\n    return x\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-missing") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "imp-missing") {
     Ok(_) => Err("a module that cannot import must fail the gate"),
     Err(e) => if str.contains(e, "ModuleNotFoundError") {
       Ok(())
@@ -301,7 +301,7 @@ fn test_compiles_gate_accepts_what_the_import_gate_rejects() -> [io, proc] Resul
 
 fn test_import_gate_passes_a_real_module() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\nimport json\n\ndef convert(x):\n    return json.dumps(x)\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-good") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "imp-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a module that imports cleanly must pass: ", e)),
   }
@@ -315,7 +315,7 @@ fn test_build_path_gate_can_reach_repo_tools() -> [io, proc] Result[Unit, Str] {
   let dir := lexskill.py_work_dir(sprint)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, "; mkdir -p ", dir], "")])
   let __w := io.write(str.join([dir, "/main.py"], ""), "import json\n")
-  match runner.verify_shell("test -f $LOOM_ROOT/bin/check_imports.py", "py_build", sprint) {
+  match runner.verify_shell("test -f $LOOM_ROOT/bin/check_imports.lex", "py_build", sprint) {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a build-node gate must be able to reach the repo's own tools: ", e)),
   }
@@ -399,7 +399,7 @@ fn crossline_pin_output() -> Str {
 }
 
 fn test_pin_on_a_later_line_is_allowed() -> [io, proc] Result[Unit, Str] {
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", crossline_pin_output(), "dv-crossline") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", crossline_pin_output(), "dv-crossline") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a literal pinned to a name derived earlier is checkable and must pass: ", e)),
   }
@@ -409,7 +409,7 @@ fn test_pin_on_a_later_line_is_allowed() -> [io, proc] Result[Unit, Str] {
 # the name must actually be bound to a derivation.
 fn test_a_literal_compared_to_an_undervied_name_is_still_rejected() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_convert.py\nlabel = \"run-7\"\n\ndef test_iso():\n    assert label == \"2025-07-11T08:00:00-04:00\"\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_derived_values.py .", out, "dv-undervied") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-derived-values.sh .", out, "dv-undervied") {
     Ok(_) => Err("comparing a literal to an unrelated variable derives nothing and must still be rejected"),
     Err(_) => Ok(()),
   }
@@ -459,7 +459,7 @@ fn test_an_empty_gate_dir_still_reports_no_files() -> [io, proc] Result[Unit, St
 # implementation for tests that never ran. check_imports skipped it by name.
 fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\n[pytest]\nasyncio_mode = auto\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-bad") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-bad") {
     Ok(_) => Err("a conftest.py that cannot be imported kills every test in the directory and must be caught"),
     Err(e) => if str.contains(e, "conftest") {
       Ok(())
@@ -476,7 +476,7 @@ fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
 # Fourth local-vs-CI divergence of this shape in this repo.
 fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\nimport os\n\nMARKER = os.sep\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-good") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("an importable conftest must pass: ", e)),
   }
@@ -487,7 +487,7 @@ fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
 # something absent must NOT be treated as a broken module.
 fn test_a_test_file_importing_a_missing_impl_is_still_allowed() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_a.py\nfrom nonexistent_impl import convert\n\ndef test_x():\n    assert convert(1) == 1\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-testonly") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-testonly") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a test written before its implementation is the point of an independent test author: ", e)),
   }

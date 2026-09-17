@@ -63,7 +63,7 @@ The `founder` role emits, next to the budget table, one fenced block:
     provider = "hetzner"            # optional: names the adapter kind
     ```
 
-`bin/check_founding_plan.py` gains `checkable:needs-declared`: every entry
+`bin/check_founding_plan.lex` gains `checkable:needs-declared`: every entry
 resolves to a catalogue id; every catalogue need whose `tools` the company's
 role packs would use is declared (a plan that staffs `content_creator` but
 declares no `social-publishing` fails the gate); a `legal` need is always

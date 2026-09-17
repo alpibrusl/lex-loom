@@ -32,6 +32,12 @@ jobs:
       # ten gate checkers totalling 1502 lines of Python came to be the only
       # part of loom that nothing typechecked, formatted or tested -- the part
       # that decides whether every other part is acceptable.
+      # The same rename mistake landed three times while porting bin/*.py to
+      # Lex: the argument became .lex and the interpreter stayed python3. Each
+      # one typechecked and passed `lex test`; the demos caught them. A grep is
+      # cheaper than a demo run and catches it on push.
+      - name: Interpreters match their files
+        run: bin/check-interpreters.sh
       - name: Check (strict)
         run: |
           set -euo pipefail

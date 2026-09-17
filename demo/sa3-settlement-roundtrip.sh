@@ -35,20 +35,10 @@ cleanup() {
 trap cleanup EXIT
 
 echo "+ starting a fake revenue endpoint on :$REVENUE_PORT"
-python3 - "$REVENUE_PORT" <<'PY' &
-import http.server, json, sys
-port = int(sys.argv[1])
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = json.dumps({"revenue_cents": 340000}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-    def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
-PY
+# The revenue endpoint: every path answers, which is what this demo's reader
+# expects.
+FIXTURE_PORT="$REVENUE_PORT" FIXTURE_BODY='{"revenue_cents": 340000}' \
+  bash bin/fixture-server.sh >/dev/null 2>&1 &
 PIDS+=("$!")
 for i in $(seq 1 20); do
   curl -s -o /dev/null "http://127.0.0.1:$REVENUE_PORT" && break

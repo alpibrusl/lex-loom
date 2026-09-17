@@ -50,23 +50,12 @@ echo "+ starting an independent federation node on :$FED_PORT"
 PIDS+=("$!")
 
 echo "+ starting a fake product /loom/support server on :$SUPPORT_PORT"
-python3 - "$SUPPORT_PORT" <<'PY' &
-import http.server, json, sys
-port = int(sys.argv[1])
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/loom/support":
-            body = json.dumps({"items": [{"id": "t-1", "text": "my order never arrived", "status": "open"}]}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
-    def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
-PY
+# A stand-in for the company's support endpoint. One Lex fixture server now
+# (bin/fixture_server.lex); this was a BaseHTTPRequestHandler subclass, as were
+# the ones in sa3 and content-a2a.
+FIXTURE_PORT="$SUPPORT_PORT" FIXTURE_PATH=/loom/support \
+  FIXTURE_BODY='{"items": [{"id": "t-1", "text": "my order never arrived", "status": "open"}]}' \
+  bash bin/fixture-server.sh >/dev/null 2>&1 &
 PIDS+=("$!")
 
 echo "+ starting loom's CX A2A server on :$CX_PORT (token-gated, URL-scoped to the product server — lex-loom#194)"

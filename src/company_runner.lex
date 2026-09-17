@@ -300,7 +300,7 @@ fn iteration_goal(goal :: Str, k :: Int, carried :: Str, seeded :: Str) -> Str {
 # A company whose manifest says [policy] founding = true (env FOUNDING=1)
 # builds nothing until the founder has approved a plan. Iteration 1 is a
 # fixed one-node sprint (no architect): the `founder` role writes plan.md,
-# gated by bin/check_founding_plan.py (sections by name, the budget Total
+# gated by bin/check_founding_plan.lex (sections by name, the budget Total
 # recomputed). A passing plan becomes an attention item for the oracle
 # `founder` and the company PARKS. The board decides through the one decide
 # path (board.decide / attention_resolve_cmd / loom-cloud): approved -> the
@@ -333,7 +333,7 @@ fn in_founding(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, prev_ctx
 }
 
 fn founding_graph(sprint_id :: Str) -> graph_sprint.SprintGraph {
-  { id: sprint_id, phase: Implementation, nodes: [{ id: "plan", role: "founder", gate: "spec sh \"python3 $LOOM_ROOT/bin/check_founding_plan.py .\"", expand: None, activate_when: "" }], edges: [] }
+  { id: sprint_id, phase: Implementation, nodes: [{ id: "plan", role: "founder", gate: "spec sh \"bash $LOOM_ROOT/bin/check-founding-plan.sh .\"", expand: None, activate_when: "" }], edges: [] }
 }
 
 fn founding_request(ccfg :: company.CompanyCfg) -> Str {

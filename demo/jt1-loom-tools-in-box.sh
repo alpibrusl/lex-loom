@@ -7,8 +7,8 @@
 # Six legs, each one `lex-os exec` over a loom rootfs:
 #   MODEL       the grant's model endpoint answers /v1/models from inside the box
 #   COMPLETION  a real chat completion comes back from inside the box
-#   SEARCH      bin/web_search.py returns results with URLs from inside the box
-#   CHECK       bin/check_research_report.py verifies a report + ledger in the box
+#   SEARCH      bin/web_search.lex returns results with URLs from inside the box
+#   CHECK       bin/check_research_report.lex verifies a report + ledger in the box
 #   DROP        a host the grant does not list is unreachable from the same box
 #   REFUSE      the pre-#417 grant shape (exec: None) is refused before spawn
 # A wall that only proves denials proves nothing (lex-os#79): MODEL/COMPLETION/
@@ -42,17 +42,33 @@ echo "== 0. preconditions"
 [ -x "$LEXOS" ] || { echo "no $LEXOS -- build lex-os first (cargo build -p lex-os)" >&2; exit 2; }
 [ -f "$ASSETS/rootfs.ext4" ] && [ -f "$ASSETS/vmlinux" ] || { echo "no assets in $ASSETS -- run demo/setup-assets.sh (as user, then as root)" >&2; exit 2; }
 [ -n "$JAIL_GID" ] || { echo "no kvm group" >&2; exit 2; }
-for f in research-manifest.json old-shape-manifest.json bin/web_search.py bin/check_research_report.py; do [ -f "$JT_DIR/$f" ] || { echo "missing $JT_DIR/$f (the Mac-side driver ships these)" >&2; exit 2; }; done
+for f in research-manifest.json old-shape-manifest.json bin/web_search.lex bin/web-search.sh bin/check_research_report.lex; do [ -f "$JT_DIR/$f" ] || { echo "missing $JT_DIR/$f (the Mac-side driver ships these)" >&2; exit 2; }; done
 ls -la /dev/kvm >/dev/null
 
+# Point the manifest's model endpoint at the real LiteLLM host: rewrite the one
+# egress entry ending in :4000, leaving the rest alone. The Python did it with
+# a list comprehension; this reads the list, finds the index, and sets it.
+retarget_egress() {  # $1 = in, $2 = out, $3 = host
+  cp "$1" "$2"
+  i=0
+  while e=$("$(dirname "$0")/../bin/json-get.sh" "$2" "egress.$i" 2>/dev/null); do
+    case "$e" in
+      *:4000) "$(dirname "$0")/../bin/json-set.sh" --path "egress.$i" "$3" < "$2" > "$2.tmp" && mv "$2.tmp" "$2" ;;
+    esac
+    i=$((i+1))
+  done
+  "$(dirname "$0")/../bin/json-get.sh" "$2" egress
+}
+
+
 echo "== 1. the research grant, with the model endpoint pointed at the real LiteLLM host"
-python3 - "$JT_DIR/research-manifest.json" "$MODEL_HOST" "$JT_DIR/research-manifest.effective.json" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1])); host = sys.argv[2]
-m["egress"] = [host if e.endswith(":4000") else e for e in m["egress"]]
-assert m["grant"]["exec"] == "Sandboxed" and any("yahoo" in e for e in m["egress"]), m
-json.dump(m, open(sys.argv[3], "w"), indent=2); print(json.dumps(m["egress"]))
-PY
+retarget_egress "$JT_DIR/research-manifest.json" "$JT_DIR/research-manifest.effective.json" "$MODEL_HOST"
+# The grant shape the box will enforce, asserted before anything runs.
+[ "$("$(dirname "$0")/../bin/json-get.sh" "$JT_DIR/research-manifest.effective.json" grant.exec)" = "Sandboxed" ] \
+  || { echo "manifest: grant.exec is not Sandboxed" >&2; exit 2; }
+case "$("$(dirname "$0")/../bin/json-get.sh" "$JT_DIR/research-manifest.effective.json" egress)" in
+  *yahoo*) : ;; *) echo "manifest: egress does not reach yahoo" >&2; exit 2 ;;
+esac
 MANIFEST="$JT_DIR/research-manifest.effective.json"
 
 echo "== 2. loom rootfs (python + loom's scripts + resolved names + CA certs)"
@@ -122,34 +138,28 @@ run_leg() {
   local name="$1" manifest="$2"; shift 2; [ "$1" = "--" ] && shift
   ( cd "$LEX_OS_ROOT" && timeout 300 "$LEXOS" --output json exec --manifest "$manifest" --rootfs "$ROOTFS" \
       --jail-uid "$JAIL_UID" --jail-gid "$JAIL_GID" --audit-out "$JT_DIR/$name.audit.json" -- "$@" ) > "$JT_DIR/$name.json" 2>"$JT_DIR/$name.err" || true
-  ENVELOPE=$(python3 - "$JT_DIR/$name.json" <<'PY'
-import json, sys
-raw = open(sys.argv[1]).read()
-i = raw.rfind('{\n  "ok"')
-print(json.dumps(json.loads(raw[i:])) if i >= 0 else json.dumps({"ok": None, "error": "no envelope", "raw_tail": raw[-400:]}))
-PY
-)
+  ENVELOPE=$("$(dirname "$0")/../bin/json-last.sh" < "$JT_DIR/$name.json")
 }
-field() { python3 -c 'import sys,json; e=json.loads(sys.argv[1]); d=e.get("data") or {}; print(d.get(sys.argv[2], "") if isinstance(d, dict) else "")' "$ENVELOPE" "$1"; }
-is_ok() { python3 -c 'import sys,json; sys.exit(0 if json.loads(sys.argv[1]).get("ok") is True else 1)' "$ENVELOPE"; }
+field() { printf '%s' "$ENVELOPE" | "$(dirname "$0")/../bin/json-get.sh" - "data.$1" 2>/dev/null || true; }
+is_ok() { [ "$(printf '%s' "$ENVELOPE" | "$(dirname "$0")/../bin/json-get.sh" - ok 2>/dev/null)" = "true" ]; }
 
 echo "== 3. MODEL: the grant's model endpoint answers from inside the box"
 run_leg model "$MANIFEST" -- curl -sS --max-time 20 "http://$MODEL_HOST/v1/models"
-if is_ok && field stdout | command grep -q '"id"'; then ok "MODEL: $(field stdout | python3 -c 'import sys,json; print([m["id"] for m in json.load(sys.stdin)["data"]][:3])' 2>/dev/null) from inside the microVM"; else bad "MODEL: $ENVELOPE"; fi
+if is_ok && field stdout | command grep -q '"id"'; then ok "MODEL: $(field stdout | { read -r j; for k in 0 1 2; do printf '%s' "$j" | "$(dirname "$0")/../bin/json-get.sh" - "data.$k.id" 2>/dev/null; done; } | paste -sd, - ) from inside the microVM"; else bad "MODEL: $ENVELOPE"; fi
 
 echo "== 4. COMPLETION: a real chat completion from inside the box"
 # A thinking model spends its budget on reasoning first (16 tokens gave an
 # empty message): give it room and require a non-empty answer.
 run_leg completion "$MANIFEST" -- curl -sS --max-time 300 -H 'Content-Type: application/json' -d "{\"model\":\"$MODEL_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with the single word: ready\"}],\"max_tokens\":600}" "http://$MODEL_HOST/v1/chat/completions"
-content=$(field stdout | python3 -c 'import sys,json; print((json.load(sys.stdin)["choices"][0]["message"].get("content") or "").strip()[:60])' 2>/dev/null || true)
+content=$(field stdout | "$(dirname "$0")/../bin/json-get.sh" - choices.0.message.content 2>/dev/null | head -c 60 || true)
 if is_ok && [ -n "$content" ]; then ok "COMPLETION: model said '$content' from inside the microVM"; else bad "COMPLETION: empty or no answer: $(field stdout | cut -c1-200)"; fi
 
 echo "== 5. SEARCH: loom's web_search.py runs inside the box and reaches an allowlisted engine"
-run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem /opt/python/bin/python3 /opt/loom/bin/web_search.py "phone number validation API pricing"'
+run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem sh /opt/loom/bin/web-search.sh "phone number validation API pricing"'
 if is_ok && field stdout | command grep -q ' -- http' && ! field stdout | command grep -q '^ERROR\|NO_RESULTS'; then ok "SEARCH: $(field stdout | head -1 | cut -c1-110)"; else bad "SEARCH: $(field stdout | head -2 | tr '\n' ' ' | cut -c1-200) $(field stderr | tail -2 | tr '\n' ' ' | cut -c1-200)"; fi
 
 echo "== 6. CHECK: the report gate verifies a report against its ledger inside the box (ReadWrite fs, sandboxed exec)"
-run_leg check "$MANIFEST" -- /bin/sh -c 'cd /opt/loom/fixture && LOOM_SEARCH_LEDGER=/opt/loom/fixture/ledger.txt /opt/python/bin/python3 /opt/loom/bin/check_research_report.py .'
+run_leg check "$MANIFEST" -- /bin/sh -c 'cd /opt/loom/fixture && LOOM_SEARCH_LEDGER=/opt/loom/fixture/ledger.txt sh /opt/loom/bin/check-research-report.sh .'
 if is_ok && field stdout | command grep -q 'RESEARCH_REPORT_OK'; then ok "CHECK: RESEARCH_REPORT_OK with $(field stdout | command grep -o 'checkable:[a-z-]*' | wc -l | tr -d ' ') attrs"; else bad "CHECK: $ENVELOPE"; fi
 
 echo "== 7. DROP: a host the grant does not list is unreachable from the same box"
@@ -158,7 +168,7 @@ if is_ok && field stdout | command grep -q 'HTTP_STATUS=[1-9]'; then bad "DROP: 
 
 echo "== 8. REFUSE: the pre-#417 research grant shape (exec: None) never spawns"
 run_leg refuse "$JT_DIR/old-shape-manifest.json" -- curl -sS --max-time 10 "http://$MODEL_HOST/v1/models"
-if is_ok; then bad "REFUSE: the old grant shape ran the command"; else ok "REFUSE: $(python3 -c 'import sys,json; print(json.dumps(json.loads(sys.argv[1]).get("error",{}))[:140])' "$ENVELOPE")"; fi
+if is_ok; then bad "REFUSE: the old grant shape ran the command"; else ok "REFUSE: $(printf '%s' "$ENVELOPE" | "$(dirname "$0")/../bin/json-get.sh" - error 2>/dev/null | head -c 140)"; fi
 
 echo "== 9. audit logs"
 for n in model completion search check drop refuse; do f="$JT_DIR/$n.audit.json"; if [ -s "$f" ]; then printf '  %-10s %s bytes\n' "$n" "$(wc -c < "$f" | tr -d ' ')"; else bad "audit log missing for $n"; fi; done

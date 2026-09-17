@@ -219,7 +219,7 @@ fn run_node_cmd() -> [env, io, time, crypto, random, sql, fs_read, fs_write, net
   let db_path := resolve_db_url()
   let model := defaults.resolved_model()
   let role := get_env("ROLE", "py_test_author")
-  let gate := get_env("GATE", "spec sh \"python3 $LOOM_ROOT/bin/check_derived_values.py .\"")
+  let gate := get_env("GATE", "spec sh \"bash $LOOM_ROOT/bin/check-derived-values.sh .\"")
   let task := get_env("TASK", "Write the tests for a service that converts a timestamp between IANA timezones.")
   let sprint_id := get_env("SPRINT_ID", "probe-1")
   match open_db(db_path) {

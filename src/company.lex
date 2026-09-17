@@ -1908,11 +1908,11 @@ fn persist_brand_memory(db :: conn.ConnDb, sprint_id :: Str) -> [sql, fs_write, 
 # self-invented filenames — no coherent source tree by the time the company
 # stops (see: dataforge extraction, 2026-07-06). bash resolves LOOM_WORKSPACE
 # (so $HOME/~ expand correctly and no `env` effect is needed here); the
-# extract_fenced.py path stays relative to loom's cwd (the runner's working dir).
+# extract_fenced path stays relative to loom's cwd (the runner's working dir).
 fn sync_project_dir(company_id :: Str, sprint_id :: Str, content :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-project-sync-", str.replace(sprint_id, "/", "-"), "-art.txt"], "")
   let __w := io.write(art, content)
-  let script := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; DIR=\"$WS/", company_id, "\"; mkdir -p \"$DIR\" && python3 bin/extract_fenced.py '", art, "' \"$DIR\" >/dev/null 2>&1 && echo SYNC_OK"], "")
+  let script := str.join(["WS=\"${LOOM_WORKSPACE:-$HOME/loom-companies}\"; DIR=\"$WS/", company_id, "\"; mkdir -p \"$DIR\" && bash bin/extract-fenced.sh '", art, "' \"$DIR\" >/dev/null 2>&1 && echo SYNC_OK"], "")
   match proc.run("bash", ["-c", script]) {
     Err(m) => Err(str.concat("project sync could not run: ", m)),
     Ok(r) => {

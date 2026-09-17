@@ -35,7 +35,7 @@ fail=0
 say()  { printf '\n== %s\n' "$*"; }
 ok()   { echo "   OK: $*"; pass=$((pass+1)); }
 bad()  { echo "   FAIL: $*"; fail=$((fail+1)); }
-q() { python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])" "$1" "$2" 2>/dev/null || echo ""; }
+q() { "$(dirname "$0")/../bin/sql-scalar.sh" "$1" "$2" 2>/dev/null || echo ""; }
 seed() { DB_PATH="$1" COMPANY_ID="$2" lex run --max-steps 0 --allow-effects "$EFFECTS" demo/cost_seed.lex "$3" 2>&1; }
 
 run_worker_until() { # db, grep-pattern in node_results

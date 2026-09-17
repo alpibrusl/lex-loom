@@ -33,7 +33,7 @@ fn litellm_egress() -> Str {
   "169.254.42.1:4000"
 }
 
-# The search backends bin/web_search.py may reach, in its fallback order.
+# The search backends bin/web_search.lex may reach, in its fallback order.
 fn search_egress() -> List[Str] {
   ["html.duckduckgo.com:443", "search.yahoo.com:443", "search.brave.com:443", "www.bing.com:443"]
 }
@@ -63,7 +63,7 @@ fn manifest_json_full(goal :: Str, filesystem :: Str, network :: Str, exec_level
 }
 
 # ── The deploy grant: what a company's deploy may do to its host ─────────────
-# lex-iac holds the deploy's plan (bin/deploy_plan.py) against this grant
+# lex-iac holds the deploy's plan (bin/deploy_plan.lex) against this grant
 # before anything reaches the server. The default ceiling for the Hetzner
 # path: update the one host, create the compose service, open its port,
 # and create a Caddy site when a domain is declared. Every verb is named
@@ -115,7 +115,7 @@ fn retro_manifest_json(sprint_id :: Str) -> Str {
 }
 
 # Research roles (research, opportunity_research): the model plus the search
-# backends, sandboxed exec for bin/web_search.py and the report checker,
+# backends, sandboxed exec for bin/web_search.lex and the report checker,
 # ReadWrite for the search ledger and the gate's scratch dir.
 fn research_manifest_json(sprint_id :: Str) -> Str {
   manifest_json_with_egress(str.concat("loom sprint ", str.concat(sprint_id, " — Research (web_search-grounded report)")), "ReadWrite", "Allowlist", "Sandboxed", "Gvisor", 3600, 500, 5000, 200, list.concat([litellm_egress()], search_egress()))

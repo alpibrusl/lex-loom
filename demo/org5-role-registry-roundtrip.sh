@@ -19,6 +19,8 @@
 #
 # Run from the repo root:  bash demo/org5-role-registry-roundtrip.sh
 set -euo pipefail
+# The tools live in bin/, and this script runs from demo/.
+HERE="$(cd "$(dirname "$0")/../bin" && pwd)"
 cd "$(dirname "$0")/.."
 # There is no default model any more, so this demo names one like any
 # operator would. Nothing here calls it: the model string only ends up in the
@@ -37,7 +39,7 @@ say() { printf '\n== %s\n' "$*"; }
 ok()  { echo "   OK: $*"; pass=$((pass+1)); }
 bad() { echo "   FAIL: $*"; fail=$((fail+1)); }
 seed() { DB_PATH="$DB" COMPANY_ID=org5co "$@" lex run --max-steps 0 --allow-effects "$EFFECTS" demo/org5_seed.lex "$LEXCMD" 2>&1; }
-sqlq() { python3 -c "import sqlite3,sys; print('\n'.join(str(r[0]) for r in sqlite3.connect('$DB').execute(sys.argv[1])))" "$1"; }
+sqlq() { "$(dirname "$0")/../bin/sql-rows.sh" "$DB" "$1"; }
 
 say "1a. company.toml [roles].packs flattens through bootstrap --no-run"
 cat > "$WS/company.toml" <<'TOML'
@@ -79,9 +81,9 @@ OUT="$(DB_PATH="$CEILDB" COMPANY_ID=lockedco POLICY_ISOLATION=ceiling:Demo lex r
 echo "$OUT" | grep -q "saved" || { bad "ceiling company save failed"; exit 1; }
 OUT="$(DB_PATH="$CEILDB" COMPANY_ID=lockedco KIND=growth_hacker PRESET=Implementation BY=ceo lex run --max-steps 0 --allow-effects "$EFFECTS" demo/org5_seed.lex propose_cmd 2>&1)"
 echo "$OUT" | grep -q "exceeds the company ceiling 'Demo'" && ok "over-grant proposal refused at write time" || bad "over-grant not refused: $OUT"
-N="$(python3 -c "import sqlite3; print(sqlite3.connect('$CEILDB').execute(\"SELECT COUNT(*) FROM traces WHERE event_kind='role_refused'\").fetchone()[0])")"
+N="$("$HERE/sql-scalar.sh" "$CEILDB" "SELECT COUNT(*) FROM traces WHERE event_kind='role_refused'")"
 [ "$N" = "1" ] && ok "structural refusal is on the trail" || bad "role_refused trail missing"
-N="$(python3 -c "import sqlite3; print(sqlite3.connect('$CEILDB').execute('SELECT COUNT(*) FROM role_defs').fetchone()[0])")"
+N="$("$HERE/sql-scalar.sh" "$CEILDB" "SELECT COUNT(*) FROM role_defs")"
 [ "$N" = "0" ] && ok "refusal wrote no role definition" || bad "refused proposal leaked a row"
 
 say "3. bounded creation: propose -> board approves -> castable, ledgered"

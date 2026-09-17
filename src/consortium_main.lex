@@ -15,7 +15,7 @@
 # loom's share a table name (attestations) with different columns.
 #
 # deliver runs the SAME checker the supplier's gate ran
-# (bin/check_research_report.py, against the same search ledger) and hands
+# (bin/check_research_report.lex, against the same search ledger) and hands
 # its output to the controller: the buyer re-derives the evidence rather
 # than trusting the supplier's word that its gate passed.
 
@@ -173,11 +173,11 @@ fn consortium_deliver_operable_cmd() -> [env, io, sql, time, fs_read, fs_write, 
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
     let args := if str.is_empty(domain) {
-      ["bin/check_operable_delivery.py", company_db, ws]
+      ["bin/check-operable-delivery.sh", company_db, ws]
     } else {
-      ["bin/check_operable_delivery.py", company_db, ws, "--domain", domain]
+      ["bin/check-operable-delivery.sh", company_db, ws, "--domain", domain]
     }
-    match proc.run("python3", args) {
+    match proc.run("bash", args) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)
@@ -224,7 +224,7 @@ fn consortium_open_launch_cmd() -> [env, io, sql, time, fs_read, fs_write] Unit 
 }
 
 # deliver-launch: the buyer re-derives the checkable half with
-# bin/check_launch_delivery.py, which COUNTS in the product's own store; the
+# bin/check_launch_delivery.lex, which COUNTS in the product's own store; the
 # three human criteria then wait for the founder, one ATTR=... answer each.
 fn consortium_deliver_launch_cmd() -> [env, io, sql, time, fs_read, fs_write, proc] Unit {
   let db_path := get_env("CONSORTIUM_DB", "consortium.db")
@@ -234,8 +234,8 @@ fn consortium_deliver_launch_cmd() -> [env, io, sql, time, fs_read, fs_write, pr
   if str.is_empty(company_db) or str.is_empty(ws) {
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
-    let args := ["bin/check_launch_delivery.py", company_db, ws]
-    match proc.run("python3", args) {
+    let args := ["bin/check-launch-delivery.sh", company_db, ws]
+    match proc.run("bash", args) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)
@@ -299,7 +299,7 @@ fn consortium_deliver_software_cmd() -> [env, io, sql, time, fs_read, fs_write, 
   if str.is_empty(company_db) or str.is_empty(ws) {
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
-    match proc.run("python3", ["bin/check_software_delivery.py", company_db, ws]) {
+    match proc.run("bash", ["bin/check-software-delivery.sh", company_db, ws]) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)
@@ -320,7 +320,7 @@ fn consortium_deliver_software_cmd() -> [env, io, sql, time, fs_read, fs_write, 
 }
 
 fn checker_script(report_dir :: Str, ledger :: Str) -> Str {
-  str.join(["ROOT=\"$PWD\"; cd '", report_dir, "' && LOOM_SEARCH_LEDGER='", ledger, "' python3 \"$ROOT/bin/check_research_report.py\" . 2>&1"], "")
+  str.join(["ROOT=\"$PWD\"; cd '", report_dir, "' && LOOM_SEARCH_LEDGER='", ledger, "' bash \"$ROOT/bin/check-research-report.sh\" . 2>&1"], "")
 }
 
 fn consortium_deliver_cmd() -> [env, io, sql, time, fs_read, fs_write, proc] Unit {

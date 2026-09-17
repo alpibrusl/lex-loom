@@ -12,7 +12,7 @@ builds nothing until its founder has approved a plan.
 1. **Iteration 1 is the plan.** A fixed one-node sprint (`<company>/founding`,
    no Architect) runs the `founder` role, which writes `plan.md`: Idea,
    Budget (a table in EUR per month whose Total is recomputed by
-   `bin/check_founding_plan.py`), Resources, Human actions (everything only
+   `bin/check_founding_plan.lex`), Resources, Human actions (everything only
    the founder can do: accounts, payments, domains), Success metric,
    Timeline. The checker is the gate; a plan that fails it stops the company.
 2. **The company parks.** The passing plan becomes an attention item for the

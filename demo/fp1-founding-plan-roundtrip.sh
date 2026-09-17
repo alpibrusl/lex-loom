@@ -42,24 +42,24 @@ MD
 }
 echo "== 1. a complete plan passes with its attrs and total"
 mkdir -p "$W/good"; good > "$W/good/plan.md"
-out=$(cd "$W/good" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1) && rc=0 || rc=$?
+out=$(cd "$W/good" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1) && rc=0 || rc=$?
 if [ "$rc" = 0 ] && [[ "$out" == *"FOUNDING_PLAN_OK checkable:idea checkable:budget checkable:resources checkable:human-actions checkable:success-metric checkable:timeline"* ]] && [[ "$out" == *"FOUNDING_PLAN_TOTAL_EUR=260"* ]]; then ok "complete plan accepted; attrs + total printed"; else bad "complete plan refused: $out"; fi
 echo "== 2. a pasted Total is refused (derived value)"
 mkdir -p "$W/paste"; good | sed 's/^| Total | 260 | |$/| Total | 300 | |/' > "$W/paste/plan.md"
-out=$(cd "$W/paste" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1) && rc=0 || rc=$?
+out=$(cd "$W/paste" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1) && rc=0 || rc=$?
 if [ "$rc" != 0 ] && [[ "$out" == *"checkable:budget"* ]] && [[ "$out" == *"sum to 260"* ]]; then ok "Total 300 over rows summing to 260 refused, naming the sum"; else bad "a pasted total was accepted: $out"; fi
 echo "== 3. each missing section is refused by name"
 for sec in "## Idea:checkable:idea" "## Resources:checkable:resources" "## Human actions:checkable:human-actions" "## Success metric:checkable:success-metric" "## Timeline:checkable:timeline"; do
   h="${sec%%:*}"; a="${sec#*:}"; mkdir -p "$W/miss"; good | sed "s|^$h\$|## Removed|" > "$W/miss/plan.md"
-  out=$(cd "$W/miss" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1) && rc=0 || rc=$?
+  out=$(cd "$W/miss" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1) && rc=0 || rc=$?
   if [ "$rc" != 0 ] && [[ "$out" == *"$a"* ]]; then ok "missing '$h' refused as $a"; else bad "missing '$h' not refused as $a: $out"; fi
 done
 echo "== 4. human actions must be bullets; no plan on disk is a denial"
 mkdir -p "$W/nob"; good | sed 's/^- register the domain.*$/register the domain/; s/^- create the Stripe.*$/create the Stripe account/' > "$W/nob/plan.md"
-out=$(cd "$W/nob" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1) && rc=0 || rc=$?
+out=$(cd "$W/nob" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1) && rc=0 || rc=$?
 if [ "$rc" != 0 ] && [[ "$out" == *"checkable:human-actions"* ]]; then ok "prose human actions refused (bullets required)"; else bad "unbulleted human actions accepted"; fi
-mkdir -p "$W/none"; out=$(cd "$W/none" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1) && rc=0 || rc=$?
+mkdir -p "$W/none"; out=$(cd "$W/none" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1) && rc=0 || rc=$?
 [ "$rc" != 0 ] && [[ "$out" == *"plan.md"* ]] && ok "empty dir refused, naming plan.md" || bad "empty dir accepted"
 echo "== 5. the verified line is printed on a refusal too (partial evidence)"
-[[ "$(cd "$W/paste" && python3 "$OLDPWD/bin/check_founding_plan.py" . 2>&1)" == *"FOUNDING_PLAN_VERIFIED checkable:idea"* ]] && ok "refusal still lists the met criteria" || bad "refusal hides the met criteria"
+[[ "$(cd "$W/paste" && bash "$OLDPWD/bin/check-founding-plan.sh" . 2>&1)" == *"FOUNDING_PLAN_VERIFIED checkable:idea"* ]] && ok "refusal still lists the met criteria" || bad "refusal hides the met criteria"
 echo; echo "RESULT: $pass passed, $fail failed"; [ "$fail" = 0 ]

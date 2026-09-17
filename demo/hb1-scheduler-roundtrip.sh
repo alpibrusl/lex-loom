@@ -60,7 +60,7 @@ say "tick 3 (fresh process): wakeco must be woken THIS tick"
 T3="$(one_tick)"
 echo "$T3" | sed 's/^/   | /' | head -12
 echo "$T3" | grep -q "RUN wakeco (woken)" && ok "wakeco woken within one tick" || bad "wakeco not woken"
-q() { python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])" "$1" "$2" 2>/dev/null || echo 0; }
+q() { "$(dirname "$0")/../bin/sql-scalar.sh" "$1" "$2" 2>/dev/null || echo 0; }
 ITERS="$(q "$WS/wakeco/company.db" "SELECT count(*) FROM company_iterations WHERE company_id='wakeco' AND idx=2")"
 [ "$ITERS" = "1" ] && ok "iteration 2 genuinely started (recorded in the company DB)" || bad "no iteration 2 recorded"
 

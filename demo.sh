@@ -89,7 +89,7 @@ echo ""
 
 PAYLOAD=$(printf '{"sprint_id":"%s","request":%s,"model":"%s","max_api_calls":200}' \
   "$SPRINT_ID" \
-  "$(echo "$REQUEST" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+  "$(printf '%s' "$REQUEST" | "$(dirname "$0")/bin/json-quote.sh")" \
   "$MODEL")
 
 # Fire the sprint in background and poll in parallel
@@ -106,27 +106,11 @@ echo ""
 LAST_EVENT_COUNT=0
 while kill -0 "$SPRINT_PID" 2>/dev/null; do
   TRAIL=$(curl -sf "$LOOM_URL/api/sprints/$SPRINT_ID/trail" 2>/dev/null || echo '{"events":[]}')
-  COUNT=$(echo "$TRAIL" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("events",[])))' 2>/dev/null || echo "0")
+  COUNT=$(printf '%s' "$TRAIL" | "$(dirname "$0")/bin/json-len.sh" events 2>/dev/null || echo "0")
 
   if [ "$COUNT" -gt "$LAST_EVENT_COUNT" ]; then
     # Print new events
-    echo "$TRAIL" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-events = d.get('events', [])
-start = $LAST_EVENT_COUNT
-for e in events[start:]:
-    kind = e.get('event_kind','')
-    data = e.get('data_json','{}')
-    try:
-        d2 = json.loads(data)
-        parts = [f\"{k}={v}\" for k,v in d2.items() if k not in ('content',)]
-        data_str = '  '.join(parts[:4])
-    except:
-        data_str = data[:80]
-    icon = '✓' if 'accepted' in kind or 'validated' in kind or 'complete' in kind else ('✗' if 'denied' in kind or 'failed' in kind else '·')
-    print(f'  {icon}  {kind:<22}  {data_str}')
-" 2>/dev/null || true
+    printf '%s' "$TRAIL" | "$(dirname "$0")/bin/json-events.sh" "$LAST_EVENT_COUNT" 2>/dev/null || true
     LAST_EVENT_COUNT=$COUNT
   fi
   sleep 3
@@ -137,8 +121,8 @@ wait "$SPRINT_PID" || true
 # ── 7. Result ─────────────────────────────────────────────────────────────────
 echo ""
 if [ -f /tmp/loom-sprint-result.json ]; then
-  SUCCESS=$(python3 -c "import json; d=json.load(open('/tmp/loom-sprint-result.json')); print(d.get('success','false'))" 2>/dev/null || echo "false")
-  SUMMARY=$(python3 -c "import json; d=json.load(open('/tmp/loom-sprint-result.json')); print(d.get('summary',''))" 2>/dev/null || echo "")
+  SUCCESS=$("$(dirname "$0")/bin/json-get.sh" /tmp/loom-sprint-result.json success 2>/dev/null || echo "false")
+  SUMMARY=$("$(dirname "$0")/bin/json-get.sh" /tmp/loom-sprint-result.json summary 2>/dev/null || echo "")
   if [ "$SUCCESS" = "True" ] || [ "$SUCCESS" = "true" ]; then
     ok "${BOLD}Sprint complete:${NC} $SUMMARY"
     echo ""

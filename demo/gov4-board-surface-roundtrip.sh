@@ -37,7 +37,7 @@ ok()  { echo "   OK: $*"; pass=$((pass+1)); }
 bad() { echo "   FAIL: $*"; fail=$((fail+1)); }
 seed() { DB_PATH="$DB" COMPANY_ID="$CID" "$@" lex run --max-steps 0 --allow-effects "$EFFECTS" demo/gov4_seed.lex "$LEXCMD" 2>&1; }
 cli()  { DB_PATH="$DB" COMPANY_ID="$CID" "$@" lex run --max-steps 0 --allow-effects "$EFFECTS" src/main.lex "$MAINCMD" 2>&1; }
-sqlq() { python3 -c "import sqlite3,sys; print('\n'.join(str(r[0]) for r in sqlite3.connect('$DB').execute(sys.argv[1])))" "$1"; }
+sqlq() { "$(dirname "$0")/../bin/sql-rows.sh" "$DB" "$1"; }
 
 say "1. queue all five decision types through the real producers"
 LEXCMD=seed_cmd;         OUT="$(seed env)"; echo "$OUT" | grep -q "seeded" || { bad "seed failed: $OUT"; exit 1; }

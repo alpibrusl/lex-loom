@@ -22,9 +22,14 @@ set -uo pipefail
 # ported under lex-loom#512 inherits the same trap. A wrapper that only works
 # for one spelling of its own call is a wrapper that will be called the other
 # way.
+# `lex run` prints main's Int return on its own line after the program's own
+# output. For a checker whose stdout IS the message a role has to act on, that
+# stray "0"/"1" is noise appended to the refusal. Drop a trailing bare integer;
+# every checker here ends its real output with prose.
+drop_rc() { sed -e '$ { /^[0-9][0-9]*$/d; }'; }
 jsonarg() { printf '"%s"' "$(printf '%s' "${1-}" | sed 's/^"*//; s/"*$//')"; }
 
 out=$(lex run --allow-effects fs_read,io "$(dirname "$0")/check_prd.lex" main \
         "$(jsonarg "${1:?prd path}")" "$(jsonarg "${2-}")" 2>&1)
-echo "$out"
+printf '%s\n' "$out" | drop_rc
 grep -q '^ACCEPT' <<<"$out"

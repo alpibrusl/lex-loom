@@ -69,7 +69,7 @@ OUT_CYC="$(DB_PATH="$CYC_DB" COMPANY_ID=cycco MAX_ITERATIONS=0 EVOLVE=0 \
   ORG_EDGES="build:qa,qa:pm,pm:build" \
   lex run --max-steps 0 --allow-effects "$EFFECTS" src/main.lex run_company_cmd 2>&1)"
 echo "$OUT_CYC" | grep -q "FATAL: refusing to start" && ok "cyclic org refused at launch" || bad "cycle not refused"
-ROWS="$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM relationships WHERE role LIKE 'org:%'\").fetchone()[0])" "$CYC_DB" 2>/dev/null || echo 0)"
+ROWS="$("$(dirname "$0")/../bin/sql-scalar.sh" "$CYC_DB" "SELECT count(*) FROM relationships WHERE role LIKE 'org:%'" 2>/dev/null || echo 0)"
 [ "${ROWS:-0}" = "0" ] && ok "nothing was saved (refuse, don't downgrade)" || bad "org rows saved despite refusal"
 
 say "4. overdue blocking gate escalates through the reporting lines"
@@ -77,18 +77,16 @@ mkdir -p "$WS/parkco"
 PDB="$WS/parkco/company.db"
 DB_PATH="$PDB" COMPANY_ID=parkco ORG_EDGES="legal:eng_manager,eng_manager:founder" \
   lex run --max-steps 0 --allow-effects "$EFFECTS" demo/org1_seed.lex seed_parked_cmd
-python3 -c "
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-c.execute(\"UPDATE attention_queue SET created_at = datetime('now', '-3 hours')\")
-c.commit()" "$PDB"
+# Age every queued item by three hours, so the scheduler sees a company that
+# has been parked long enough to skip.
+"$(dirname "$0")/../bin/sql-exec.sh" "$PDB" "UPDATE attention_queue SET created_at = datetime('now', '-3 hours')"
 TICK="$(LOOM_WORKSPACE="$WS" MAX_TICKS=1 TICK_MS=100 MAX_RUNS_PER_TICK=0 bash bin/loom-scheduler.sh 2>&1)"
 echo "$TICK" | grep -q "skip parkco (parked)" && ok "parked company held by the scheduler" || bad "parked company not held"
 echo "$TICK" | grep -q "escalation path: legal -> eng_manager -> founder" && ok "escalation walks the reporting lines" || bad "chain not walked"
-ESC="$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM traces WHERE event_kind='gate_escalated'\").fetchone()[0])" "$PDB")"
+ESC="$("$(dirname "$0")/../bin/sql-scalar.sh" "$PDB" "SELECT count(*) FROM traces WHERE event_kind='gate_escalated'")"
 [ "${ESC:-0}" = "1" ] && ok "gate_escalated on the trail" || bad "no gate_escalated event"
 TICK2="$(LOOM_WORKSPACE="$WS" MAX_TICKS=1 TICK_MS=100 MAX_RUNS_PER_TICK=0 bash bin/loom-scheduler.sh 2>&1)"
-ESC2="$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM traces WHERE event_kind='gate_escalated'\").fetchone()[0])" "$PDB")"
+ESC2="$("$(dirname "$0")/../bin/sql-scalar.sh" "$PDB" "SELECT count(*) FROM traces WHERE event_kind='gate_escalated'")"
 [ "${ESC2:-0}" = "1" ] && ok "escalation fires once, not every tick" || bad "escalation duplicated ($ESC2)"
 
 say "5. a flat company (no [org]) is unchanged"

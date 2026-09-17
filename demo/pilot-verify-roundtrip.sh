@@ -58,13 +58,8 @@ echo "$VOUT" | grep -q '"verdict":"ops-within-grant"'    && ok "every operation 
 
 say "3. a tampered record cannot pass the same verification"
 cp "$WS/company.db" "$WS/tampered.db"
-python3 - "$WS/tampered.db" <<'PY'
-import sqlite3, sys
-c = sqlite3.connect(sys.argv[1])
-c.execute("UPDATE artifacts SET content = content || ' [quietly improved]' "
-          "WHERE hash = (SELECT hash FROM artifacts LIMIT 1)")
-c.commit()
-PY
+# Tamper with a sealed artifact, to prove verification notices.
+bin/sql-exec.sh "$WS/tampered.db" "UPDATE artifacts SET content = content || ' [quietly improved]' WHERE hash = (SELECT hash FROM artifacts LIMIT 1)"
 TOUT="$(verify "$WS/tampered.db")"
 echo "$TOUT" | grep -q '"mismatched":1'         && ok "the edited artifact no longer hashes to its recorded id" || bad "tamper not detected: $TOUT"
 echo "$TOUT" | grep -q '"verdict":"FAILED"'     && ok "integrity verdict is FAILED, recomputed not asserted" || bad "verdict not FAILED"

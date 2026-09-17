@@ -510,7 +510,7 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
 # hazard is a MODEL-INVENTED command, not shell gates as such.
 #
 # Drawing the line at "no spec sh on a build node" also made the repo
-# contradict itself. #286 added bin/check_imports.py and documented it to the
+# contradict itself. #286 added bin/check_imports.lex and documented it to the
 # Architect as "strictly stronger than 'spec compiles' -- use this on py_build
 # whenever a launch or deploy node is in the graph", because py_compile only
 # PARSES and a module that cannot import surfaces four nodes later as
@@ -671,7 +671,7 @@ fn rule_document_path_has_no_code_roles(g :: graph.SprintGraph, document_only ::
       })) {
         acc
       } else {
-        list.concat(acc, [{ rule: "document-path-no-code-roles", message: str.join(["node ", n.id, " (role '", n.role, "') builds, tests, judges or ships software, but this company's path delivers a DOCUMENT: use opportunity_research (gate: spec sh \"python3 $LOOM_ROOT/bin/check_research_report.py .\") and prose roles (pm, scribe) only -- no build, test author, QA, launch, deploy or devops node"], "") }])
+        list.concat(acc, [{ rule: "document-path-no-code-roles", message: str.join(["node ", n.id, " (role '", n.role, "') builds, tests, judges or ships software, but this company's path delivers a DOCUMENT: use opportunity_research (gate: spec sh \"bash $LOOM_ROOT/bin/check-research-report.sh .\") and prose roles (pm, scribe) only -- no build, test author, QA, launch, deploy or devops node"], "") }])
       }
     })
   }

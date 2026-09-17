@@ -445,7 +445,7 @@ fn test_loom_verifier_shell_gate_is_allowed_on_a_build() -> Result[Unit, Str] {
   let gph := g("mv1", [node("b", "py_build"), node("ta", "py_test_author"), node("q", "py_qa"), node("d", "demo")], [edge("ta", "q"), edge("b", "q"), edge("q", "d")])
   let gated := { id: gph.id, phase: gph.phase, nodes: list.map(gph.nodes, fn (n :: graph.Node) -> graph.Node {
     if n.id == "b" {
-      { id: n.id, role: n.role, gate: "spec sh \"python3 $LOOM_ROOT/bin/check_imports.py .\"", expand: n.expand, activate_when: n.activate_when }
+      { id: n.id, role: n.role, gate: "spec sh \"bash $LOOM_ROOT/bin/check-imports.sh .\"", expand: n.expand, activate_when: n.activate_when }
     } else {
       n
     }
@@ -557,7 +557,7 @@ fn test_a_prose_only_sprint_needs_no_build() -> Result[Unit, Str] {
 }
 
 fn research_only_graph() -> graph.SprintGraph {
-  { id: "doc", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "opp", role: "opportunity_research", gate: "spec sh \"python3 $LOOM_ROOT/bin/check_research_report.py .\"", expand: None, activate_when: "" }, { id: "scribe", role: "scribe", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "opp", handoff: "brief" }, { from: "opp", to: "scribe", handoff: "report" }] }
+  { id: "doc", phase: graph.Implementation, nodes: [{ id: "pm", role: "pm", gate: "spec non-empty", expand: None, activate_when: "" }, { id: "opp", role: "opportunity_research", gate: "spec sh \"bash $LOOM_ROOT/bin/check-research-report.sh .\"", expand: None, activate_when: "" }, { id: "scribe", role: "scribe", gate: "spec len-gt 50", expand: None, activate_when: "" }], edges: [{ from: "pm", to: "opp", handoff: "brief" }, { from: "opp", to: "scribe", handoff: "report" }] }
 }
 
 fn code_graph_on_document_path() -> graph.SprintGraph {

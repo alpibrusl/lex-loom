@@ -25,6 +25,7 @@
 # bash 3.2 as /bin/bash, and bootstrap-company.sh was unrunnable there for
 # exactly that kind of reason.
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$(dirname "$0")/.."
 
 MANIFEST="${1:-}"
@@ -35,14 +36,14 @@ MODEL_OVERRIDE="${3:-}"
 WORK="$(mktemp -d /tmp/loom-reliability.XXXXXX)"
 RESULTS="$WORK/results.tsv"
 : > "$RESULTS"
-BASE_ID="$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb'))['identity']['id'])" "$MANIFEST")"
-GOAL="$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb'))['identity']['mission'])" "$MANIFEST")"
-MODEL="${MODEL_OVERRIDE:-$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb'))['stack']['model'])" "$MANIFEST")}"
-MAXIT="$(python3 -c "import tomllib,sys;print(tomllib.load(open(sys.argv[1],'rb')).get('policy',{}).get('max_iterations',3))" "$MANIFEST")"
-PACKS="$(python3 -c "import tomllib,sys;print(','.join(tomllib.load(open(sys.argv[1],'rb')).get('roles',{}).get('packs',[])))" "$MANIFEST")"
+BASE_ID="$("$HERE/toml-get.sh" "$MANIFEST" identity.id)"
+GOAL="$("$HERE/toml-get.sh" "$MANIFEST" identity.mission)"
+MODEL="${MODEL_OVERRIDE:-$("$HERE/toml-get.sh" "$MANIFEST" stack.model)}"
+MAXIT="$("$HERE/toml-get.sh" "$MANIFEST" policy.max_iterations 3)"
+PACKS="$("$HERE/toml-get.sh" "$MANIFEST" roles.packs)"
 # [models] per-role overrides, so a mixed-model manifest measures what it says
 # it does rather than silently running every role on [stack].model.
-OVERRIDES="$(python3 -c "import tomllib,sys;m=tomllib.load(open(sys.argv[1],'rb')).get('models',{});print(','.join(f'{k}:{v}' for k,v in m.items()))" "$MANIFEST")"
+OVERRIDES="$("$HERE/toml-get.sh" "$MANIFEST" models)"
 
 echo "[reliability] manifest=$MANIFEST model=$MODEL attempts=$N max_iterations=$MAXIT"
 [ -n "$OVERRIDES" ] && echo "[reliability] per-role models: $OVERRIDES"

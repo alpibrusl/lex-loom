@@ -3,7 +3,7 @@
 A vetted path for a company whose deliverable is a document, not software:
 the consortium's ResearchCo (docs/consortium-freeze.md). No build, no
 server, no test suite. The `opportunity_research` role writes a fenced
-`report.md`, the gate `bin/check_research_report.py` verifies every
+`report.md`, the gate `bin/check_research_report.lex` verifies every
 checkable criterion by name, and the passing report is synced here as
 `report.md` at the end of the iteration.
 

@@ -364,7 +364,7 @@ def main() -> int:
     print("")
     # The hint has to be in the author's language: a .lex author shown a
     # Python datetime derivation has nothing to copy (#344).
-    if any(str(f).endswith(".lex") for f, *_ in findings):
+    if any(str(p).endswith(".lex") for p, _hits in bad):
         print("  1. COMPUTE the expected value where you assert it:")
         print("       if v == 1700000000 + 330 * 60 { Ok(()) } else { Err(\"shift\") }")
         print("")

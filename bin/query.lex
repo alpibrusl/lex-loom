@@ -113,6 +113,129 @@ fn main_json_str(text :: Str, field :: Str) -> [io] Int {
   json_get(text, field)
 }
 
+# A string as a JSON string: quoting and escaping, nothing else. Replaces
+# `python3 -c 'print(json.dumps(sys.stdin.read()))'`, which demo.sh used to
+# embed a free-text request inside a payload -- the one place a shell script
+# must not improvise its own escaping.
+fn main_quote(text :: Str) -> [io] Int {
+  let __ := io.print(jv.stringify(JStr(text)))
+  0
+}
+
+# How many elements the list at a path has; 0 when the path is missing, which
+# is what a caller polling a growing trail wants -- "no events yet" and "no
+# events key" are the same thing to it.
+fn main_len(text :: Str, path :: Str) -> [io] Int {
+  match jv.parse(text) {
+    Err(_) => {
+      let __ := io.print("0")
+      1
+    },
+    Ok(j) => match walk(j, segments_of(path)) {
+      Some(JList(items)) => {
+        let __ := io.print(int.to_str(list.len(items)))
+        0
+      },
+      _ => {
+        let __ := io.print("0")
+        0
+      },
+    },
+  }
+}
+
+# Every event in a trail, from an index, as one line each: a tick or a cross,
+# the kind, and the first few data fields. demo.sh printed this from a python3
+# heredoc that re-parsed the whole trail on every poll.
+fn main_events(text :: Str, from_s :: Str) -> [io] Int {
+  let from := match str.to_int(from_s) {
+    None => 0,
+    Some(n) => n,
+  }
+  match jv.parse(text) {
+    Err(_) => 1,
+    Ok(j) => match walk(j, ["events"]) {
+      Some(JList(items)) => {
+        let __ := list.fold(list.enumerate(items), 0, fn (n :: Int, ie :: (Int, jv.Json)) -> [io] Int {
+          match ie {
+            (i, e) => if i < from {
+              n
+            } else {
+              let kind := match jv.get_field(e, "event_kind") {
+                Some(JStr(k)) => k,
+                _ => "",
+              }
+              let data := match jv.get_field(e, "data_json") {
+                Some(JStr(d)) => d,
+                _ => "{}",
+              }
+              let __p := io.print(str.join(["  ", icon_for(kind), "  ", pad_to(kind, 22), "  ", summarise(data)], ""))
+              n + 1
+            },
+          }
+        })
+        0
+      },
+      _ => 0,
+    },
+  }
+}
+
+fn icon_for(kind :: Str) -> Str {
+  if str.contains(kind, "accepted") or str.contains(kind, "validated") or str.contains(kind, "complete") {
+    "✓"
+  } else {
+    if str.contains(kind, "denied") or str.contains(kind, "failed") {
+      "✗"
+    } else {
+      "·"
+    }
+  }
+}
+
+fn pad_to(s :: Str, n :: Int) -> Str {
+  if str.len(s) >= n {
+    s
+  } else {
+    pad_to(str.concat(s, " "), n)
+  }
+}
+
+# The first four fields, `content` left out: it is the whole artifact, and one
+# event would fill the terminal.
+fn summarise(data :: Str) -> Str {
+  match jv.parse(data) {
+    Err(_) => if str.len(data) > 80 {
+      str.slice(data, 0, 80)
+    } else {
+      data
+    },
+    Ok(j) => match j {
+      JObj(fields) => str.join(take_str(list.map(list.filter(fields, fn (kv :: (Str, jv.Json)) -> Bool {
+        match kv {
+          (k, _) => k != "content",
+        }
+      }), fn (kv :: (Str, jv.Json)) -> Str {
+        match kv {
+          (k, v) => str.join([k, "=", render(v)], ""),
+        }
+      }), 4), "  "),
+      _ => data,
+    },
+  }
+}
+
+fn take_str(xs :: List[Str], n :: Int) -> List[Str] {
+  if n <= 0 {
+    []
+  } else {
+    match list.head(xs) {
+      None => [],
+      Some(x) => list.cons(x, take_str(list.tail(xs), n - 1)),
+    }
+  }
+}
+
 # Build a JSON object from k=v arguments. Replaces
 # `python3 -c 'print(json.dumps({"item_id": sys.argv[1]}))'` -- the shape a
 # dozen callers in the cloud runner needed, each with its own quoting. A value

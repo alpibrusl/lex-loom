@@ -45,7 +45,7 @@ fail=0
 say()  { printf '\n== %s\n' "$*"; }
 ok()   { echo "   OK: $*"; pass=$((pass+1)); }
 bad()  { echo "   FAIL: $*"; fail=$((fail+1)); }
-q() { python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchone()[0])" "$1" "$2" 2>/dev/null || echo ""; }
+q() { "$(dirname "$0")/../bin/sql-scalar.sh" "$1" "$2" 2>/dev/null || echo ""; }
 
 say "seed: three dormant companies (different wake_when opt-ins)"
 DB_PATH="$WS/wakeco/company.db" COMPANY_ID=wakeco WAKE_WHEN="board_note or support_item" \

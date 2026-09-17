@@ -225,6 +225,36 @@ fn segments_of(path :: Str) -> List[Str] {
   })
 }
 
+# The first column of every row, one per line. The demos' `sqlq` helper, which
+# eight of them had defined for themselves with slightly different NULL and
+# missing-file handling.
+fn main_sql_rows(db :: Str, query :: Str) -> [sql, fs_read, fs_write, io] Int {
+  if not str.starts_with(str.to_lower(str.trim(query)), "select") {
+    1
+  } else {
+    match sql.open(str.join(["file:", db, "?mode=ro"], "")) {
+      Err(_) => 1,
+      Ok(h) => {
+        # `WITH q(v) AS (<query>)` names the caller's first column without the
+        # caller having to alias it. The alternative was requiring `AS v` at
+        # every call site, which would have put a tool's implementation detail
+        # into twelve queries that read perfectly well already.
+        let rows :: Result[List[ValRow], SqlError] := sql.query(h, str.join(["WITH q(v) AS (", query, ") SELECT CAST(COALESCE(v, '') AS TEXT) AS v FROM q"], ""), [])
+        match rows {
+          Err(_) => 1,
+          Ok(rs) => {
+            let __ := list.fold(rs, 0, fn (n :: Int, r :: ValRow) -> [io] Int {
+              let __p := io.print(r.v)
+              n + 1
+            })
+            0
+          },
+        }
+      },
+    }
+  }
+}
+
 # Run statements against a database, writes allowed. This is the WRITE
 # counterpart to main_sql, and it is deliberately a separate entry point: a
 # script that only counts rows should not be able to drop a table by typo.

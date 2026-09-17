@@ -224,7 +224,7 @@ fn consortium_open_launch_cmd() -> [env, io, sql, time, fs_read, fs_write] Unit 
 }
 
 # deliver-launch: the buyer re-derives the checkable half with
-# bin/check_launch_delivery.py, which COUNTS in the product's own store; the
+# bin/check_launch_delivery.lex, which COUNTS in the product's own store; the
 # three human criteria then wait for the founder, one ATTR=... answer each.
 fn consortium_deliver_launch_cmd() -> [env, io, sql, time, fs_read, fs_write, proc] Unit {
   let db_path := get_env("CONSORTIUM_DB", "consortium.db")
@@ -234,8 +234,8 @@ fn consortium_deliver_launch_cmd() -> [env, io, sql, time, fs_read, fs_write, pr
   if str.is_empty(company_db) or str.is_empty(ws) {
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
-    let args := ["bin/check_launch_delivery.py", company_db, ws]
-    match proc.run("python3", args) {
+    let args := ["bin/check-launch-delivery.sh", company_db, ws]
+    match proc.run("bash", args) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)
@@ -299,7 +299,7 @@ fn consortium_deliver_software_cmd() -> [env, io, sql, time, fs_read, fs_write, 
   if str.is_empty(company_db) or str.is_empty(ws) {
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
-    match proc.run("python3", ["bin/check_software_delivery.py", company_db, ws]) {
+    match proc.run("bash", ["bin/check-software-delivery.sh", company_db, ws]) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)

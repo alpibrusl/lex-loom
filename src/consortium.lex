@@ -183,7 +183,7 @@ fn operable_request_description() -> Str {
 # and KNOWN, by #452's staged thresholds. The checkable half is what loom
 # recorded (an accepted community, lifecycle and release_manager node) plus
 # what the PRODUCT recorded, counted by the buyer in the product's own store
-# through bin/check_launch_delivery.py -- never a number the supplier wrote
+# through bin/check_launch_delivery.lex -- never a number the supplier wrote
 # down. The human half IS this contract: publishing, sending and creating
 # the paid product are real-world acts a model must not self-certify; each
 # holds Ambiguous until a person answers, as human:would-fund did.
@@ -196,7 +196,7 @@ fn launch_request_description() -> Str {
 }
 
 # The second contract's criteria: what loom's own trail and workspace show,
-# re-derived by bin/check_software_delivery.py. No human criterion: the
+# re-derived by bin/check_software_delivery.lex. No human criterion: the
 # founder's judgement went into the research contract; delivery is
 # mechanical.
 fn run1_software_criteria() -> List[request_bid.Criterion] {

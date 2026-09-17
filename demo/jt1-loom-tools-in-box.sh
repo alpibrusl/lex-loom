@@ -149,7 +149,7 @@ run_leg search "$MANIFEST" -- /bin/sh -c 'SSL_CERT_FILE=/etc/ssl/cert.pem /opt/p
 if is_ok && field stdout | command grep -q ' -- http' && ! field stdout | command grep -q '^ERROR\|NO_RESULTS'; then ok "SEARCH: $(field stdout | head -1 | cut -c1-110)"; else bad "SEARCH: $(field stdout | head -2 | tr '\n' ' ' | cut -c1-200) $(field stderr | tail -2 | tr '\n' ' ' | cut -c1-200)"; fi
 
 echo "== 6. CHECK: the report gate verifies a report against its ledger inside the box (ReadWrite fs, sandboxed exec)"
-run_leg check "$MANIFEST" -- /bin/sh -c 'cd /opt/loom/fixture && LOOM_SEARCH_LEDGER=/opt/loom/fixture/ledger.txt /opt/python/bin/python3 /opt/loom/bin/check_research_report.lex .'
+run_leg check "$MANIFEST" -- /bin/sh -c 'cd /opt/loom/fixture && LOOM_SEARCH_LEDGER=/opt/loom/fixture/ledger.txt sh /opt/loom/bin/check-research-report.sh .'
 if is_ok && field stdout | command grep -q 'RESEARCH_REPORT_OK'; then ok "CHECK: RESEARCH_REPORT_OK with $(field stdout | command grep -o 'checkable:[a-z-]*' | wc -l | tr -d ' ') attrs"; else bad "CHECK: $ENVELOPE"; fi
 
 echo "== 7. DROP: a host the grant does not list is unreachable from the same box"

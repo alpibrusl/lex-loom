@@ -54,7 +54,7 @@ fn evidence_from_sprint(criteria :: List[request_bid.Criterion], success :: Bool
 }
 
 # Evidence from a checker's own output: bin/check_research_report.lex and
-# bin/check_software_delivery.py print `<NAME>_VERIFIED <attr> ...` naming
+# bin/check_software_delivery.lex print `<NAME>_VERIFIED <attr> ...` naming
 # every criterion they verified (on a refusal too), so a checkable criterion
 # is satisfied exactly when its attr is on such a line; `<NAME>_OK ...` on a
 # full pass counts the same way. No line means nothing verified. Human

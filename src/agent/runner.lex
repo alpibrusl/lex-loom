@@ -644,7 +644,7 @@ fn verify_verdict_suite(role :: Str, sprint_id :: Str) -> [proc] Result[Unit, St
 # never written anywhere the gate could see (#21).
 #
 # Fix: re-materialize the node's own `output` into a fresh scratch dir via
-# extract_fenced.py (same mechanism verify.lex's independent reverify_grounded
+# extract_fenced (same mechanism verify.lex's independent reverify_grounded
 # already uses for post-hoc verification) and run the gate command there —
 # grounding it in what THIS node actually produced, for any role.
 # LOOM_ROOT is exported before the cd so a gate command can reach the repo's own
@@ -847,7 +847,7 @@ fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_d
   } else {
     str.join(["if [ -d ", seed_dir, " ]; then cp -R ", seed_dir, "/. $W/ 2>/dev/null; find $W -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; fi; "], "")
   }
-  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "python3 bin/extract_fenced.py ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "bash bin/extract-fenced.sh ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {

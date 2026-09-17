@@ -116,7 +116,7 @@ case "$out" in *"human:"*) bad "the checker printed a human: attr -- the machine
 
 echo "== 6. the report reaches the gate through the fence (extract_fenced names report.md)"
 mkdir -p "$W/fence"; { printf 'Here is the report.\n\n```report.md\n'; good; printf '```\n'; } > "$W/fence/art.txt"
-mkdir -p "$W/fence/w"; python3 bin/extract_fenced.py "$W/fence/art.txt" "$W/fence/w" >/dev/null 2>&1 || true
+mkdir -p "$W/fence/w"; bash bin/extract-fenced.sh "$W/fence/art.txt" "$W/fence/w" >/dev/null 2>&1 || true
 if [ -f "$W/fence/w/report.md" ] && (cd "$W/fence/w" && python3 "$OLDPWD/bin/check_research_report.py" . >/dev/null 2>&1); then ok "a fenced report.md lands on disk and passes"; else bad "the fenced report did not reach the gate: $(ls "$W/fence/w" 2>/dev/null)"; fi
 
 echo "== 7. the search backend parses result URLs from each engine's html (fixtures, offline)"

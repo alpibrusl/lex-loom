@@ -6,9 +6,9 @@
 # was denied every attempt, because verify_shell(cmd, kind) resolved
 # work_dir_for("devops") to the Lex build dir devops never wrote to. The fix
 # (runner.verify_shell_on_output) re-materializes the node's fenced output via
-# extract_fenced.py into a scratch dir and runs the gate there instead.
+# extract_fenced into a scratch dir and runs the gate there instead.
 #
-# Also covers a second bug found while fixing the first: extract_fenced.py
+# Also covers a second bug found while fixing the first: extract_fenced
 # mapped a ```Dockerfile fence to the generic "file1.txt" (no "." in the tag,
 # not in LANG_EXT), so even a correctly-scoped gate would miss a file docker
 # build looks for by exact name. Fixed via NO_EXT_FILENAME.

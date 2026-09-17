@@ -48,7 +48,7 @@ fn contract_holds(role :: Str, sprint :: Str) -> [io, proc] Bool {
   let seed_dir := runner.tool_work_dir_for_role(role, sprint)
   list.fold(contracts.deliverables_for(role), true, fn (acc :: Bool, d :: contracts.Deliverable) -> [io, proc] Bool {
     if acc {
-      match runner.verify_shell_on_output_from(contracts.check_cmd(d), "", str.join(["rc-", role, "-", sprint], ""), seed_dir) {
+      match runner.verify_shell_on_output_from(contracts.check_cmd(d), "", str.join(["rc-", role, "-", sprint], ""), seed_dir, "") {
         Ok(_) => true,
         Err(_) => false,
       }

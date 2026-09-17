@@ -632,7 +632,7 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
                       if runner.is_build_kind(n.role) {
                         runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
                       } else {
-                        runner.verify_shell_for_role(gates.shell_command(n.gate), n.role, output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id))
+                        runner.verify_shell_for_role(gates.shell_command(n.gate), n.role, output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id), cfg.request)
                       }
                     } else {
                       if str.trim(n.gate) == "spec json-ok-true" {
@@ -1532,7 +1532,7 @@ fn run_document_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, outcomes ::
     },
     Some(o) => {
       let content := resolve_input(cfg.db, o.artifact)
-      match runner.verify_shell_on_output_from("bash $LOOM_ROOT/bin/check-research-report.sh .", content, str.join([sanitize_id(cfg.id), "-acceptance"], ""), "") {
+      match runner.verify_shell_on_output_from("bash $LOOM_ROOT/bin/check-research-report.sh .", content, str.join([sanitize_id(cfg.id), "-acceptance"], ""), "", cfg.request) {
         Ok(_) => {
           let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed report re-checked in a clean dir by check_research_report\"}")
           Ok(())
@@ -1558,7 +1558,7 @@ fn run_acceptance(cfg :: SprintCfg, g :: graph.SprintGraph, artifact_ref :: Str)
       let __te := tr.trail(cfg.db, cfg.id, "acceptance_failed", "{\"reason\":\"no work dir for this stack\"}")
       Err("acceptance: no work dir to re-execute for this stack")
     } else {
-      match runner.verify_shell_for_role(cmd, build_role, "", str.join([sanitize_id(cfg.id), "-acceptance"], ""), seed) {
+      match runner.verify_shell_for_role(cmd, build_role, "", str.join([sanitize_id(cfg.id), "-acceptance"], ""), seed, cfg.request) {
         Ok(_) => {
           let __ta := tr.trail(cfg.db, cfg.id, "acceptance_passed", "{\"checked\":\"sealed artifact re-executed in a clean dir\"}")
           Ok(())
@@ -1754,7 +1754,7 @@ fn and_contract(role :: Str, output :: Str, sprint_id :: Str, scratch :: Str, ga
       list.fold(contracts.deliverables_for(role), Ok(()), fn (acc :: Result[Unit, Str], d :: contracts.Deliverable) -> [io, proc] Result[Unit, Str] {
         match acc {
           Err(e) => Err(e),
-          Ok(_) => match runner.verify_shell_for_role(contracts.check_cmd(d), role, output, scratch, seed) {
+          Ok(_) => match runner.verify_shell_for_role(contracts.check_cmd(d), role, output, scratch, seed, "") {
             Ok(_) => Ok(()),
             Err(_) => Err(contracts.missing_message(role, d)),
           },

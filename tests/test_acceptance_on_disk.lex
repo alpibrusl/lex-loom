@@ -78,7 +78,7 @@ fn test_a_passing_build_on_disk_passes_acceptance_with_no_prose() -> [io, proc, 
 fn passing_build_passes_acceptance() -> [io, proc, random] Result[Unit, Str] {
   let sprint := str.concat("t-acc-pass/", crypto.random_str_hex(4))
   let __s := seed(sprint, "def add(a, b):\n    return a + b\n", "from app import add\ndef test_add():\n    assert add(2, 2) == 4\n")
-  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-pass-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-pass-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint), "")
   let __c := cleanup(sprint)
   match r {
     Ok(_) => Ok(()),
@@ -95,7 +95,7 @@ fn test_a_passing_build_with_tests_in_a_folder_passes_acceptance() -> [io, proc,
     let sprint := str.concat("t-acc-dir/", crypto.random_str_hex(4))
     let d := lexskill.py_work_dir(sprint)
     let __s := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "/tests' && printf 'def add(a, b):\\n    return a + b\\n' > '", d, "/app.py' && : > '", d, "/tests/__init__.py' && printf 'from app import add\\ndef test_add():\\n    assert add(2, 2) == 4\\n' > '", d, "/tests/test_app.py'"], "")])
-    let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-dir-", crypto.random_str_hex(4)), d)
+    let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-dir-", crypto.random_str_hex(4)), d, "")
     let __c := cleanup(sprint)
     match r {
       Ok(_) => Ok(()),
@@ -107,7 +107,7 @@ fn test_a_passing_build_with_tests_in_a_folder_passes_acceptance() -> [io, proc,
 fn test_a_failing_build_on_disk_fails_acceptance() -> [io, proc, random] Result[Unit, Str] {
   let sprint := str.concat("t-acc-fail/", crypto.random_str_hex(4))
   let __s := seed(sprint, "def add(a, b):\n    return a - b\n", "from app import add\ndef test_add():\n    assert add(2, 2) == 4\n")
-  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-fail-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint))
+  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", "", str.concat("t-acc-fail-", crypto.random_str_hex(4)), lexskill.py_work_dir(sprint), "")
   let __c := cleanup(sprint)
   match r {
     Ok(_) => Err("a build whose own tests fail passed acceptance — acceptance no longer checks anything"),
@@ -121,7 +121,7 @@ fn test_no_tests_on_disk_fails_acceptance_even_with_fenced_prose() -> [io, proc,
   let d := lexskill.py_work_dir(sprint)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf '", d, "' && mkdir -p '", d, "' && printf 'X = 1' > '", d, "/app.py'"], "")])
   let prose := "```test_app.py\ndef test_x():\n    assert True\n```\n"
-  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", prose, str.concat("t-acc-none-", crypto.random_str_hex(4)), d)
+  let r := runner.verify_shell_for_role(py_acceptance(), "py_build", prose, str.concat("t-acc-none-", crypto.random_str_hex(4)), d, "")
   let __c := cleanup(sprint)
   match r {
     Ok(_) => Err("a test that exists only in prose satisfied acceptance — the fence hole, at the last gate"),

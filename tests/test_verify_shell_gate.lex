@@ -199,7 +199,7 @@ fn test_shell_gate_sees_tool_written_files() -> [io, proc] Result[Unit, Str] {
   let dir := str.concat("/tmp/loom-py-work-", sid)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
   let __w := io.write(str.concat(dir, "/test_convert.py"), "def test_ok():\n    assert 1 == 1\n")
-  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-yes", dir) {
+  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-yes", dir, "") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a file written through the node's own tool must reach the gate: ", e)),
   }
@@ -208,7 +208,7 @@ fn test_shell_gate_sees_tool_written_files() -> [io, proc] Result[Unit, Str] {
 # The negative control: the same prose-only answer with no seed dir must still
 # be refused, or the test above would pass for the wrong reason.
 fn test_shell_gate_without_seed_still_refuses_prose() -> [io, proc] Result[Unit, Str] {
-  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-no", "") {
+  match runner.verify_shell_on_output_from("test -f test_convert.py", "I wrote the tests with py_check.", "sg-tool-no", "", "") {
     Ok(_) => Err("prose with no files and no tool dir must still be refused"),
     Err(_) => Ok(()),
   }
@@ -221,7 +221,7 @@ fn test_fenced_answer_overrides_the_seeded_copy() -> [io, proc] Result[Unit, Str
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, " && mkdir -p ", dir], "")])
   let __w := io.write(str.concat(dir, "/test_convert.py"), "STALE\n")
   let out := "Final:\n\n```test_convert.py\nFRESH\n```\n"
-  match runner.verify_shell_on_output_from("grep -q FRESH test_convert.py", out, "sg-overlay", dir) {
+  match runner.verify_shell_on_output_from("grep -q FRESH test_convert.py", out, "sg-overlay", dir, "") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("the fenced answer must overwrite the seeded copy: ", e)),
   }

@@ -779,7 +779,7 @@ fn tool_work_dir_for_role(role :: Str, sprint_id :: Str) -> Str {
 }
 
 fn verify_shell_on_output(cmd :: Str, output :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
-  verify_shell_on_output_from(cmd, output, scratch, "")
+  verify_shell_on_output_from(cmd, output, scratch, "", "")
 }
 
 # The failure comes FIRST, and the file listing is capped and last.
@@ -830,24 +830,46 @@ fn cap_listing(sx :: Str, n :: Int) -> Str {
 # existed only in its prose -- they reached disk twenty minutes later, in the
 # retry. #329 closed this for the role CONTRACT; the Architect-chosen gate took
 # the same path and was missed. One choke point now, for both.
-fn verify_shell_for_role(cmd :: Str, role :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
+fn verify_shell_for_role(cmd :: Str, role :: Str, output :: Str, scratch :: Str, seed_dir :: Str, goal :: Str) -> [io, proc] Result[Unit, Str] {
   verify_shell_on_output_from(cmd, if is_build_kind(role) {
     ""
   } else {
     output
-  }, scratch, seed_dir)
+  }, scratch, seed_dir, goal)
 }
 
-fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str) -> [io, proc] Result[Unit, Str] {
+# LOOM_GOAL_FILE carries the iteration's GOAL to the gate, next to LOOM_ROOT.
+#
+# Without it the PRD gate's contradiction check -- the one that catches a PRD
+# swapping SQLite for an in-memory vector, which cost five consecutive
+# iterations (#495) -- was dark in production: it was written, tested and
+# measured at 20/20 in a probe that set the variable by hand, and never once
+# ran in a real company. A check nobody runs is a check nobody has
+# (lex-loom#513).
+#
+# Per-gate file rather than a process-wide variable: the orchestrator runs
+# nodes concurrently, and one env var shared across them would hand a node its
+# neighbour's goal.
+fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str, goal :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
+  let goal_file := str.join(["/tmp/loom-gate-", scratch, "-goal.txt"], "")
   let __w := io.write(art, output)
+  let __g := if str.is_empty(goal) {
+    Ok(())
+  } else {
+    io.write(goal_file, goal)
+  }
   let seed := if str.is_empty(seed_dir) {
     ""
   } else {
     str.join(["if [ -d ", seed_dir, " ]; then cp -R ", seed_dir, "/. $W/ 2>/dev/null; find $W -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; fi; "], "")
   }
-  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "bash bin/extract-fenced.sh ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  let script := str.join(["W=", work, "; export LOOM_ROOT=\"$PWD\"; export LOOM_GOAL_FILE=\"", if str.is_empty(goal) {
+    ""
+  } else {
+    goal_file
+  }, "\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "bash bin/extract-fenced.sh ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {

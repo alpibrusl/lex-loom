@@ -38,26 +38,24 @@ import "../src/gates" as gates
 # So: write the gate as it is DECLARED (literal backslashes, `\\\"`), and take
 # the command out of it with gates.shell_command rather than by hand. A test
 # that retypes the answer cannot fail when the answer is wrong.
-# The goal file is WRITTEN BY THE TEST and named in the gate, rather than read
-# from $LOOM_GOAL_FILE.
+# The gate reads $LOOM_GOAL_FILE, and the HARNESS sets it from the goal passed
+# in -- which is what production does since lex-loom#513.
 #
-# It used to read the env var, and that made this whole file pass only on a
-# machine where someone had exported it. It passed for me for exactly that
-# reason and failed on CI, where the variable is unset, the contradiction check
-# is skipped, and a PRD that swaps SQLite for an in-memory vector sails
-# through. A test that depends on ambient state is a test that reports the
-# state, not the code -- which is the failure mode this branch spent a week on.
-fn goal_path() -> Str {
-  "/tmp/loom-prd-harness-goal.txt"
-}
-
-fn write_goal() -> [io] Unit {
-  let __ := io.write(goal_path(), "Build the smallest form-submission server. It stores the submission in a local SQLite database with a timestamp, returns 200 with a short plain-text success message, and 400 naming the missing field.")
-  ()
+# An earlier version read the variable from the ambient environment, and so
+# passed only on a machine where someone had exported it. It passed for me for
+# that reason and failed on CI, where it is unset, the contradiction check is
+# skipped, and a PRD that swaps SQLite for an in-memory vector sails through. A
+# test that depends on ambient state reports the state, not the code.
+#
+# The fix was briefly to name a file the test wrote. This is better: the test
+# hands the harness a goal exactly as the orchestrator does, so the mechanism
+# under test is the one that ships.
+fn goal() -> Str {
+  "Build the smallest form-submission server. It stores the submission in a local SQLite database with a timestamp, returns 200 with a short plain-text success message, and 400 naming the missing field."
 }
 
 fn pm_gate() -> Str {
-  str.join(["spec sh \"bash $LOOM_ROOT/bin/check-prd.sh prd.md ", goal_path(), "\""], "")
+  "spec sh \"bash $LOOM_ROOT/bin/check-prd.sh prd.md \\\"$LOOM_GOAL_FILE\\\"\""
 }
 
 fn pm_gate_cmd() -> Str {
@@ -76,14 +74,13 @@ fn reversed_body() -> Str {
   str.replace(good_body(), "3. A valid submission is persisted to the SQLite store with a timestamp.", "3. After a 200 response the in-memory vector length increases by exactly one.")
 }
 
-fn run_gate(body :: Str, scratch :: Str) -> [io, proc, fs_write] Result[Unit, Str] {
-  let __ := write_goal()
-  runner.verify_shell_on_output_from(pm_gate_cmd(), fenced(body), scratch, "")
+fn run_gate(body :: Str, scratch :: Str) -> [io, proc] Result[Unit, Str] {
+  runner.verify_shell_on_output_from(pm_gate_cmd(), fenced(body), scratch, "", goal())
 }
 
 # The test that was missing. A good PRD must pass THROUGH THE HARNESS, not just
 # past the checker.
-fn test_a_good_prd_passes_the_gate_through_the_harness() -> [io, proc, fs_write] Result[Unit, Str] {
+fn test_a_good_prd_passes_the_gate_through_the_harness() -> [io, proc] Result[Unit, Str] {
   match run_gate(good_body(), "prdgate-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.join(["a PRD the checker accepts was DENIED by the harness: ", e, " — the gate string and the wrapper disagree about quoting, and the role gets the blame"], "")),
@@ -92,7 +89,7 @@ fn test_a_good_prd_passes_the_gate_through_the_harness() -> [io, proc, fs_write]
 
 # And the gate must still be able to refuse through the same path, or the fix
 # for the above is just "accept everything".
-fn test_a_reversed_prd_is_refused_through_the_harness() -> [io, proc, fs_write] Result[Unit, Str] {
+fn test_a_reversed_prd_is_refused_through_the_harness() -> [io, proc] Result[Unit, Str] {
   match run_gate(reversed_body(), "prdgate-bad") {
     Ok(_) => Err("the criteria swapped SQLite for an in-memory vector and the harness passed it"),
     Err(_) => Ok(()),
@@ -103,7 +100,7 @@ fn test_a_reversed_prd_is_refused_through_the_harness() -> [io, proc, fs_write] 
 # is broken" costs a full measurement to tell apart. This asserts the argument
 # error is GONE rather than merely that the gate passed -- if the wrapper
 # regresses, the message says so by name.
-fn test_the_gate_does_not_fail_on_its_own_arguments() -> [io, proc, fs_write] Result[Unit, Str] {
+fn test_the_gate_does_not_fail_on_its_own_arguments() -> [io, proc] Result[Unit, Str] {
   match run_gate(good_body(), "prdgate-args") {
     Ok(_) => Ok(()),
     Err(e) => if str.contains(e, "must be JSON") {
@@ -114,7 +111,7 @@ fn test_the_gate_does_not_fail_on_its_own_arguments() -> [io, proc, fs_write] Re
   }
 }
 
-fn run_all() -> [io, proc, fs_write] Int {
+fn run_all() -> [io, proc] Int {
   let results := [("a good PRD passes the gate through the harness", test_a_good_prd_passes_the_gate_through_the_harness()), ("a reversed PRD is refused through the harness", test_a_reversed_prd_is_refused_through_the_harness()), ("the gate does not fail on its own arguments", test_the_gate_does_not_fail_on_its_own_arguments())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {

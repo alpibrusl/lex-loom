@@ -45,7 +45,7 @@ APP
 run_case() { # mode -> checker output
   local mode="$1"
   printf '{"start": "MODE=%s python3 app.py", "port": 8093, "endpoint": "/f/probe", "honeypot_field": "website", "burst": 40}\n' "$mode" > "$W/abuse-probe.json"
-  python3 bin/check_abuse_controls.py "$W" 2>&1 || true
+  bash bin/check-abuse-controls.sh "$W" 2>&1 || true
 }
 
 echo "== 1. a compliant endpoint passes all four checks"
@@ -65,7 +65,7 @@ if [[ "$vline" != *"genuine-accepted"* ]] && [[ "$out" == *"checkable:genuine-ac
 
 echo "== 4. no probe file: the gate says what the build node must declare"
 rm -f "$W/abuse-probe.json"
-out=$(python3 bin/check_abuse_controls.py "$W" 2>&1 || true)
+out=$(bash bin/check-abuse-controls.sh "$W" 2>&1 || true)
 if [[ "$out" == *"no abuse-probe.json in the workspace"* ]]; then ok "missing probe is a clear refusal, not a pass"; else bad "missing probe not refused: $out"; fi
 
 echo

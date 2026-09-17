@@ -1742,7 +1742,7 @@ fn affected_impl_subgraph(g :: graph.SprintGraph, node_id :: Str) -> graph.Sprin
 # produces the disk is held to the same standard.
 #
 # The gate is per-GRAPH and an LLM picks it; this is per-ROLE and always runs.
-# tzlaunch iteration 3 is the case for the distinction: bin/check_imports.py
+# tzlaunch iteration 3 is the case for the distinction: bin/check_imports.lex
 # existed, worked, and would have caught the module that could not import --
 # the Architect just did not attach it to that node. A check a model has to
 # remember to opt into is a suggestion, not a validation.

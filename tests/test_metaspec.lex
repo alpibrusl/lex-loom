@@ -445,7 +445,7 @@ fn test_loom_verifier_shell_gate_is_allowed_on_a_build() -> Result[Unit, Str] {
   let gph := g("mv1", [node("b", "py_build"), node("ta", "py_test_author"), node("q", "py_qa"), node("d", "demo")], [edge("ta", "q"), edge("b", "q"), edge("q", "d")])
   let gated := { id: gph.id, phase: gph.phase, nodes: list.map(gph.nodes, fn (n :: graph.Node) -> graph.Node {
     if n.id == "b" {
-      { id: n.id, role: n.role, gate: "spec sh \"python3 $LOOM_ROOT/bin/check_imports.py .\"", expand: n.expand, activate_when: n.activate_when }
+      { id: n.id, role: n.role, gate: "spec sh \"bash $LOOM_ROOT/bin/check-imports.sh .\"", expand: n.expand, activate_when: n.activate_when }
     } else {
       n
     }

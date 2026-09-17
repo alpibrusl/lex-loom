@@ -26,7 +26,7 @@ if (cd "$W/oracle" && python3 "$OLDPWD/bin/check_derived_values.py" . >/dev/null
 
 echo "== 3. check_imports names the way out of a scratch file"
 mkdir -p "$W/imp"; printf 'import definitely_not_a_module\n' > "$W/imp/probe.py"
-out=$(cd "$W/imp" && python3 "$OLDPWD/bin/check_imports.py" . 2>&1 || true)
+out=$(cd "$W/imp" && bash "$OLDPWD/bin/check-imports.sh" . 2>&1 || true)
 case "$out" in *"delete:true"*) ok "the denial tells the build it may delete the file" ;; *) bad "the denial only says fix the import, which a scratch file cannot" ;; esac
 
 echo "== 4. a suite that cannot be collected is denied at the author, not discovered by QA"
@@ -50,8 +50,8 @@ echo "== 6. a package whose __init__ cannot import is denied at the build, not f
 mkdir -p "$W/pkgbad/tzconvert" "$W/pkgok/tzconvert"
 printf 'from .app import app, VALID_FORMATS\n' > "$W/pkgbad/tzconvert/__init__.py"; printf 'app = 1\n' > "$W/pkgbad/tzconvert/app.py"
 printf 'from .app import app\n' > "$W/pkgok/tzconvert/__init__.py"; printf 'app = 1\n' > "$W/pkgok/tzconvert/app.py"
-if (cd "$W/pkgbad" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then bad "a package importing a name its module never defines was accepted -- tzc15 iter 1 sealed exactly this"; else ok "a package that cannot be imported is denied where it was written"; fi
-if (cd "$W/pkgok" && python3 "$OLDPWD/bin/check_imports.py" . >/dev/null 2>&1); then ok "a healthy package imports cleanly"; else bad "a healthy package was denied"; fi
+if (cd "$W/pkgbad" && bash "$OLDPWD/bin/check-imports.sh" . >/dev/null 2>&1); then bad "a package importing a name its module never defines was accepted -- tzc15 iter 1 sealed exactly this"; else ok "a package that cannot be imported is denied where it was written"; fi
+if (cd "$W/pkgok" && bash "$OLDPWD/bin/check-imports.sh" . >/dev/null 2>&1); then ok "a healthy package imports cleanly"; else bad "a healthy package was denied"; fi
 
 echo "== 7. a pin is executed at the author, not discovered by QA"
 # tzc16 iteration 1, verbatim shape: derived name pinned to a literal typed

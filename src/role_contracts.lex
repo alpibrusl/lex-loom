@@ -1,7 +1,7 @@
 # role_contracts.lex — what a role OWES, declared by the role itself.
 #
 # Every node already has a gate, but the Architect chooses it per graph, and the
-# Architect is a model. Found live (tzlaunch iter-3): bin/check_imports.py
+# Architect is a model. Found live (tzlaunch iter-3): bin/check_imports.lex
 # exists, works, and catches exactly the defect that sank the run --
 # `FastAPIError: Invalid args for response field` on a module that py_compile
 # happily accepted -- and the Architect simply did not attach it to that

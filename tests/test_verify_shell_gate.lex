@@ -277,7 +277,7 @@ fn test_no_test_file_is_a_failure() -> [io, proc] Result[Unit, Str] {
 # nobody installed compiles clean and then fails at launch, several nodes away.
 fn test_import_gate_catches_a_missing_package() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\nimport nonexistent_pkg_xyz\n\ndef convert(x):\n    return x\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-missing") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "imp-missing") {
     Ok(_) => Err("a module that cannot import must fail the gate"),
     Err(e) => if str.contains(e, "ModuleNotFoundError") {
       Ok(())
@@ -301,7 +301,7 @@ fn test_compiles_gate_accepts_what_the_import_gate_rejects() -> [io, proc] Resul
 
 fn test_import_gate_passes_a_real_module() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\nimport json\n\ndef convert(x):\n    return json.dumps(x)\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "imp-good") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "imp-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a module that imports cleanly must pass: ", e)),
   }
@@ -315,7 +315,7 @@ fn test_build_path_gate_can_reach_repo_tools() -> [io, proc] Result[Unit, Str] {
   let dir := lexskill.py_work_dir(sprint)
   let __mk := proc.run("bash", ["-c", str.join(["rm -rf ", dir, "; mkdir -p ", dir], "")])
   let __w := io.write(str.join([dir, "/main.py"], ""), "import json\n")
-  match runner.verify_shell("test -f $LOOM_ROOT/bin/check_imports.py", "py_build", sprint) {
+  match runner.verify_shell("test -f $LOOM_ROOT/bin/check_imports.lex", "py_build", sprint) {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a build-node gate must be able to reach the repo's own tools: ", e)),
   }
@@ -459,7 +459,7 @@ fn test_an_empty_gate_dir_still_reports_no_files() -> [io, proc] Result[Unit, St
 # implementation for tests that never ran. check_imports skipped it by name.
 fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\n[pytest]\nasyncio_mode = auto\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-bad") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-bad") {
     Ok(_) => Err("a conftest.py that cannot be imported kills every test in the directory and must be caught"),
     Err(e) => if str.contains(e, "conftest") {
       Ok(())
@@ -476,7 +476,7 @@ fn test_a_broken_conftest_is_caught() -> [io, proc] Result[Unit, Str] {
 # Fourth local-vs-CI divergence of this shape in this repo.
 fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
   let out := "Built.\n\n```main.py\ndef convert(x):\n    return x\n```\n\n```conftest.py\nimport os\n\nMARKER = os.sep\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-good") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-good") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("an importable conftest must pass: ", e)),
   }
@@ -487,7 +487,7 @@ fn test_a_real_conftest_is_accepted() -> [io, proc] Result[Unit, Str] {
 # something absent must NOT be treated as a broken module.
 fn test_a_test_file_importing_a_missing_impl_is_still_allowed() -> [io, proc] Result[Unit, Str] {
   let out := "Tests.\n\n```test_a.py\nfrom nonexistent_impl import convert\n\ndef test_x():\n    assert convert(1) == 1\n```\n"
-  match runner.verify_shell_on_output("python3 $LOOM_ROOT/bin/check_imports.py .", out, "cft-testonly") {
+  match runner.verify_shell_on_output("bash $LOOM_ROOT/bin/check-imports.sh .", out, "cft-testonly") {
     Ok(_) => Ok(()),
     Err(e) => Err(str.concat("a test written before its implementation is the point of an independent test author: ", e)),
   }

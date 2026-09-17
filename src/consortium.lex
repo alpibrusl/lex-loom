@@ -167,12 +167,12 @@ fn human_product_attr() -> Str {
 # Run 2's third contract. Run 1 stopped at "software built"; this pays for
 # the product being OPERABLE -- measurable, restorable, documented for launch,
 # reachable over TLS. Every criterion is re-derived by the buyer with
-# bin/check_operable_delivery.py, which re-runs the roles' own grounded gates
+# bin/check_operable_delivery.lex, which re-runs the roles' own grounded gates
 # rather than trusting their word. No human criterion: operability is
 # mechanical. Offline, reachable-over-tls is unmet and the contract settles at
 # 50% -- a hostname is a founder-provided need, never assumed.
 fn run2_operable_criteria() -> List[request_bid.Criterion] {
-  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:metrics-instrumented", "every success metric the PRD states names an event the product's code really emits (bin/check_metrics_instrumented.lex)"), crit("checkable:restore-performed", "the ops role's backup restores into a fresh database and its row counts match the recorded evidence (bin/check_restore_performed.py)"), crit("checkable:runbook-present", "the passing sprint holds an accepted release_manager node: a runbook with owners, times, a rollback and evidence-backed go/no-go"), crit("checkable:data-map-present", "the passing sprint holds an accepted data_protection node: data map, lawful basis, sub-processors and a DPA, all marked DRAFT"), crit("checkable:reachable-over-tls", "https://<domain>/healthz answers ok:true over a valid certificate; unmet until the founder provides a hostname")]
+  [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:acceptance-passed", "the passing sprint's sealed artifact was re-executed in a clean dir and its own suite passed"), crit("checkable:metrics-instrumented", "every success metric the PRD states names an event the product's code really emits (bin/check_metrics_instrumented.lex)"), crit("checkable:restore-performed", "the ops role's backup restores into a fresh database and its row counts match the recorded evidence (bin/check_restore_performed.lex)"), crit("checkable:runbook-present", "the passing sprint holds an accepted release_manager node: a runbook with owners, times, a rollback and evidence-backed go/no-go"), crit("checkable:data-map-present", "the passing sprint holds an accepted data_protection node: data map, lawful basis, sub-processors and a DPA, all marked DRAFT"), crit("checkable:reachable-over-tls", "https://<domain>/healthz answers ok:true over a valid certificate; unmet until the founder provides a hostname")]
 }
 
 fn operable_request_description() -> Str {

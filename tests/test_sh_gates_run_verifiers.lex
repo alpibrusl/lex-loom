@@ -51,7 +51,7 @@ fn test_a_dot_slash_script_is_rejected() -> Result[Unit, Str] {
 # The negative controls: every gate the Architect legitimately produces today
 # must stay valid, or the rule rejects the runs that work.
 fn test_legitimate_gates_stay_valid() -> Result[Unit, Str] {
-  let ok_gates := ["spec sh \"python3 $LOOM_ROOT/bin/check_imports.py .\"", "spec sh \"python3 $LOOM_ROOT/bin/check_derived_values.py .\"", "spec sh \"pytest -q\"", "spec sh \"python3 -m pytest -q\"", "spec sh \"docker build -t tzconvert .\"", "spec sh \"npm ci && npm run build\"", "spec sh \"lex test\""]
+  let ok_gates := ["spec sh \"bash $LOOM_ROOT/bin/check-imports.sh .\"", "spec sh \"python3 $LOOM_ROOT/bin/check_derived_values.py .\"", "spec sh \"pytest -q\"", "spec sh \"python3 -m pytest -q\"", "spec sh \"docker build -t tzconvert .\"", "spec sh \"npm ci && npm run build\"", "spec sh \"lex test\""]
   let rejected := list.filter(ok_gates, fn (g :: Str) -> Bool {
     has_rule(meta.check(gate_graph(g)), "sh-gate-runs-a-script-nobody-produces")
   })

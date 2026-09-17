@@ -510,7 +510,7 @@ fn rule_compiles_gate_matches_role(g :: graph.SprintGraph) -> List[Violation] {
 # hazard is a MODEL-INVENTED command, not shell gates as such.
 #
 # Drawing the line at "no spec sh on a build node" also made the repo
-# contradict itself. #286 added bin/check_imports.py and documented it to the
+# contradict itself. #286 added bin/check_imports.lex and documented it to the
 # Architect as "strictly stronger than 'spec compiles' -- use this on py_build
 # whenever a launch or deploy node is in the graph", because py_compile only
 # PARSES and a module that cannot import surfaces four nodes later as

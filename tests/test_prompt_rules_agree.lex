@@ -1,7 +1,7 @@
 # test_prompt_rules_agree.lex — loom must not tell the Architect to do something
 # loom then rejects it for doing.
 #
-# Found live twice, both self-inflicted. #286 added bin/check_imports.py and
+# Found live twice, both self-inflicted. #286 added bin/check_imports.lex and
 # documented it to the Architect as "strictly stronger than 'spec compiles' --
 # use this on py_build whenever a launch or deploy node is in the graph". Rule
 # 12 required build nodes to use 'spec compiles' and nothing else. tzauthor's

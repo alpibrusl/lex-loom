@@ -536,7 +536,7 @@ fn verify_build_compiles(kind :: Str, sprint_id :: Str) -> [proc] Result[Unit, S
 # (build/py_build/fe_build work dir). Trusted-sprint use: the gate is author-
 # defined and runs at the same trust level as the build agent's own code.
 # LOOM_ROOT is exported before the cd so a gate can reach the repo's own tools
-# (bin/check_imports.py and friends) — the command runs inside the work dir, so
+# (bin/check_imports.lex and friends) — the command runs inside the work dir, so
 # without it $LOOM_ROOT expands to nothing and the gate silently runs
 # `python3 /bin/...`. verify_shell_on_output already did this; this path did
 # not, so the same gate string worked on one kind of node and failed on the

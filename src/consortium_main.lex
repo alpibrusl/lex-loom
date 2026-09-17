@@ -173,11 +173,11 @@ fn consortium_deliver_operable_cmd() -> [env, io, sql, time, fs_read, fs_write, 
     io.print("[consortium] FATAL: COMPANY_DB and WORKSPACE_DIR are required (SoftwareCo's company.db and workspace)")
   } else {
     let args := if str.is_empty(domain) {
-      ["bin/check_operable_delivery.py", company_db, ws]
+      ["bin/check-operable-delivery.sh", company_db, ws]
     } else {
-      ["bin/check_operable_delivery.py", company_db, ws, "--domain", domain]
+      ["bin/check-operable-delivery.sh", company_db, ws, "--domain", domain]
     }
-    match proc.run("python3", args) {
+    match proc.run("bash", args) {
       Err(m) => io.print(str.concat("[consortium] FATAL: the checker could not run: ", m)),
       Ok(r) => {
         let output := str.concat(r.stdout, r.stderr)

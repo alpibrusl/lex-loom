@@ -4,7 +4,7 @@
 still does, but only after **lex-iac** has held what it is about to do
 against the company's grant.
 
-1. `bin/deploy_plan.py` writes the deploy as a Terraform-shaped plan under
+1. `bin/deploy_plan.lex` writes the deploy as a Terraform-shaped plan under
    the provider `registry.terraform.io/alpibrusl/loom`: update the host,
    create the compose service, open the port, create a Caddy site when a
    domain is declared. Deterministic code, never model output.

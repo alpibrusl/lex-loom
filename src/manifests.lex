@@ -63,7 +63,7 @@ fn manifest_json_full(goal :: Str, filesystem :: Str, network :: Str, exec_level
 }
 
 # ── The deploy grant: what a company's deploy may do to its host ─────────────
-# lex-iac holds the deploy's plan (bin/deploy_plan.py) against this grant
+# lex-iac holds the deploy's plan (bin/deploy_plan.lex) against this grant
 # before anything reaches the server. The default ceiling for the Hetzner
 # path: update the one host, create the compose service, open its port,
 # and create a Caddy site when a domain is declared. Every verb is named

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dp1-deploy-plan-gate-roundtrip.sh -- the deploy plan gate, checked: the
 # grant loom generates for the deploy role (src/manifests.lex
-# deploy_grant_json) holds the deploy's plan (bin/deploy_plan.py) in lex-iac
+# deploy_grant_json) holds the deploy's plan (bin/deploy_plan.lex) in lex-iac
 # before anything reaches a server. Needs `lex-iac` on PATH (or LEX_IAC).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ unquote() { python3 -c 'import sys,json; print(json.loads(sys.stdin.read()))'; }
 command -v "${LEX_IAC:-lex-iac}" >/dev/null || { echo "lex-iac not on PATH (set LEX_IAC)"; exit 2; }
 
 echo "== 1. the deploy plan is deterministic code"
-python3 bin/deploy_plan.py --host 203.0.113.9 --service api --port 8081 --out "$W/p1.json"; python3 bin/deploy_plan.py --host 203.0.113.9 --service api --port 8081 --out "$W/p2.json"
+bash bin/deploy-plan.sh --host 203.0.113.9 --service api --port 8081 --out "$W/p1.json"; bash bin/deploy-plan.sh --host 203.0.113.9 --service api --port 8081 --out "$W/p2.json"
 cmp -s "$W/p1.json" "$W/p2.json" && ok "same inputs, byte-identical plan" || bad "the plan is not deterministic"
 python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[c["address"] for c in p["resource_changes"]]; assert a==["hetzner_host.203_0_113_9","docker_compose.api","host_port.p8081"], a' "$W/p1.json" && ok "host update + compose create + port create, no domain" || bad "unexpected resources"
 
@@ -31,7 +31,7 @@ out=$(bash bin/iac-gate.sh "$W/narrow.json" "$W/g3" --host 203.0.113.9 --service
 [ "$rc" != 0 ] && [[ "$out" == IAC_REFUSED*caddy.site.create* ]] && ok "narrowed grant (no caddy) refuses the domain deploy naming caddy.site.create" || bad "narrowed grant did not refuse: $out"
 
 echo "== 4. tearing the host down is never in the default grant"
-python3 bin/deploy_plan.py --host 203.0.113.9 --service api --port 8081 --out "$W/del.json"; python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["resource_changes"][0]["change"]["actions"]=["delete"]; json.dump(p,open(sys.argv[1],"w"))' "$W/del.json"
+bash bin/deploy-plan.sh --host 203.0.113.9 --service api --port 8081 --out "$W/del.json"; python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["resource_changes"][0]["change"]["actions"]=["delete"]; json.dump(p,open(sys.argv[1],"w"))' "$W/del.json"
 out=$({ "${LEX_IAC:-lex-iac}" check --grant "$W/grant.json" --plan "$W/del.json" --json 2>/dev/null || true; } | python3 -c 'import sys,json; r=json.load(sys.stdin)["refusals"]; print(r[0]["effect"] if r else "admitted")')
 [ "$out" = hetzner.host.delete ] && ok "a plan that deletes the host is refused (hetzner.host.delete)" || bad "host delete admitted: $out"
 

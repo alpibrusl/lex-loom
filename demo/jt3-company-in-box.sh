@@ -40,12 +40,25 @@ pass=0; fail=0; ok() { printf '  [PASS] %s\n' "$1"; pass=$((pass+1)); }; bad() {
 for f in research-manifest.json goal.txt; do [ -f "$JT_DIR/$f" ] || { echo "missing $JT_DIR/$f" >&2; exit 2; }; done
 
 echo "== 1. grant: loom's research manifest, model egress -> $MODEL_HOST"
-python3 - "$JT_DIR/research-manifest.json" "$MODEL_HOST" "$JT_DIR/research-manifest.effective.json" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1])); m["egress"] = [sys.argv[2] if e.endswith(":4000") else e for e in m["egress"]]
-m["budget"]["wall_clock_secs"] = 7200
-json.dump(m, open(sys.argv[3], "w"), indent=2); print(json.dumps(m["egress"]))
-PY
+# Point the manifest's model endpoint at the real LiteLLM host: rewrite the one
+# egress entry ending in :4000, leaving the rest alone. The Python did it with
+# a list comprehension; this reads the list, finds the index, and sets it.
+retarget_egress() {  # $1 = in, $2 = out, $3 = host
+  cp "$1" "$2"
+  i=0
+  while e=$("$(dirname "$0")/../bin/json-get.sh" "$2" "egress.$i" 2>/dev/null); do
+    case "$e" in
+      *:4000) "$(dirname "$0")/../bin/json-set.sh" --path "egress.$i" "$3" < "$2" > "$2.tmp" && mv "$2.tmp" "$2" ;;
+    esac
+    i=$((i+1))
+  done
+  "$(dirname "$0")/../bin/json-get.sh" "$2" egress
+}
+
+
+retarget_egress "$JT_DIR/research-manifest.json" "$JT_DIR/research-manifest.effective.json" "$MODEL_HOST"
+"$(dirname "$0")/../bin/json-set.sh" --path budget.wall_clock_secs 7200 < "$JT_DIR/research-manifest.effective.json" > "$JT_DIR/rm.tmp" \
+  && mv "$JT_DIR/rm.tmp" "$JT_DIR/research-manifest.effective.json"
 MANIFEST="$JT_DIR/research-manifest.effective.json"
 
 echo "== 2. drop the goal into the image; clear a previous run"
@@ -93,16 +106,14 @@ for attempt in 1 2; do
   if command grep -q 'could not provision the box' "$JT_DIR/company.json"; then echo "  provisioning raced (attempt $attempt); cleaning and retrying in 10s"; sleep 10; preflight_clean; else break; fi
 done
 echo "  box finished in $(( $(date +%s) - started ))s"
-python3 - "$JT_DIR/company.json" "$JT_DIR/company.stdout.txt" <<'PY'
-import json, sys
-raw = open(sys.argv[1]).read(); i = raw.rfind('{\n  "ok"')
-env = json.loads(raw[i:]) if i >= 0 else {"ok": None, "error": "no envelope", "tail": raw[-600:]}
-d = env.get("data") or {}
-open(sys.argv[2], "w").write(d.get("stdout", "") if isinstance(d, dict) else "")
-print("  envelope ok=%s exit=%s" % (env.get("ok"), d.get("exit_code") if isinstance(d, dict) else None))
-if env.get("ok") is not True: print("  error:", json.dumps(env.get("error", env))[:400])
-if isinstance(d, dict) and d.get("stderr"): print("  stderr tail:", d["stderr"][-300:].replace("\n", " | "))
-PY
+# The envelope lex-os exec printed after its logs, and what it carried.
+ENV=$("$(dirname "$0")/../bin/json-last.sh" < "$JT_DIR/company.json")
+printf '%s' "$ENV" | "$(dirname "$0")/../bin/json-get.sh" - data.stdout > "$JT_DIR/company.stdout.txt" 2>/dev/null || : > "$JT_DIR/company.stdout.txt"
+OK=$(printf '%s' "$ENV" | "$(dirname "$0")/../bin/json-get.sh" - ok 2>/dev/null)
+echo "  envelope ok=$OK exit=$(printf '%s' "$ENV" | "$(dirname "$0")/../bin/json-get.sh" - data.exit_code 2>/dev/null)"
+[ "$OK" = "true" ] || echo "  error: $(printf '%s' "$ENV" | "$(dirname "$0")/../bin/json-get.sh" - error 2>/dev/null | head -c 400)"
+ERRTAIL=$(printf '%s' "$ENV" | "$(dirname "$0")/../bin/json-get.sh" - data.stderr 2>/dev/null | tail -c 300 | tr '\n' '|')
+[ -z "$ERRTAIL" ] || echo "  stderr tail: $ERRTAIL"
 sed -n '1,60p' "$JT_DIR/company.stdout.txt" | cut -c1-180
 
 echo "== 4. what the box wrote, read from the jailer's copy of the rootfs"

@@ -113,6 +113,51 @@ fn main_json_str(text :: Str, field :: Str) -> [io] Int {
   json_get(text, field)
 }
 
+# The LAST JSON object in mixed output: a tool that prints logs and then an
+# envelope, which is what lex-os exec does. The Python searched for the literal
+# bytes `{\n  "ok"`, so it depended on the producer's INDENTATION -- a
+# formatting change upstream would have silently turned every envelope into
+# "no envelope".
+#
+# This tries to parse from each `{` working backwards and takes the first that
+# parses, so it depends on the output being JSON rather than on how it was
+# pretty-printed.
+fn main_last_object(text :: Str) -> [io] Int {
+  match last_object_from(text, str.len(text) - 1) {
+    None => {
+      let __ := io.print(jv.stringify(JObj([("ok", JNull), ("error", JStr("no envelope")), ("raw_tail", JStr(tail_of(text, 400)))])))
+      1
+    },
+    Some(j) => {
+      let __ := io.print(jv.stringify(j))
+      0
+    },
+  }
+}
+
+fn last_object_from(text :: Str, i :: Int) -> Option[jv.Json] {
+  if i < 0 {
+    None
+  } else {
+    if str.slice(text, i, i + 1) == "{" {
+      match jv.parse(str.slice(text, i, str.len(text))) {
+        Ok(j) => Some(j),
+        Err(_) => last_object_from(text, i - 1),
+      }
+    } else {
+      last_object_from(text, i - 1)
+    }
+  }
+}
+
+fn tail_of(s :: Str, n :: Int) -> Str {
+  if str.len(s) <= n {
+    s
+  } else {
+    str.slice(s, str.len(s) - n, str.len(s))
+  }
+}
+
 # A string as a JSON string: quoting and escaping, nothing else. Replaces
 # `python3 -c 'print(json.dumps(sys.stdin.read()))'`, which demo.sh used to
 # embed a free-text request inside a payload -- the one place a shell script
@@ -422,6 +467,12 @@ fn segments_of(path :: Str) -> List[Str] {
 # The first column of every row, one per line. The demos' `sqlq` helper, which
 # eight of them had defined for themselves with slightly different NULL and
 # missing-file handling.
+# `WITH q(v) AS (<query>)` names the caller's first column without the caller
+# having to alias it. The alternative was requiring `AS v` at every call site,
+# which would have put a tool's implementation detail into twelve queries that
+# read perfectly well already.
+#
+# Above the fn, because lex fmt deletes comments inside a body (lex-lang#755).
 fn main_sql_rows(db :: Str, query :: Str) -> [sql, fs_read, fs_write, io] Int {
   if not str.starts_with(str.to_lower(str.trim(query)), "select") {
     1
@@ -429,10 +480,6 @@ fn main_sql_rows(db :: Str, query :: Str) -> [sql, fs_read, fs_write, io] Int {
     match sql.open(str.join(["file:", db, "?mode=ro"], "")) {
       Err(_) => 1,
       Ok(h) => {
-        # `WITH q(v) AS (<query>)` names the caller's first column without the
-        # caller having to alias it. The alternative was requiring `AS v` at
-        # every call site, which would have put a tool's implementation detail
-        # into twelve queries that read perfectly well already.
         let rows :: Result[List[ValRow], SqlError] := sql.query(h, str.join(["WITH q(v) AS (", query, ") SELECT CAST(COALESCE(v, '') AS TEXT) AS v FROM q"], ""), [])
         match rows {
           Err(_) => 1,

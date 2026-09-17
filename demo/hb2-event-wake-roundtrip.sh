@@ -90,9 +90,12 @@ grep -q "event(s) consumed by this run" "$SCHED_LOG" && ok "the run consumed the
 for i in $(seq 1 120); do grep -q "MAX_TICKS reached" "$SCHED_LOG" 2>/dev/null && break; sleep 0.5; done
 
 say "3a. CX opt-in: a support item arrives through the REAL cx_a2a A2A server"
-mkdir -p "$WS/product/loom"
-printf '{"items":[{"id":"t-101","text":"my export is broken","status":"open"}]}' > "$WS/product/loom/support"
-( cd "$WS/product" && exec python3 -m http.server "$SUPPORT_PORT" >/dev/null 2>&1 ) &
+# The support endpoint the CX role fetches from. This served a file out of a
+# directory with `python3 -m http.server`; the fixture server answers the same
+# path with the same body and needs no directory at all.
+FIXTURE_PORT="$SUPPORT_PORT" FIXTURE_PATH=/loom/support \
+  FIXTURE_BODY='{"items":[{"id":"t-101","text":"my export is broken","status":"open"}]}' \
+  bash bin/fixture-server.sh >/dev/null 2>&1 &
 PIDS+=("$!")
 ( CX_API_TOKEN="$CX_TOKEN" PORT="$CX_PORT" CX_ALLOWED_URL="http://localhost:$SUPPORT_PORT" \
     LOOM_EVENTS_DB="$WS/cxin/company.db" LOOM_EVENTS_COMPANY=cxin \

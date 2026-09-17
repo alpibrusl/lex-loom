@@ -91,10 +91,20 @@ DIGEST=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null \
 # "Asia/Kolkata") = 19800), so the derived-values gate has teeth here too.
 LEX_TASK='Write a Lex module tzoffset.lex exposing `fn offset_minutes(tz :: Str) -> Result[Int, Str]` that returns the fixed UTC offset in minutes for exactly these zones: "UTC" -> 0, "Asia/Kolkata" -> 330, "Asia/Kathmandu" -> 345, "America/New_York" -> -300 (standard time), and Err("unknown timezone") for anything else; and `fn shift(epoch :: Int, tz :: Str) -> Result[Int, Str]` that adds the zone offset in SECONDS to a unix epoch (Err propagates). Tests must cover every zone, an unknown zone, and shift on a non-zero epoch.'
 RESEARCH_TASK='PROBLEM SPACE: paid micro-APIs for solo developers who need to validate and normalise user-submitted data (addresses, phone numbers, CSV uploads, free-text dates). Find ONE technically feasible micro-product opportunity in this space and write the opportunity report.'
+# The pm's task is a RAW REQUEST, which is the pm's actual input -- and this
+# one is FormCo's, so the row measures the role on the work it is about to do
+# rather than on a toy. PM_GOAL is what the gate compares against: the pm may
+# narrow it, never reverse it.
+PM_GOAL='Build the smallest possible form-submission backend. A POST to /f/<form-id> with a urlencoded body stores the submission in a local SQLite database with a timestamp and returns 200 with a short plain-text success message; a submission missing a required field returns 400 and names the missing field.'
+PM_TASK="$PM_GOAL"
+printf '%s' "$PM_GOAL" > /tmp/loom-eval-goal.txt
+export LOOM_GOAL_FILE=/tmp/loom-eval-goal.txt
+
 task_for() {
   case "$1" in
     build|test_author|qa) printf '%s' "$LEX_TASK" ;;
     opportunity_research) printf '%s' "$RESEARCH_TASK" ;;
+    pm) printf '%s' "$PM_TASK" ;;
     *) printf '' ;;
   esac
 }
@@ -449,7 +459,7 @@ if [ -z "${ROLES:-}" ] || printf ',%s,' "$ROLES" | grep -qE ',(launch|deploy),';
   done
 fi
 
-echo "== eval suite: model=$MODEL provider=$PROVIDER commit=$COMMIT"
+echo "== eval suite: model=$MODEL provider=$PROVIDER (LOOM_PROVIDER=${LOOM_PROVIDER:-unset}) commit=$COMMIT"
 while IFS=$'\t' read -r role samples _; do
   case "$role" in ''|\#*) continue ;; esac
   # ROLES=py_qa,launch re-measures a subset; the baseline keeps the rest.
@@ -484,6 +494,7 @@ if [ "$UPDATE" = "1" ]; then
   # cannot refuse a comparison it should refuse.
   { echo "# baseline recorded $(date -u +%Y-%m-%dT%H:%M:%SZ) — model $MODEL, provider $PROVIDER, commit $COMMIT"
     echo "# digest	$DIGEST"
+    echo "# provider	$PROVIDER"
     echo "# env	$ENVSIG"
     cat "$BASELINE"
   } > "$BASELINE.tmp" && mv "$BASELINE.tmp" "$BASELINE"
@@ -511,11 +522,25 @@ base_digest=$(awk -F'\t' '/^# digest/{print $2; exit}' "$BASELINE")
 drift=""
 [ -n "$base_env" ] && [ "$base_env" != "$ENVSIG" ] && drift="environment"
 [ -n "$base_digest" ] && [ "$base_digest" != "unknown" ] && [ "$DIGEST" != "unknown" ] && [ "$base_digest" != "$DIGEST" ] && drift="${drift:+$drift and }model weights"
+# The provider was recorded but never compared, so a run could measure a
+# different serving path than the baseline and say nothing. Found the hard way:
+# the knob is LOOM_PROVIDER, and `PROVIDER=ollama bin/eval-suite.sh` sets a
+# variable the script overwrites on the next line -- the run went to litellm,
+# the header said litellm, and only reading the header caught it. A recorded
+# fact that nothing compares is a fact nobody checks.
+base_provider=$(awk -F'\t' '/^# provider/{print $2; exit}' "$BASELINE")
+# Baselines recorded before the line above exist, and state the provider only
+# in the prose of "# baseline recorded ... provider ollama, commit ...". Read
+# that rather than treat an old baseline as having no provider -- an unreadable
+# precondition and a matching one must not look the same.
+[ -n "$base_provider" ] || base_provider=$(sed -n 's/^# baseline recorded .*provider \([^,]*\),.*/\1/p' "$BASELINE" | head -1)
+[ -n "$base_provider" ] && [ "$base_provider" != "$PROVIDER" ] && drift="${drift:+$drift and }provider"
 if [ -n "$drift" ] && [ "${ALLOW_DRIFT:-0}" != "1" ]; then
   echo "== results: $OUT"
   echo "refusing to compare: the $drift differ from the baseline's." >&2
   [ -n "$base_env" ] && { echo "  baseline env: $base_env" >&2; echo "  this run env: $ENVSIG" >&2; }
   [ -n "$base_digest" ] && [ "$base_digest" != "$DIGEST" ] && echo "  baseline digest: $base_digest   this run: $DIGEST" >&2
+  [ -n "$base_provider" ] && [ "$base_provider" != "$PROVIDER" ] && { echo "  baseline provider: $base_provider   this run: $PROVIDER" >&2; echo "  (the knob is LOOM_PROVIDER, not PROVIDER)" >&2; }
   echo "Re-record with --update under these conditions, or set ALLOW_DRIFT=1 to compare anyway." >&2
   exit 1
 fi

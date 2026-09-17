@@ -1,0 +1,7 @@
+# model	qwen3.8:27b-mlx
+# digest	5642e97495e1
+# provider	ollama
+# commit	7f03337
+# env	OLLAMA_THINK=unset MAX_STEPS_BUILD=unset MAX_STEPS_NODE=unset MAX_STEPS_LAUNCH=unset LLM_TIMEOUT_MS=unset
+# date	2026-09-16T21:16:30Z
+pm	0	20

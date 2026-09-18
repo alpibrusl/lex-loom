@@ -28,6 +28,8 @@ import "lex-schema/error" as e
 
 import "std.process" as proc
 
+import "std.int" as int
+
 # A stray "/" in sprint_id (company iterations are ids like "<company>/iter-N")
 # would otherwise split into a nested path component; flatten it instead.
 # What lex_run may grant: exactly what the program under test declares.
@@ -886,10 +888,21 @@ fn make_read_file_tool(sprint_id :: Str) -> t.Tool {
   })
 }
 
+# lex-loom#523: lex_run never serves. A QA agent once ran `main.lex main` (a
+# server entry point) through it and the worker sat inside the tool call until
+# the 30-min phase await timed out. Two mechanisms, no policy: fn_name='main'
+# is refused before anything runs, and every run is killed after a wall-clock
+# limit (perl's alarm — portable across macOS and the Linux CI, unlike
+# coreutils' timeout). Operators may override the limit with
+# LOOM_LEX_RUN_TIMEOUT_S; tests pass a small one explicitly.
 fn make_lex_run_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
+  make_lex_run_tool_with_limit(evidence_path, sprint_id, 120)
+}
+
+fn make_lex_run_tool_with_limit(evidence_path :: Str, sprint_id :: Str, limit_s :: Int) -> t.Tool {
   let dir := work_dir(sprint_id)
   let params := { title: "LexRun", description: "Run a function in a .lex file, return {ok, output}", fields: [s.required_str("filename", []), s.required_str("fn_name", []), s.required_str("args", [])] }
-  t.define("lex_run", "Run `lex run <filename> <fn_name> <args>` on a file already written via lex_check. For tests use fn_name='run_all' and args=''. args are space-separated JSON values. Returns {ok, output}. Base your verdict on this output — never guess.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
+  t.define("lex_run", "Run `lex run <filename> <fn_name> <args>` on a file already written via lex_check. For tests use fn_name='run_all' and args=''. args are space-separated JSON values. Returns {ok, output}. Base your verdict on this output — never guess. This never starts a server: fn_name='main' (a server entry point never returns) is refused, and any run is killed after a wall-clock limit — run the TEST file's run_all; a live server is run_server's job.", params, fn (args :: jv.Json) -> [net, io, proc] Result[jv.Json, e.Errors] {
     let filename := match jv.get_field(args, "filename") {
       Some(JStr(v)) => v,
       _ => "main.lex",
@@ -902,24 +915,28 @@ fn make_lex_run_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
       Some(JStr(v)) => v,
       _ => "",
     }
-    let path := str.join([dir, "/", filename], "")
-    let cmd := str.join([declared_effects_prelude(path), "${LEX:-lex} run --allow-effects \"$EFFECTS\" ", path, " ", fn_name, " ", extra, " 2>&1; echo '##EXIT:'$?"], "")
-    match proc.run("bash", ["-c", cmd]) {
-      Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-      Ok(r) => {
-        let combined := str.concat(r.stdout, r.stderr)
-        let ok := str.contains(combined, "##EXIT:0")
-        let __ev := if str.is_empty(evidence_path) {
-          ()
-        } else {
-          record_lex_run_evidence(evidence_path, ok)
-        }
-        Ok(JObj([("ok", JStr(if ok {
-          "true"
-        } else {
-          "false"
-        })), ("output", JStr(combined))]))
-      },
+    if fn_name == "main" {
+      Ok(JObj([("ok", JStr("false")), ("output", JStr("lex_run refused: fn_name='main' is a server entry point and never returns (lex-loom#523). Run the TEST file with fn_name='run_all'; a live server is run_server's job."))]))
+    } else {
+      let path := str.join([dir, "/", filename], "")
+      let cmd := str.join([declared_effects_prelude(path), "LIMIT=\"${LOOM_LEX_RUN_TIMEOUT_S:-", int.to_str(limit_s), "}\"\n", "perl -e 'alarm shift; exec @ARGV' \"$LIMIT\" ${LEX:-lex} run --allow-effects \"$EFFECTS\" ", path, " ", fn_name, " ", extra, " 2>&1; RC=$?\n", "if [ \"$RC\" -eq 142 ]; then echo \"##TIMEOUT: killed after ${LIMIT}s — a run that never returns is a server, not a test; run the TEST file's run_all (lex-loom#523)\"; fi\n", "echo \"##EXIT:$RC\""], "")
+      match proc.run("bash", ["-c", cmd]) {
+        Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+        Ok(r) => {
+          let combined := str.concat(r.stdout, r.stderr)
+          let ok := str.contains(combined, "##EXIT:0")
+          let __ev := if str.is_empty(evidence_path) {
+            ()
+          } else {
+            record_lex_run_evidence(evidence_path, ok)
+          }
+          Ok(JObj([("ok", JStr(if ok {
+            "true"
+          } else {
+            "false"
+          })), ("output", JStr(combined))]))
+        },
+      }
     }
   })
 }

@@ -39,6 +39,8 @@ import "lex-trail/src/log" as tlog
 
 import "./transport" as tr
 
+import "./issues" as issues
+
 import "./events" as events
 
 import "./pricing" as pricing
@@ -1289,13 +1291,22 @@ fn prior_ctx(db :: conn.ConnDb, company_id :: Str, parked_idx :: Int) -> [sql] I
 # without interrupting the iteration in progress; its "stop" decision (C8)
 # first checks for a pending item and GRADUATES to it instead of halting the
 # company — this is what turns "iterate on one goal" into "grow a feature set."
-type BacklogItem = { company_id :: Str, idx :: Int, goal :: Str, status :: Str }
+# `issue_id` (#521): the typed issue this item is the projection of, in the
+# company's lex-vcs store — "" for an item queued before the toolchain could
+# type it (the goal string is still the iteration's request either way).
+type BacklogItem = { company_id :: Str, idx :: Int, goal :: Str, status :: Str, issue_id :: Str }
 
-type BacklogRow = { idx :: Int, goal :: Str, status :: Str }
+type BacklogRow = { idx :: Int, goal :: Str, status :: Str, issue_id :: Str }
 
 # Append a new backlog entry (status "pending"). idx is one past the highest
 # existing idx for this company (0 if none yet).
 fn append_backlog(db :: conn.ConnDb, company_id :: Str, goal :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
+  append_backlog_issue(db, company_id, goal, "")
+}
+
+# Same, projecting a typed issue (#521): the goal is the issue's title, the
+# id links the row to the oracle the gate will verify.
+fn append_backlog_issue(db :: conn.ConnDb, company_id :: Str, goal :: Str, issue_id :: Str) -> [sql, fs_write, time] Result[Unit, Str] {
   let now := time.now_str()
   let next_idx := list.fold(load_backlog(db, company_id), 0, fn (acc :: Int, it :: BacklogItem) -> Int {
     if it.idx > acc {
@@ -1304,7 +1315,7 @@ fn append_backlog(db :: conn.ConnDb, company_id :: Str, goal :: Str) -> [sql, fs
       acc
     }
   }) + 1
-  let q := ormq.for_dialect({ sql: "INSERT INTO company_backlog (company_id, idx, goal, status, created_at) VALUES (?, ?, ?, 'pending', ?)", params: [PStr(company_id), PInt(next_idx), PStr(goal), PStr(now)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "INSERT INTO company_backlog (company_id, idx, goal, status, created_at, issue_id) VALUES (?, ?, ?, 'pending', ?, ?)", params: [PStr(company_id), PInt(next_idx), PStr(goal), PStr(now), PStr(issue_id)] }, db.dialect)
   match sql.exec(db.handle, q.sql, q.params) {
     Err(e) => Err(e.message),
     Ok(_) => Ok(()),
@@ -1312,12 +1323,12 @@ fn append_backlog(db :: conn.ConnDb, company_id :: Str, goal :: Str) -> [sql, fs
 }
 
 fn load_backlog(db :: conn.ConnDb, company_id :: Str) -> [sql] List[BacklogItem] {
-  let q := ormq.for_dialect({ sql: "SELECT idx, goal, status FROM company_backlog WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
+  let q := ormq.for_dialect({ sql: "SELECT idx, goal, status, issue_id FROM company_backlog WHERE company_id=? ORDER BY idx", params: [PStr(company_id)] }, db.dialect)
   let rows :: Result[List[BacklogRow], SqlError] := sql.query(db.handle, q.sql, q.params)
   match rows {
     Err(_) => [],
     Ok(rs) => list.map(rs, fn (r :: BacklogRow) -> BacklogItem {
-      { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status }
+      { company_id: company_id, idx: r.idx, goal: r.goal, status: r.status, issue_id: r.issue_id }
     }),
   }
 }
@@ -1630,9 +1641,25 @@ fn parse_backlog_proposals(content :: Str) -> List[Str]
 # role (never a node-name guess), parsed for backlog proposals. No cx node,
 # no artifact, or no fence: nothing.
 fn cx_backlog_proposals(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[Str] {
+  match cx_artifact(db, sprint_id) {
+    None => [],
+    Some(content) => parse_backlog_proposals(content),
+  }
+}
+
+# #521: the same artifact read as TYPED proposals (goal + optional kind /
+# example / api), the input to issues.create_issue. Same fence, same limits.
+fn cx_typed_proposals(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[issues.Proposal] {
+  match cx_artifact(db, sprint_id) {
+    None => [],
+    Some(content) => issues.parse_proposals(content),
+  }
+}
+
+fn cx_artifact(db :: conn.ConnDb, sprint_id :: Str) -> [sql] Option[Str] {
   let ids := role_node_ids(db, sprint_id, ["cx"])
   if list.is_empty(ids) {
-    []
+    None
   } else {
     let sql_text := str.join(["SELECT content FROM artifacts WHERE sprint_id=? AND node_id IN (", placeholders(list.len(ids)), ") ORDER BY created_at DESC LIMIT 1"], "")
     let params := list.concat([PStr(sprint_id)], list.map(ids, fn (id :: Str) -> SqlParam {
@@ -1641,10 +1668,10 @@ fn cx_backlog_proposals(db :: conn.ConnDb, sprint_id :: Str) -> [sql] List[Str] 
     let q := ormq.for_dialect({ sql: sql_text, params: params }, db.dialect)
     let rows :: Result[List[ContentRow], SqlError] := sql.query(db.handle, q.sql, q.params)
     match rows {
-      Err(_) => [],
+      Err(_) => None,
       Ok(rs) => match list.head(rs) {
-        None => [],
-        Some(r) => parse_backlog_proposals(r.content),
+        None => None,
+        Some(r) => Some(r.content),
       },
     }
   }

@@ -52,6 +52,8 @@ import "./budget" as budget
 
 import "./economy_binding" as eb
 
+import "./issues" as issues
+
 import "./org" as org
 
 type CompanyRunResult = { company_id :: Str, iterations :: Int, last_verdict :: Str, stopped_by :: Str }
@@ -137,20 +139,19 @@ fn decide_next(db :: conn.ConnDb, ccfg :: company.CompanyCfg, current_goal :: St
 # join the backlog as pending items, once each (a goal already queued, or
 # proposed twice in the same output, is not re-added), each on the trail
 # with source "cx" so the founder can see which iterations users chose.
-fn propose_from_cx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, k :: Int) -> [sql, fs_write, time, random, crypto, io] Int {
-  let goals := company.cx_backlog_proposals(db, sprint_id)
+fn propose_from_cx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, k :: Int) -> [sql, fs_write, time, random, crypto, io, env, proc] Int {
+  let proposals := company.cx_typed_proposals(db, sprint_id)
   let existing := list.map(company.load_backlog(db, company_id), fn (it :: company.BacklogItem) -> Str {
     it.goal
   })
-  let out := list.fold(goals, (0, existing), fn (acc :: (Int, List[Str]), g :: Str) -> [sql, fs_write, time, random, crypto, io] (Int, List[Str]) {
+  let out := list.fold(proposals, (0, existing), fn (acc :: (Int, List[Str]), p :: issues.Proposal) -> [sql, fs_write, time, random, crypto, io, env, proc] (Int, List[Str]) {
     match acc {
       (n, seen) => if list.is_empty(list.filter(seen, fn (x :: Str) -> Bool {
-        x == g
+        x == p.goal
       })) {
-        let __a := company.append_backlog(db, company_id, g)
-        let __bt := tr.trail(db, company_id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"cx\",\"goal\":\"", company.json_escape(g), "\"}"], ""))
-        let __bp := io.print(str.join(["[company] backlog: cx proposed \"", g, "\" from real support items"], ""))
-        (n + 1, list.concat(seen, [g]))
+        let __q := queue_typed(db, company_id, k, "cx", p)
+        let __bp := io.print(str.join(["[company] backlog: cx proposed \"", p.goal, "\" from real support items"], ""))
+        (n + 1, list.concat(seen, [p.goal]))
       } else {
         (n, seen)
       },
@@ -158,6 +159,130 @@ fn propose_from_cx(db :: conn.ConnDb, company_id :: Str, sprint_id :: Str, k :: 
   })
   match out {
     (n, _) => n,
+  }
+}
+
+# #521: queue a proposal as a TYPED issue in the company's lex-vcs store and
+# project it onto the backlog. If the toolchain can't type it (no `lex` on
+# PATH, an older toolchain, a malformed api entry) the goal still queues —
+# untyped, with the reason on the trail — so a typing failure never loses a
+# user's request. Returns the issue id ("" when untyped).
+fn queue_typed(db :: conn.ConnDb, company_id :: Str, k :: Int, source :: Str, p :: issues.Proposal) -> [sql, fs_write, time, random, crypto, io, env, proc] Str {
+  let shape := issues.shape_for(p)
+  let created := match issues.store_dir(company_id) {
+    None => Err("LOOM_WORKSPACE unset: no company store to type the issue in"),
+    Some(store) => issues.create_issue(store, company_id, p),
+  }
+  match created {
+    Ok(id) => {
+      let __a := company.append_backlog_issue(db, company_id, p.goal, id)
+      let __bt := tr.trail(db, company_id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"", source, "\",\"goal\":\"", company.json_escape(p.goal), "\",\"issue_id\":\"", id, "\",\"shape\":\"", shape, "\"}"], ""))
+      let __it := tr.trail(db, company_id, "issue_created", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"", source, "\",\"issue_id\":\"", id, "\",\"shape\":\"", shape, "\"}"], ""))
+      let __ip := io.print(str.join(["[company] issue: ", str.slice(id, 0, 12), " (", shape, ") \"", p.goal, "\""], ""))
+      id
+    },
+    Err(m) => {
+      let __a := company.append_backlog(db, company_id, p.goal)
+      let __bt := tr.trail(db, company_id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"", source, "\",\"goal\":\"", company.json_escape(p.goal), "\"}"], ""))
+      let __if := tr.trail(db, company_id, "issue_create_failed", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"", source, "\",\"shape\":\"", shape, "\",\"reason\":", jv.stringify(JStr(str.slice(m, 0, 300))), "}"], ""))
+      let __ip := io.print(str.join(["[company] issue: could not type \"", p.goal, "\" (queued untyped): ", str.slice(m, 0, 160)], ""))
+      ""
+    },
+  }
+}
+
+# #521: the issue a passing iteration realizes. The active backlog item's
+# typed issue when the iteration ran that item; otherwise (the mission in
+# iteration 1, a strategist revise) a free_form issue for the goal text —
+# content-addressed, so the same goal maps to the same issue across runs.
+# Every iteration therefore has an issue to link its ops to; only the typed
+# ones get a machine verdict, the free_form ones are human-closed by design.
+# Returns (issue_id, backlog idx or -1).
+fn iteration_issue(db :: conn.ConnDb, store :: Str, company_id :: Str, k :: Int, goal :: Str) -> [sql, fs_write, time, random, crypto, proc] (Str, Int) {
+  let from_backlog := match company.active_backlog_item(db, company_id) {
+    Some(item) => if str.is_empty(item.issue_id) {
+      ("", -1)
+    } else {
+      (item.issue_id, item.idx)
+    },
+    None => ("", -1),
+  }
+  match from_backlog {
+    (id, idx) => if str.is_empty(id) {
+      match issues.create_issue(store, company_id, issues.plain_proposal(goal)) {
+        Ok(new_id) => {
+          let __t := tr.trail(db, company_id, "issue_created", str.join(["{\"iter\":", int.to_str(k), ",\"source\":\"iteration\",\"issue_id\":\"", new_id, "\",\"shape\":\"free_form\"}"], ""))
+          (new_id, -1)
+        },
+        Err(_) => ("", -1),
+      }
+    } else {
+      (id, idx)
+    },
+  }
+}
+
+# #521: after a PASSING iteration on a Lex path, the sealed build is published
+# into the company's store as the realization of the iteration's issue (every
+# op carries the issue in its Intent), and the issue's oracle is evaluated at
+# that head. The verdict is the toolchain's and lands on the trail verbatim;
+# only a `verified` verdict marks a backlog item done — a status nobody sets
+# by hand. A failed verdict is a real signal: QA passed but the declared
+# acceptance did not hold. Nothing here changes the iteration's own verdict.
+# No workspace (tests) or a non-Lex path: a no-op, said on the trail.
+fn realize_iteration_issue(db :: conn.ConnDb, company_id :: Str, k :: Int, sprint_id :: Str, goal :: Str) -> [sql, fs_write, time, random, crypto, io, env, proc] Unit {
+  let store := match issues.store_dir(company_id) {
+    None => "",
+    Some(s) => s,
+  }
+  if str.is_empty(store) or role_kinds.language_of_path(env_or("COMPANY_PATH", "")) != "lex" {
+    let __t := tr.trail(db, company_id, "issue_realize_skipped", str.join(["{\"iter\":", int.to_str(k), ",\"reason\":\"", if str.is_empty(store) {
+      "no LOOM_WORKSPACE"
+    } else {
+      "not a lex path"
+    }, "\"}"], ""))
+    ()
+  } else {
+    match iteration_issue(db, store, company_id, k, goal) {
+      (issue_id, idx) => if str.is_empty(issue_id) {
+        let __t := tr.trail(db, company_id, "issue_realize_skipped", str.join(["{\"iter\":", int.to_str(k), ",\"reason\":\"no issue could be typed for this iteration\"}"], ""))
+        ()
+      } else {
+        let work_dir := runner.tool_work_dir_for_role("build", sprint_id)
+        match issues.primary_source(work_dir) {
+          Err(m) => {
+            let __t := tr.trail(db, company_id, "issue_realize_failed", str.join(["{\"iter\":", int.to_str(k), ",\"issue_id\":\"", issue_id, "\",\"reason\":", jv.stringify(JStr(str.slice(m, 0, 300))), "}"], ""))
+            io.print(str.join(["[company] issue: nothing to publish for ", str.slice(issue_id, 0, 12), ": ", str.slice(m, 0, 160)], ""))
+          },
+          Ok((src, modules)) => match issues.realize(store, issue_id, goal, sprint_id, src) {
+            Err(m) => {
+              let __t := tr.trail(db, company_id, "issue_realize_failed", str.join(["{\"iter\":", int.to_str(k), ",\"issue_id\":\"", issue_id, "\",\"modules\":", int.to_str(modules), ",\"reason\":", jv.stringify(JStr(str.slice(m, 0, 300))), "}"], ""))
+              io.print(str.join(["[company] issue: publish of ", src, " failed: ", str.slice(m, 0, 160)], ""))
+            },
+            Ok(head) => {
+              let __tr := tr.trail(db, company_id, "issue_realized", str.join(["{\"iter\":", int.to_str(k), ",\"issue_id\":\"", issue_id, "\",\"head_op\":\"", head, "\",\"modules\":", int.to_str(modules), "}"], ""))
+              let verdict := issues.verify(store, issue_id)
+              let name := issues.verdict_name(verdict)
+              let __tv := tr.trail(db, company_id, "issue_verified", str.join(["{\"iter\":", int.to_str(k), ",\"issue_id\":\"", issue_id, "\",\"verdict\":\"", name, "\",\"detail\":", jv.stringify(JStr(str.slice(issues.verdict_detail(verdict), 0, 300))), "}"], ""))
+              let __md := match verdict {
+                IssueVerified => if idx >= 0 {
+                  let __m := company.mark_backlog_status(db, company_id, idx, "done")
+                  ()
+                } else {
+                  ()
+                },
+                _ => (),
+              }
+              io.print(str.join(["[company] issue: ", str.slice(issue_id, 0, 12), " ", name, if str.is_empty(issues.verdict_detail(verdict)) {
+                ""
+              } else {
+                str.concat(" — ", str.slice(issues.verdict_detail(verdict), 0, 160))
+              }, " (head ", str.slice(head, 0, 12), ")"], ""))
+            },
+          },
+        }
+      },
+    }
   }
 }
 
@@ -717,9 +842,13 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
     ()
   }
   let __ab := if decision.decision == "add" {
-    let __a := company.append_backlog(db, ccfg.id, decision.goal)
-    let __bt := tr.trail(db, ccfg.id, "backlog_added", str.join(["{\"iter\":", int.to_str(k), ",\"goal\":\"", company.json_escape(decision.goal), "\"}"], ""))
+    let __q := queue_typed(db, ccfg.id, k, "strategist", issues.plain_proposal(decision.goal))
     io.print(str.join(["[company] backlog: queued \"", decision.goal, "\""], ""))
+  } else {
+    ()
+  }
+  let __ri := if result.success and not result.parked {
+    realize_iteration_issue(db, ccfg.id, k, sprint_id, current_goal)
   } else {
     ()
   }

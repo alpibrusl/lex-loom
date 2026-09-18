@@ -1,7 +1,9 @@
-# baseline recorded 2026-09-18T04:03:00Z — model qwen3.8:27b-mlx, provider ollama, commit f87481a
+# model	qwen3.8:27b-mlx
 # digest	5642e97495e1
 # provider	ollama
+# commit	f87481a
 # env	OLLAMA_THINK=false MAX_STEPS_BUILD=120 MAX_STEPS_NODE=40 MAX_STEPS_LAUNCH=unset LLM_TIMEOUT_MS=1800000
+# date	2026-09-17T22:14:50Z
 py_test_author	5	5
 py_build	5	5
 py_qa	5	5

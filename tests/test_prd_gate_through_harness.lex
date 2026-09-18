@@ -111,8 +111,30 @@ fn test_the_gate_does_not_fail_on_its_own_arguments() -> [io, proc] Result[Unit,
   }
 }
 
+# THE ONE THAT COST A COMPANY RUN.
+#
+# formco3's pm emitted three fenced prd.md blocks in one artifact -- 9236,
+# 8815 and a third, differing on 81 lines. extract_fenced collapsed them to
+# one file, the gate checked that file, and the node was ACCEPTED. build-core
+# then received the raw artifact, all three PRDs, and burned three attempts
+# without writing a line.
+#
+# The gate and the build were reading different objects. This asserts they no
+# longer disagree about how many specifications exist.
+fn test_three_prd_blocks_are_refused_through_the_harness() -> [io, proc] Result[Unit, Str] {
+  let three := str.join([fenced(good_body()), "\n", fenced(good_body()), "\n", fenced(good_body())], "")
+  match runner.verify_shell_on_output_from(pm_gate_cmd(), three, "prdgate-three", "", goal()) {
+    Ok(_) => Err("an artifact carrying three prd.md blocks was accepted; only the last reaches disk and the build is handed all three"),
+    Err(e) => if str.contains(e, "fenced prd.md blocks") {
+      Ok(())
+    } else {
+      Err(str.join(["refused, but not for the reason that matters: ", e], ""))
+    },
+  }
+}
+
 fn run_all() -> [io, proc] Int {
-  let results := [("a good PRD passes the gate through the harness", test_a_good_prd_passes_the_gate_through_the_harness()), ("a reversed PRD is refused through the harness", test_a_reversed_prd_is_refused_through_the_harness()), ("the gate does not fail on its own arguments", test_the_gate_does_not_fail_on_its_own_arguments())]
+  let results := [("a good PRD passes the gate through the harness", test_a_good_prd_passes_the_gate_through_the_harness()), ("a reversed PRD is refused through the harness", test_a_reversed_prd_is_refused_through_the_harness()), ("the gate does not fail on its own arguments", test_the_gate_does_not_fail_on_its_own_arguments()), ("three prd blocks are refused through the harness", test_three_prd_blocks_are_refused_through_the_harness())]
   list.fold(results, 0, fn (fails :: Int, r :: (Str, Result[Unit, Str])) -> [io] Int {
     match r {
       (name, Ok(_)) => {

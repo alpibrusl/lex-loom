@@ -213,7 +213,23 @@ fn int_str(n :: Int) -> Str {
 
 # A PRD path and an optional goal path. With no goal the structural checks
 # still run; the contradiction check needs the ledger to compare against.
-fn main(prd_path :: Str, goal_path :: Str) -> [fs_read, io] Int {
+# ONE PRD, not three.
+#
+# extract_fenced writes each fenced block to its named file, so three blocks
+# called prd.md collapse to one -- the last wins, deliberately, matching the
+# Python it replaced. The gate then checks that one file and sees a complete
+# PRD. But the downstream handoff carries the RAW ARTIFACT, so build-core
+# received all three and had to decide for itself which was authoritative
+# (lex-loom#519).
+#
+# The checker can see the artifact now (LOOM_GATE_ARTIFACT). A second block is
+# a defect in the output whichever copy is good: the pm cannot hand the build
+# three specifications and call one of them the answer.
+fn duplicate_blocks(artifact :: Str) -> Int {
+  list.len(str.split(artifact, "```prd.md")) - 1
+}
+
+fn main(prd_path :: Str, goal_path :: Str, artifact_path :: Str) -> [fs_read, io] Int {
   let text := match io.read(prd_path) {
     Err(_) => "",
     Ok(t) => t,
@@ -230,7 +246,19 @@ fn main(prd_path :: Str, goal_path :: Str) -> [fs_read, io] Int {
         Ok(g) => g,
       }
     }
-    let v := verdict(text, goal)
+    let blocks := if str.is_empty(artifact_path) {
+      1
+    } else {
+      match io.read(artifact_path) {
+        Err(_) => 1,
+        Ok(a) => duplicate_blocks(a),
+      }
+    }
+    let v := if blocks > 1 {
+      str.join(["REFUSE: the output carries ", int.to_str(blocks), " fenced prd.md blocks. Only the last reaches disk, but the BUILD is handed all of them and cannot tell which is the specification. Emit one."], "")
+    } else {
+      verdict(text, goal)
+    }
     let __ := io.print(v)
     if str.starts_with(v, "ACCEPT") {
       0

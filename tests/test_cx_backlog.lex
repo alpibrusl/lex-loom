@@ -92,7 +92,7 @@ fn test_no_cx_node_means_nothing() -> [sql, fs_write, fs_read, time, random, cry
   }
 }
 
-fn test_proposals_join_backlog_once() -> [sql, fs_write, fs_read, time, random, crypto, vcs, io] Result[Unit, Str] {
+fn test_proposals_join_backlog_once() -> [sql, fs_write, fs_read, time, random, crypto, vcs, io, env, proc] Result[Unit, Str] {
   match fresh_db() {
     Err(m) => Err(m),
     Ok(db) => {
@@ -121,11 +121,11 @@ fn test_proposals_join_backlog_once() -> [sql, fs_write, fs_read, time, random, 
   }
 }
 
-fn suite() -> [sql, fs_write, fs_read, time, random, crypto, vcs, io] List[Result[Unit, Str]] {
+fn suite() -> [sql, fs_write, fs_read, time, random, crypto, vcs, io, env, proc] List[Result[Unit, Str]] {
   [test_proposals_read_by_role_not_name(), test_no_cx_node_means_nothing(), test_proposals_join_backlog_once()]
 }
 
-fn run_all() -> [io, random, sql, fs_read, fs_write, time, crypto, vcs] Unit {
+fn run_all() -> [io, random, sql, fs_read, fs_write, time, crypto, vcs, env, proc] Unit {
   let results := suite()
   let __dbg := list.map(results, fn (r :: Result[Unit, Str]) -> [io] Unit {
     match r {

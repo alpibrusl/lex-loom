@@ -346,6 +346,7 @@ fn run_upgrades(db :: Db) -> [sql, fs_write] Unit {
   let __28 := try_ddl(db, "ALTER TABLE assignments ADD COLUMN rework_count INTEGER NOT NULL DEFAULT 0")
   let __29 := try_ddl(db, "ALTER TABLE companies ADD COLUMN role_packs TEXT NOT NULL DEFAULT ''")
   let __30 := try_ddl(db, "ALTER TABLE agent_pool ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''")
+  let __31 := try_ddl(db, "ALTER TABLE company_backlog ADD COLUMN issue_id TEXT NOT NULL DEFAULT ''")
   ()
 }
 

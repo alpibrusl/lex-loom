@@ -539,34 +539,38 @@ fn make_lex_check_tool(evidence_path :: Str, sprint_id :: Str) -> t.Tool {
         Ok(_) => Ok(JObj([("ok", JStr("true")), ("output", JStr(str.concat("deleted ", filename)))])),
       }
     } else {
-      match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
-        Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
-        Ok(_) => {
-          let __w := io.write(path, code)
-          let cmd := str.join(["${LEX:-lex} check ", path, " 2>&1; echo '##EXIT:'$?"], "")
-          match proc.run("bash", ["-c", cmd]) {
-            Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
-            Ok(r) => {
-              let combined := str.concat(r.stdout, r.stderr)
-              let ok := str.contains(combined, "##EXIT:0")
-              let out_with_hints := if ok {
-                combined
-              } else {
-                str.concat(combined, lex_error_hints(combined))
-              }
-              let __ev := if str.is_empty(evidence_path) {
-                ()
-              } else {
-                record_lex_check_evidence(evidence_path, filename, ok)
-              }
-              Ok(JObj([("ok", JStr(if ok {
-                "true"
-              } else {
-                "false"
-              })), ("output", JStr(out_with_hints))]))
-            },
-          }
-        },
+      if str.is_empty(str.trim(code)) {
+        Ok(JObj([("ok", JStr("false")), ("output", JStr(str.join(["lex_check refused: `code` for ", filename, " is empty. An empty file passes `lex check` and then ships nothing (lex-loom#525) — send the file's full contents; to remove a scratch file call with delete:true."], "")))]))
+      } else {
+        match proc.run("bash", ["-c", str.concat("mkdir -p ", dir)]) {
+          Err(msg) => Err(e.single("", "proc_error", str.concat("mkdir failed: ", msg))),
+          Ok(_) => {
+            let __w := io.write(path, code)
+            let cmd := str.join(["${LEX:-lex} check ", path, " 2>&1; echo '##EXIT:'$?"], "")
+            match proc.run("bash", ["-c", cmd]) {
+              Err(msg) => Ok(JObj([("ok", JStr("false")), ("output", JStr(msg))])),
+              Ok(r) => {
+                let combined := str.concat(r.stdout, r.stderr)
+                let ok := str.contains(combined, "##EXIT:0")
+                let out_with_hints := if ok {
+                  combined
+                } else {
+                  str.concat(combined, lex_error_hints(combined))
+                }
+                let __ev := if str.is_empty(evidence_path) {
+                  ()
+                } else {
+                  record_lex_check_evidence(evidence_path, filename, ok)
+                }
+                Ok(JObj([("ok", JStr(if ok {
+                  "true"
+                } else {
+                  "false"
+                })), ("output", JStr(out_with_hints))]))
+              },
+            }
+          },
+        }
       }
     }
   })

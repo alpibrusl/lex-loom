@@ -57,9 +57,27 @@ for i in $(seq 1 "$N"); do
   # One search ledger per attempt: the report gate grounds every cited URL
   # in what web_search returned, and an attempt must not cite what an
   # earlier attempt found.
+  # A work dir from a PREVIOUS probe is state from a different task leaking
+  # into this measurement. Found live: a build probe for FormCo started with a
+  # tzoffset.lex on disk from an eval run thirteen hours earlier, and the
+  # prompt tells the role "these files are on disk, build on them".
+  rm -rf "/tmp/loom-lex-work-$SPRINT_ID" "/tmp/loom-py-work-$SPRINT_ID" 2>/dev/null || true
+
+  # `--max-steps 0` because the DEFAULT is 10,000,000 interpreter steps for the
+  # whole program, and a node doing REAL-SIZED work exceeds it. The company's
+  # own worker already runs unlimited (`lex run --max-steps 0 src/worker.lex`);
+  # without this the probe measures a tighter machine than the one it claims to
+  # be measuring.
+  #
+  # It fails as a PANIC, not a denial -- "step limit exceeded in
+  # json_value.parse_escape" -- so the attempt produces no outcome line at all
+  # and the suite counts it as a non-accept. That is how a probe limitation
+  # gets read as a role failure: twice this week I attributed these panics to
+  # a json_value performance bug and to a lex-schema regression. Both were
+  # this missing flag.
   OUT=$(DB_PATH="$WORK/attempt-$i.db" MODEL="$MODEL" ROLE="$ROLE" GATE="$GATE" \
         TASK="$TASK" SPRINT_ID="$SPRINT_ID" MAX_API_CALLS=60 LOOM_SEARCH_LEDGER="$WORK/ledger-$i.txt" \
-        lex run --allow-effects "$EFFECTS" src/main.lex run_node_cmd 2>&1 | tee "$WORK/attempt-$i.log") || true
+        lex run --max-steps 0 --allow-effects "$EFFECTS" src/main.lex run_node_cmd 2>&1 | tee "$WORK/attempt-$i.log") || true
   elapsed=$(( $(date +%s) - started ))
   line=$(echo "$OUT" | grep '^\[probe\] role=' | tail -1 || true)
   if echo "$line" | grep -q ACCEPTED; then

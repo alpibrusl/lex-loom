@@ -850,6 +850,13 @@ fn verify_shell_for_role(cmd :: Str, role :: Str, output :: Str, scratch :: Str,
 # Per-gate file rather than a process-wide variable: the orchestrator runs
 # nodes concurrently, and one env var shared across them would hand a node its
 # neighbour's goal.
+#
+# LOOM_GATE_ARTIFACT names the RAW OUTPUT for the same reason. A gate that
+# checks only the extracted files is checking a different object from the one
+# the next node reads: extract_fenced collapses three blocks named prd.md into
+# one file (last wins), so the PRD gate approved one PRD while build-core was
+# handed all three and had to guess which was authoritative (lex-loom#519).
+# A gate that wants to judge the output AS SENT can now read it.
 fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_dir :: Str, goal :: Str) -> [io, proc] Result[Unit, Str] {
   let art := str.join(["/tmp/loom-gate-", scratch, "-art.txt"], "")
   let work := str.join(["/tmp/loom-gate-", scratch, "-work"], "")
@@ -869,7 +876,7 @@ fn verify_shell_on_output_from(cmd :: Str, output :: Str, scratch :: Str, seed_d
     ""
   } else {
     goal_file
-  }, "\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "bash bin/extract-fenced.sh ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
+  }, "\"; export LOOM_GATE_ARTIFACT=\"", art, "\"; python() { python3 \"$@\"; }; export -f python; rm -rf $W; mkdir -p $W; ", seed, "bash bin/extract-fenced.sh ", art, " $W >/dev/null 2>&1; cd $W && n=$(find . -type f | wc -l); if [ \"$n\" -eq 0 ]; then echo NO_FILES; exit 3; fi; echo \"##GATE_SAW:$(find . -type f -not -path '*/__pycache__/*' | sed 's|^\\./||' | sort | tr '\\n' ' ')\"; ", cmd, "; rc=$?; echo \"##GATE_EXIT:$rc\"; exit $rc"], "")
   match proc.run("bash", ["-c", script]) {
     Err(msg) => Err(str.concat("gate command could not run: ", msg)),
     Ok(r) => {

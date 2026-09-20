@@ -300,14 +300,62 @@ fn spec_len_gt(n :: Int) -> sp.Spec {
 # instead of "PASS" is agreeing, not failing, and denying it forever over
 # casing wastes a whole iteration -- observed live (tzlocal2 iter-2), where
 # "verdict is 'pass', expected 'PASS'" sank an otherwise fine node.
-fn extract_verdict(output :: Str) -> Option[Str] {
-  let after_key := str.split(output, "\"verdict\"")
+fn extract_json_str(output :: Str, key :: Str) -> Option[Str] {
+  let after_key := str.split(output, str.join(["\"", key, "\""], ""))
   match list.head(list.tail(after_key)) {
     None => None,
     Some(after) => {
       let segs := str.split(after, "\"")
       list.head(list.tail(segs))
     },
+  }
+}
+
+fn extract_verdict(output :: Str) -> Option[Str] {
+  extract_json_str(output, "verdict")
+}
+
+# A refusal the next iteration cannot act on costs a whole iteration.
+#
+# This gate used to deny with "verdict is 'FAIL', expected 'PASS'" and throw
+# `output` away -- and a DENIED node stores no artifact at all, so the gate's
+# reason string is the ONLY channel out of a failing QA node. Measured live on
+# formco4: iterations 5, 6 and 7 failed at qa with that identical message and
+# made no progress, though the product carried over between them. The real
+# cause the whole time was `sql.open: unable to open database file:
+# data/submissions.db` -- one missing directory -- and the improvement loop,
+# given nothing to go on, wrote the lesson "producing a non-informative
+# verdict" and then GUESSED, tightening the QA gate for out-of-scope criteria
+# that were never the problem.
+#
+# So carry the detail the QA agent already reports. Its output contract
+# carries "reason"; some models put the run text in "output" instead. Bounded,
+# because this string lands in a prompt.
+fn clip(s :: Str, n :: Int) -> Str {
+  if str.len(s) > n {
+    str.concat(str.slice(s, 0, n), "...")
+  } else {
+    s
+  }
+}
+
+fn verdict_detail(output :: Str) -> Str {
+  match extract_json_str(output, "reason") {
+    Some(r) => clip(str.trim(r), 400),
+    None => match extract_json_str(output, "output") {
+      Some(o) => clip(str.trim(o), 400),
+      None => "",
+    },
+  }
+}
+
+fn verdict_deny_message(v :: Str, output :: Str) -> Str {
+  let base := str.join(["verdict is '", v, "', expected 'PASS'"], "")
+  let detail := verdict_detail(output)
+  if str.len(detail) > 0 {
+    str.join([base, " -- reported: ", detail], "")
+  } else {
+    base
   }
 }
 
@@ -536,7 +584,7 @@ fn evaluate_gate_body(gate :: Str, output :: Str) -> GateVerdict {
                             GateAllow
                           }
                         } else {
-                          GateDeny(str.join(["verdict is '", v, "', expected 'PASS'"], ""))
+                          GateDeny(verdict_deny_message(v, output))
                         },
                       }
                     } else {

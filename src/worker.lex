@@ -217,7 +217,7 @@ fn execute_gated_node(db :: conn.ConnDb, n :: graph.Node, sprint_id :: Str, node
   let roster_entry := cast.cast_node(db, n, request, model, sprint_id)
   let cfg := { id: sprint_id, request: request, model: model, db: db, api_calls_max: api_calls_max, roster: [roster_entry], trail_log: None, review_transitions: false, depth: 0, iter_ctx: None, exec_mode: "inline", policy_isolation: "" }
   let usage_before := pricing.usage_cost_cents(db, orch.node_cost_owner(sprint_id, n.id), false)
-  let outcome := orch.invoke_node_attempt(n, input_content, cfg, 1, "", None)
+  let outcome := orch.invoke_node_attempt(n, input_content, cfg, 1, 1, "", None)
   let usage_after := pricing.usage_cost_cents(db, orch.node_cost_owner(sprint_id, n.id), false)
   let artifact_len := match tr.artifact_get(db, outcome.artifact) {
     Ok(content) => str.len(content),

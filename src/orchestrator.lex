@@ -18,6 +18,8 @@ import "lex-orm/src/connection" as conn
 
 import "std.int" as int
 
+import "std.time" as time
+
 import "lex-schema/json_value" as jv
 
 import "./agent/runner" as runner
@@ -175,6 +177,34 @@ fn max_node_retries() -> Int {
   3
 }
 
+# A provider 500 is not the agent getting it wrong, so it must not consume the
+# attempts reserved for getting it right. formco4 iteration 23 built a product
+# that passes all of its own tests (run_all -> 0, verified on disk) and the
+# iteration was still recorded as failed, because QA spent its shared retry
+# budget on provider errors and was denied with a reason that said, in its own
+# words, "not a content problem". Iteration 24's QA was then refused at
+# dispatch: those retries had drained the spend envelope for the role.
+#
+# Provider faults therefore get their own, larger allowance. Step-budget
+# exhaustion and empty output deliberately stay on the content counter: the
+# first is the agent's own doing and the second is bounded by the same
+# judgement, so neither is free to repeat.
+fn max_provider_retries() -> Int {
+  6
+}
+
+# Retrying a 500 three times in immediate succession mostly reproduces the 500.
+# Linear, not exponential: the ceiling is six attempts, so the worst case adds
+# about two minutes to a node that already runs for tens of minutes.
+fn provider_backoff_ms(provider_attempt :: Int) -> Int {
+  let ms := provider_attempt * 5000
+  if ms > 30000 {
+    30000
+  } else {
+    ms
+  }
+}
+
 # Max recursive expansion depth (#35). At depth 3 a top-level sprint can
 # expand into sub-sprints that themselves expand — 3 levels total.
 fn max_expand_depth() -> Int {
@@ -237,7 +267,7 @@ fn invoke_node(n :: graph.Node, input :: Str, cfg :: SprintCfg, parent :: Option
         let usage_before := pricing.usage_cost_cents(cfg.db, node_cost_owner(cfg.id, n.id), false)
         let outcome := match n.expand {
           Some(subtask) => invoke_expand_node(n, subtask, input, cfg, parent),
-          None => invoke_node_attempt(n, input, cfg, 1, "", parent),
+          None => invoke_node_attempt(n, input, cfg, 1, 1, "", parent),
         }
         let usage_after := pricing.usage_cost_cents(cfg.db, node_cost_owner(cfg.id, n.id), false)
         let cost := budget.charge_basis(usage_before, usage_after, str.len(resolve_input(cfg.db, outcome.artifact)))
@@ -451,14 +481,14 @@ fn deterministic_output(n :: graph.Node, cfg :: SprintCfg) -> [env, io, net, pro
   }
 }
 
-fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
+fn invoke_node_attempt(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, provider_attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   match blocking_precheck(n, cfg) {
     Some(outcome) => outcome,
-    None => invoke_node_attempt_fresh(n, input, cfg, attempt, prior_denial, parent),
+    None => invoke_node_attempt_fresh(n, input, cfg, attempt, provider_attempt, prior_denial, parent),
   }
 }
 
-fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
+fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, attempt :: Int, provider_attempt :: Int, prior_denial :: Str, parent :: Option[Str]) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] NodeOutcome {
   let agent_cfg_opt := match cast.roster_lookup(cfg.roster, n.id) {
     Some(c) => Some(c),
     None => roles.for_role(n.role, cfg.model, runner.qa_evidence_path(cfg.id, n.id), cfg.id),
@@ -520,185 +550,196 @@ fn invoke_node_attempt_fresh(n :: graph.Node, input :: Str, cfg :: SprintCfg, at
           None => runner.step(cfg.db, agent_cfg, prompt, node_cost_owner(cfg.id, n.id), cfg.policy_isolation),
         }
         let infra := is_infra_outcome(output)
-        if str.is_empty(output) or infra {
-          if attempt > max_node_retries() {
-            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: if is_step_budget_exhausted(output) {
-              str.concat("the agent ran out of step budget before answering, not a content problem: ", str.slice(str.trim(output), 0, 200))
-            } else {
-              if infra {
-                str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200))
-              } else {
-                "empty output after retries (model cold-start?)"
-              }
-            } }
+        let provider_fault := is_provider_error(output)
+        if provider_fault {
+          if provider_attempt > max_provider_retries() {
+            { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200)) }
           } else {
-            let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", if is_step_budget_exhausted(output) {
-              "step budget exhausted"
-            } else {
-              if infra {
-                "provider error"
-              } else {
-                "empty output"
-              }
-            }, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-            invoke_node_attempt(n, input, cfg, attempt + 1, prior_denial, parent)
+            let __tp := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"provider error\",\"provider_attempt\":", int.to_str(provider_attempt + 1), ",\"attempt\":", int.to_str(attempt), "}"], ""))
+            let __sl := time.sleep_ms(provider_backoff_ms(provider_attempt))
+            invoke_node_attempt(n, input, cfg, attempt, provider_attempt + 1, prior_denial, parent)
           }
         } else {
-          if gates.is_llm_judge(n.gate) {
-            let criteria := gates.judge_criteria(n.gate)
-            let judge_cfg := roles.judge_agent(cfg.model, criteria)
-            let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
-            let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
-              true
-            } else {
-              str.contains(verdict_raw, "\"verdict\": \"PASS\"")
-            }
-            let __tj := tr.trail(cfg.db, cfg.id, "gate_judged", str.join(["{\"node\":\"", n.id, "\",\"verdict\":\"", if passed {
-              "PASS"
-            } else {
-              "FAIL"
-            }, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
-            if passed {
-              match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                Ok(hash) => {
-                  let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                  let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                  { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-                },
-              }
-            } else {
-              let __sa := tr.artifact_put(cfg.db, cfg.id, n.id, output)
-              let judge_reason := str.slice(company.json_escape(verdict_raw), 0, 500)
-              let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", judge_reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
-              let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("judge FAIL: ", verdict_raw), attempt)
-              if attempt > max_node_retries() {
-                { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("judge rejected: ", verdict_raw) }
+          if str.is_empty(output) or infra {
+            if attempt > max_node_retries() {
+              { node_id: n.id, attested: false, sealed: false, artifact: "", reason: if is_step_budget_exhausted(output) {
+                str.concat("the agent ran out of step budget before answering, not a content problem: ", str.slice(str.trim(output), 0, 200))
               } else {
-                let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"judge-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                invoke_node_attempt(n, input, cfg, attempt + 1, str.concat("An LLM judge evaluated your output against the gate criteria and FAILED it. Fix it. Judge verdict: ", verdict_raw), parent)
-              }
+                if infra {
+                  str.concat("provider failure, not a content problem: ", str.slice(str.trim(output), 0, 200))
+                } else {
+                  "empty output after retries (model cold-start?)"
+                }
+              } }
+            } else {
+              let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", if is_step_budget_exhausted(output) {
+                "step budget exhausted"
+              } else {
+                if infra {
+                  "provider error"
+                } else {
+                  "empty output"
+                }
+              }, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+              invoke_node_attempt(n, input, cfg, attempt + 1, provider_attempt, prior_denial, parent)
             }
           } else {
-            if gates.is_judgeable(n.gate) {
-              let oracle := gates.oracle_of(n.gate)
-              match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                Ok(hash) => match tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash) {
-                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("attention push failed: ", err) },
-                  Ok(attention_id) => if gates.is_blocking(n.gate) {
-                    let __tp := tr.trail(cfg.db, cfg.id, "node_parked", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"attention\":\"", attention_id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                    { node_id: n.id, attested: false, sealed: false, artifact: hash, reason: parked_reason(oracle, attention_id) }
-                  } else {
-                    let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+            if gates.is_llm_judge(n.gate) {
+              let criteria := gates.judge_criteria(n.gate)
+              let judge_cfg := roles.judge_agent(cfg.model, criteria)
+              let verdict_raw := runner.step(cfg.db, judge_cfg, str.join(["ARTIFACT TO EVALUATE:\n", output], ""), node_cost_owner(cfg.id, n.id), cfg.policy_isolation)
+              let passed := if str.contains(verdict_raw, "\"verdict\":\"PASS\"") {
+                true
+              } else {
+                str.contains(verdict_raw, "\"verdict\": \"PASS\"")
+              }
+              let __tj := tr.trail(cfg.db, cfg.id, "gate_judged", str.join(["{\"node\":\"", n.id, "\",\"verdict\":\"", if passed {
+                "PASS"
+              } else {
+                "FAIL"
+              }, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+              if passed {
+                match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                  Ok(hash) => {
+                    let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
                     let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                    { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+                    { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
                   },
-                },
+                }
+              } else {
+                let __sa := tr.artifact_put(cfg.db, cfg.id, n.id, output)
+                let judge_reason := str.slice(company.json_escape(verdict_raw), 0, 500)
+                let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", judge_reason, "\",\"attempt\":", int.to_str(attempt), "}"], ""))
+                let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("judge FAIL: ", verdict_raw), attempt)
+                if attempt > max_node_retries() {
+                  { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("judge rejected: ", verdict_raw) }
+                } else {
+                  let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"judge-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                  invoke_node_attempt(n, input, cfg, attempt + 1, provider_attempt, str.concat("An LLM judge evaluated your output against the gate criteria and FAILED it. Fix it. Judge verdict: ", verdict_raw), parent)
+                }
               }
             } else {
-              match evaluate_gate(n.gate, output) {
-                GateDeny(reason0) => {
-                  let reason := if gates.is_json_verdict_pass(n.gate) and fail_cites_pipeline_infra(output) {
-                    pipeline_infra_fail_reason()
-                  } else {
-                    reason0
-                  }
-                  let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
-                  let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(reason)), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
-                  let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
-                  if verdict_fail_is_final(n.gate, output) {
-                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
-                  } else {
-                    if attempt > max_node_retries() {
+              if gates.is_judgeable(n.gate) {
+                let oracle := gates.oracle_of(n.gate)
+                match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                  Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                  Ok(hash) => match tr.push_attention(cfg.db, cfg.id, n.id, n.gate, oracle, hash) {
+                    Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("attention push failed: ", err) },
+                    Ok(attention_id) => if gates.is_blocking(n.gate) {
+                      let __tp := tr.trail(cfg.db, cfg.id, "node_parked", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"attention\":\"", attention_id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                      { node_id: n.id, attested: false, sealed: false, artifact: hash, reason: parked_reason(oracle, attention_id) }
+                    } else {
+                      let __ta := tr.trail(cfg.db, cfg.id, "node_attention", str.join(["{\"node\":\"", n.id, "\",\"oracle\":\"", oracle, "\",\"artifact\":\"", hash, "\"}"], ""))
+                      let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                      { node_id: n.id, attested: true, sealed: false, artifact: hash, reason: str.join(["awaiting human attestation from oracle: ", oracle], "") }
+                    },
+                  },
+                }
+              } else {
+                match evaluate_gate(n.gate, output) {
+                  GateDeny(reason0) => {
+                    let reason := if gates.is_json_verdict_pass(n.gate) and fail_cites_pipeline_infra(output) {
+                      pipeline_infra_fail_reason()
+                    } else {
+                      reason0
+                    }
+                    let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
+                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(reason)), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
+                    let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, reason, attempt)
+                    if verdict_fail_is_final(n.gate, output) {
                       { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
                     } else {
-                      let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                      invoke_node_attempt(n, input, cfg, attempt + 1, reason, parent)
-                    }
-                  }
-                },
-                GateAllow => match evaluate_gate(n.gate, output) {
-                  GateDeny(reason) => {
-                    let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-recheck-", int.to_str(attempt)], ""), output)
-                    let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(str.concat("re-check: ", reason))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
-                    let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
-                    { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
-                  },
-                  GateAllow => match and_contract(n.role, output, cfg.id, str.join([sanitize_id(cfg.id), "-", n.id, "-contract-", int.to_str(attempt)], ""), if gates.is_grounded(n.gate) {
-                    runner.verify_compiles(n.role, cfg.id)
-                  } else {
-                    if gates.is_shell_gate(n.gate) {
-                      if runner.is_build_kind(n.role) {
-                        runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
-                      } else {
-                        runner.verify_shell_for_role(gates.shell_command(n.gate), n.role, output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id), cfg.request)
-                      }
-                    } else {
-                      if str.trim(n.gate) == "spec json-ok-true" {
-                        runner.verify_launch_evidence(evidence_path, str.contains(str.replace(gates.first_json_object(output), " ", ""), "\"ok\":true"))
-                      } else {
-                        if gates.is_json_verdict_pass(n.gate) {
-                          let claimed_pass := claimed_pass_of(output)
-                          match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
-                            Err(e) => Err(e),
-                            Ok(_) => if claimed_pass {
-                              runner.verify_verdict_suite(n.role, cfg.id)
-                            } else {
-                              Ok(())
-                            },
-                          }
-                        } else {
-                          runner.verify_build_compiles(n.role, cfg.id)
-                        }
-                      }
-                    }
-                  }) {
-                    Err(compile_err) => {
-                      let gate_label := if gates.is_shell_gate(n.gate) {
-                        "gate command failed"
-                      } else {
-                        if gates.is_json_verdict_pass(n.gate) {
-                          "verdict not grounded"
-                        } else {
-                          "build does not compile"
-                        }
-                      }
-                      let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
-                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"detail\":", jv.stringify(JStr(str.slice(compile_err, 0, 600))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
-                      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat(str.concat(gate_label, ": "), compile_err), attempt)
                       if attempt > max_node_retries() {
-                        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat(str.concat(gate_label, ": "), compile_err) }
+                        { node_id: n.id, attested: false, sealed: false, artifact: "", reason: reason }
                       } else {
-                        let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
-                        invoke_node_attempt(n, input, cfg, attempt + 1, str.join(["Your output did not pass the gate (", gate_label, "). Fix it:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                        let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                        invoke_node_attempt(n, input, cfg, attempt + 1, provider_attempt, reason, parent)
                       }
+                    }
+                  },
+                  GateAllow => match evaluate_gate(n.gate, output) {
+                    GateDeny(reason) => {
+                      let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-recheck-", int.to_str(attempt)], ""), output)
+                      let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":", jv.stringify(JStr(str.concat("re-check: ", reason))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
+                      let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat("re-check: ", reason), attempt)
+                      { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("re-check denied: ", reason) }
                     },
-                    Ok(_) => {
-                      let __ge := if gates.is_grounded(n.gate) {
-                        tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                    GateAllow => match and_contract(n.role, output, cfg.id, str.join([sanitize_id(cfg.id), "-", n.id, "-contract-", int.to_str(attempt)], ""), if gates.is_grounded(n.gate) {
+                      runner.verify_compiles(n.role, cfg.id)
+                    } else {
+                      if gates.is_shell_gate(n.gate) {
+                        if runner.is_build_kind(n.role) {
+                          runner.verify_shell(gates.shell_command(n.gate), n.role, cfg.id)
+                        } else {
+                          runner.verify_shell_for_role(gates.shell_command(n.gate), n.role, output, str.join([cfg.id, "-", n.id, "-", int.to_str(attempt)], ""), runner.tool_work_dir_for_role(n.role, cfg.id), cfg.request)
+                        }
                       } else {
-                        if gates.is_shell_gate(n.gate) {
-                          tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"sh\",\"result\":\"ok\"}"], ""))
+                        if str.trim(n.gate) == "spec json-ok-true" {
+                          runner.verify_launch_evidence(evidence_path, str.contains(str.replace(gates.first_json_object(output), " ", ""), "\"ok\":true"))
                         } else {
                           if gates.is_json_verdict_pass(n.gate) {
-                            tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"run_code\",\"result\":\"ok\"}"], ""))
+                            let claimed_pass := claimed_pass_of(output)
+                            match runner.verify_json_verdict_evidence(evidence_path, claimed_pass) {
+                              Err(e) => Err(e),
+                              Ok(_) => if claimed_pass {
+                                runner.verify_verdict_suite(n.role, cfg.id)
+                              } else {
+                                Ok(())
+                              },
+                            }
                           } else {
-                            ()
+                            runner.verify_build_compiles(n.role, cfg.id)
                           }
                         }
                       }
-                      match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
-                        Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
-                        Ok(hash) => {
-                          let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
-                          let __la := emit_node_accepted(cfg, started_id, n.id, hash)
-                          { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
-                        },
-                      }
+                    }) {
+                      Err(compile_err) => {
+                        let gate_label := if gates.is_shell_gate(n.gate) {
+                          "gate command failed"
+                        } else {
+                          if gates.is_json_verdict_pass(n.gate) {
+                            "verdict not grounded"
+                          } else {
+                            "build does not compile"
+                          }
+                        }
+                        let __sd := tr.artifact_put(cfg.db, cfg.id, str.join([n.id, "-denied-", int.to_str(attempt)], ""), output)
+                        let __td := tr.trail(cfg.db, cfg.id, "node_denied", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"", gate_label, "\",\"detail\":", jv.stringify(JStr(str.slice(compile_err, 0, 600))), ",\"gate\":", jv.stringify(JStr(n.gate)), ",\"attempt\":", int.to_str(attempt), "}"], ""))
+                        let __ld := emit_node_denied(cfg, started_id, n.id, n.gate, str.concat(str.concat(gate_label, ": "), compile_err), attempt)
+                        if attempt > max_node_retries() {
+                          { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat(str.concat(gate_label, ": "), compile_err) }
+                        } else {
+                          let __tr := tr.trail(cfg.db, cfg.id, "node_retrying", str.join(["{\"node\":\"", n.id, "\",\"reason\":\"compile-fail\",\"attempt\":", int.to_str(attempt + 1), "}"], ""))
+                          invoke_node_attempt(n, input, cfg, attempt + 1, provider_attempt, str.join(["Your output did not pass the gate (", gate_label, "). Fix it:\n", compile_err, lexskill.lex_error_hints(compile_err)], ""), parent)
+                        }
+                      },
+                      Ok(_) => {
+                        let __ge := if gates.is_grounded(n.gate) {
+                          tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"compile\",\"result\":\"ok\"}"], ""))
+                        } else {
+                          if gates.is_shell_gate(n.gate) {
+                            tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"sh\",\"result\":\"ok\"}"], ""))
+                          } else {
+                            if gates.is_json_verdict_pass(n.gate) {
+                              tr.trail(cfg.db, cfg.id, "gate_evidence", str.join(["{\"node\":\"", n.id, "\",\"gate\":\"", n.gate, "\",\"tool\":\"run_code\",\"result\":\"ok\"}"], ""))
+                            } else {
+                              ()
+                            }
+                          }
+                        }
+                        match tr.artifact_put(cfg.db, cfg.id, n.id, output) {
+                          Err(err) => { node_id: n.id, attested: false, sealed: false, artifact: "", reason: str.concat("artifact store failed: ", err) },
+                          Ok(hash) => {
+                            let __ta := tr.trail(cfg.db, cfg.id, "node_accepted", str.join(["{\"node\":\"", n.id, "\",\"artifact\":\"", hash, "\"}"], ""))
+                            let __la := emit_node_accepted(cfg, started_id, n.id, hash)
+                            { node_id: n.id, attested: true, sealed: true, artifact: hash, reason: "" }
+                          },
+                        }
+                      },
                     },
                   },
-                },
+                }
               }
             }
           }

@@ -374,17 +374,30 @@ fn drain_assignments(db :: conn.ConnDb, ccfg :: company.CompanyCfg, sprint_id ::
   }
 }
 
-# Every iteration builds from an EMPTY work dir; nothing sealed earlier is on
-# disk (the company workspace holds the bootstrap skeleton, not the product).
-# The strategist writes revise goals as if the product carried forward --
+# Which work dir this iteration seeds, or "" for none. The policy in one named
+# place: a product carried forward is the later truth and is never overwritten
+# by a skeleton; otherwise the path's language decides which build dir the
+# skeleton belongs in.
+#
+# The carry used to require the previous iteration to have PASSED its verdict
+# (#364/#365, written when the failure was the opposite one: the strategist
+# writing revise goals as if a product carried forward when nothing did --
 # tzc15 iter 3 "store both as static content served by the FastAPI server",
 # tzc18 iter 3 "fix the tzconvert test suite so QA passes" -- and the sprint
-# then produced only the delta: nothing to launch, QA fail, iteration lost.
-# Until artifacts carry forward (#364) the goal states the premise (#365).
-# Which work dir this iteration seeds, or "" for none. The policy in one named
-# place: a product carried forward from a passing iteration is the later truth
-# and is never overwritten by a skeleton; otherwise the path's language decides
-# which build dir the skeleton belongs in.
+# producing only the delta).
+#
+# That gate held for a company that passes. It never covered the company on
+# its way to a FIRST pass, which is a catch-22: the product cannot accumulate
+# the fixes it needs to pass until it passes. Measured on formco4 -- 16
+# iterations, 0 passed, qa 0/9, every one starting from the bare skeleton. The
+# module layout changed every iteration (server.lex present, then gone, then
+# under tests/), main.lex shrank twice because work was discarded rather than
+# built on, and iteration 16 shared only 5 of ~14 function names with 15.
+#
+# So carry whenever there IS something to carry. No extra guard is needed:
+# carry_artifact_forward returns 0 for a missing or empty previous dir, and
+# seeded_files already falls back to the skeleton on 0 -- formco4's iteration
+# 15, which built nothing, would seed the skeleton exactly as before.
 fn seed_role_for(carried_files :: Int, company_path :: Str) -> Str {
   if carried_files > 0 {
     ""
@@ -405,9 +418,13 @@ fn env_or(key :: Str, fallback :: Str) -> [env] Str {
   }
 }
 
-fn iteration_goal(goal :: Str, k :: Int, carried :: Str, seeded :: Str) -> Str {
+fn iteration_goal(goal :: Str, k :: Int, carried :: Str, carried_passed :: Bool, seeded :: Str) -> Str {
   if not str.is_empty(str.trim(carried)) {
-    str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product (it passed its verdict). These files are on disk:\n", carried, "\nModify this product; do not start again from nothing."], "")
+    if carried_passed {
+      str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product (it passed its verdict). These files are on disk:\n", carried, "\nModify this product; do not start again from nothing."], "")
+    } else {
+      str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the previous iteration's product, which did NOT pass its verdict. These files are on disk:\n", carried, "\nREPAIR this product. Read every file with read_file before you change it, fix what the verdict and the gate messages above say is wrong, and keep what already works. Do not start again from nothing, and do not rename or relocate a module that is already there -- a fresh layout every iteration is why the same bug kept coming back."], "")
+    }
   } else {
     if not str.is_empty(str.trim(seeded)) {
       str.join([goal, "\n\nNOTE: the work dir ALREADY HOLDS the vetted skeleton for this stack path. These files are on disk:\n", seeded, "\nRead them first and BUILD ON THEM. In particular the entry point and the package manifest are already written and already correct -- do not invent your own, and do not rename them."], "")
@@ -703,7 +720,7 @@ fn run_iterations_budgeted(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: I
 
 fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int, parent_sprint :: Str, api_max :: Int, prev_ctx :: company.IterCtx, current_goal :: Str, evolve :: Bool) -> [env, io, time, crypto, random, sql, fs_read, fs_write, net, concurrent, llm, proc, vcs, approval] CompanyRunResult {
   let sprint_id := company.iteration_sprint_id(ccfg.id, k)
-  let carried_files := if k > 1 and prev_ctx.last_verdict == "passed" {
+  let carried_files := if k > 1 {
     runner.carry_artifact_forward(parent_sprint, sprint_id)
   } else {
     0
@@ -734,7 +751,7 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
   } else {
     ()
   }
-  let current_goal := iteration_goal(current_goal, k, carried_listing, seeded_listing)
+  let current_goal := iteration_goal(current_goal, k, carried_listing, prev_ctx.last_verdict == "passed", seeded_listing)
   let __carry := if k > 1 {
     let n := company.carry_specs_forward(db, str.concat(parent_sprint, "-next"), sprint_id)
     io.print(str.join(["[company] carried ", int.to_str(n), " tightened spec(s) into ", sprint_id], ""))

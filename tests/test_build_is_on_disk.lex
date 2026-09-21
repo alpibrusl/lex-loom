@@ -406,8 +406,30 @@ fn test_py_check_refuses_a_filename_as_first_line() -> [env, io, net, proc, rand
   }
 }
 
+# The carry is now unconditional (#529), so this is what keeps it safe: an
+# iteration whose predecessor built nothing carries nothing, and the caller's
+# `seeded_files` fallback then seeds the skeleton exactly as before. formco4's
+# iteration 15 built nothing at all -- that case must stay a clean 0.
+fn test_carry_forward_is_zero_when_there_is_nothing_to_carry() -> [env, io, net, proc, random, fs_write] Result[Unit, Str] {
+  let tag := crypto.random_str_hex(4)
+  let missing_prev := str.join(["t-carry3-", tag, "/iter-1"], "")
+  let next_a := str.join(["t-carry3-", tag, "/iter-2"], "")
+  let empty_prev := str.join(["t-carry4-", tag, "/iter-1"], "")
+  let next_b := str.join(["t-carry4-", tag, "/iter-2"], "")
+  let ed := lexskill.py_work_dir(empty_prev)
+  let __seed := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(missing_prev), "' '", lexskill.py_work_dir(next_a), "' '", ed, "' '", lexskill.py_work_dir(next_b), "' && mkdir -p '", ed, "'"], "")])
+  let n_missing := runner.carry_artifact_forward(missing_prev, next_a)
+  let n_empty := runner.carry_artifact_forward(empty_prev, next_b)
+  let __rm := proc.run("bash", ["-c", str.join(["rm -rf '", lexskill.py_work_dir(missing_prev), "' '", lexskill.py_work_dir(next_a), "' '", ed, "' '", lexskill.py_work_dir(next_b), "'"], "")])
+  if n_missing == 0 and n_empty == 0 {
+    Ok(())
+  } else {
+    Err(str.join(["carrying from a missing or empty previous dir must be 0, got missing=", int.to_str(n_missing), " empty=", int.to_str(n_empty)], ""))
+  }
+}
+
 fn suite() -> [env, io, net, proc, random, fs_write] List[Result[Unit, Str]] {
-  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes(), test_py_check_refuses_a_bare_word_as_a_module(), test_the_author_cannot_touch_the_builds_module(), test_py_check_refuses_a_filename_as_first_line()]
+  [test_clearing_keeps_the_previous_build(), test_a_prose_only_build_fails_its_contract(), test_a_build_on_disk_passes_with_no_prose_at_all(), test_a_non_build_role_still_counts_fenced_output(), test_a_build_gate_ignores_fenced_prose(), test_a_build_gate_judges_the_disk(), test_a_prose_role_gate_still_sees_fences(), test_a_gate_may_say_python(), test_py_check_can_delete_a_file_it_wrote(), test_py_check_writes_into_a_subdirectory(), test_lex_check_can_delete_a_file_it_wrote(), test_compile_denial_names_the_way_out(), test_carry_forward_copies_the_product_and_skips_scratch(), test_carry_forward_leaves_an_existing_work_dir_alone(), test_read_file_reads_the_work_dir_and_refuses_escapes(), test_py_check_refuses_a_bare_word_as_a_module(), test_the_author_cannot_touch_the_builds_module(), test_py_check_refuses_a_filename_as_first_line(), test_carry_forward_is_zero_when_there_is_nothing_to_carry()]
 }
 
 fn run_all() -> [env, io, net, proc, random, fs_write] Unit {

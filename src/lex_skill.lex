@@ -116,13 +116,13 @@ fn guide_agent() -> Str {
 
 # SQL / persistence pattern — drawn from lex-trail and std.sql.
 # Use topic='sql' when implementing SQLite-backed storage or audit logs.
-# SQL guidance is GROUNDED in a real, CI-checked file (src/guidelines/sql_crud.lex)
+# SQL guidance is GROUNDED in a real, CI-checked file (guidelines/sql_crud.lex)
 # read at call time — so the API shown here can never drift from compiling code.
 # (The previous hand-written version invented sql.str()/VStr/sql.Value, which do
 #  not exist, and caused build agents to emit non-compiling SQLite code.)
 fn guide_sql() -> [io] Str {
   let api := str.join(["SQL / PERSISTENCE PATTERN (std.sql)", "", "  import \"std.sql\" as sql", "", "FUNCTIONS (call as sql.NAME):", "  sql.open(path)            -> [sql, fs_write] Result[Db, SqlError]   # Db is OPAQUE", "  sql.exec(db, sqlstr, ps)  -> [sql] Result[Int, SqlError]            # rows affected", "  sql.query(db, sqlstr, ps) -> [sql] Result[List[Row], SqlError]      # SELECT", "", "PARAMS — the SqlParam ADT. GLOBAL constructors, NO `sql.` prefix:", "  PStr(s) | PInt(n) | PFloat(f) | PBool(b) | PNull", "  Bind `?` placeholders in order: [PStr(title), PInt(id)]", "", "ROWS — TYPED RECORDS you declare; field names match SELECTed columns.", "  Annotate the result and read fields directly (r.title):", "    type Note = { id :: Int, title :: Str, body :: Str }", "    let rows :: Result[List[Note], SqlError] := sql.query(db, \"SELECT id, title, body FROM notes\", [])", "", "  SqlError = { message :: Str, code :: Str, detail :: Str }", "", "DO NOT USE (these DO NOT EXIST): sql.str() / sql.int() / sql.Value / VStr / VInt /", "  List[List[sql.Value]] / sql.Db / sql.float() / sql.null(). Use the ADT + typed rows above.", "", "Any fn calling sql.* needs the [sql] effect; sql.open also needs [fs_write]."], "\n")
-  let example := match io.read("src/guidelines/sql_crud.lex") {
+  let example := match io.read("guidelines/sql_crud.lex") {
     Ok(code) => str.join(["\n\nWORKED EXAMPLE — this exact file passes `lex check`; mirror it:\n```lex\n", code, "\n```"], ""),
     Err(_) => "",
   }

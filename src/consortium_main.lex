@@ -343,7 +343,7 @@ fn consortium_deliver_cmd() -> [env, io, sql, time, fs_read, fs_write, proc] Uni
             Ok(o) => {
               let __v := io.print(str.join(["[consortium] contract ", o.final.id, " ", cs.state_str(o.final.state), ": ", cs.verdict_words(o.verdict)], ""))
               let __q := match o.verdict {
-                Ambiguous(_) => io.print(str.join(["[consortium] QUESTION FOR THE FOUNDER (", cs.human_attr(), "): Is the recommended opportunity one you would fund? Answer with:\n  ANSWER=yes|no NOTE='...' bin/consortium-run.sh answer"], "")),
+                Unassessed(_) => io.print(str.join(["[consortium] QUESTION FOR THE FOUNDER (", cs.human_attr(), "): Is the recommended opportunity one you would fund? Answer with:\n  ANSWER=yes|no NOTE='...' bin/consortium-run.sh answer"], "")),
                 _ => (),
               }
               io.print(cs.status_text(db, time.now_ms()))

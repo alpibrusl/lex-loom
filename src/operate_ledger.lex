@@ -754,7 +754,7 @@ fn incidents_for(db :: conn.ConnDb, company_id :: Str) -> [sql] List[Str] {
 }
 
 # Hit rate per action class ON ONE COMPANY from verifier dispositions —
-# the number the tier gate consumes. Ambiguous counts as a miss,
+# the number the tier gate consumes. Unassessed counts as a miss,
 # structurally: only 'materialised' is in the numerator, everything
 # disposed is in the denominator. Company-scoped for the same reason as
 # class_sample_count (#134). COALESCE guards the same NULL-over-zero-

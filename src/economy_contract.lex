@@ -3,14 +3,14 @@
 #
 # Who assesses each criterion is decided by its attr: `human:<name>` is the
 # founder's to answer and gets NO evidence from loom -- lex-economy's
-# `evaluate` then returns Ambiguous, which holds the commitment until a
+# `evaluate` then returns Unassessed, which holds the commitment until a
 # person answers. Every other criterion is checkable and gets one evidence
 # item carrying loom's own grounded verdict for the sprint (acceptance
 # re-executed the sealed artifact, or did not) with its reason. The machine
 # never fills in the human's half.
 #
 # Payment follows docs/consortium-freeze.md: 100% Fulfilled, 50%
-# PartiallyFulfilled, 0% Rejected; Ambiguous is never settled here.
+# PartiallyFulfilled, 0% Rejected; Unassessed is never settled here.
 
 import "std.str" as str
 
@@ -122,14 +122,14 @@ fn verify_with_verdict(c :: contract.Contract, v :: contract.Verdict) -> Result[
   }
 }
 
-# A contract held Verified(Ambiguous) is re-verified once the human has
+# A contract held Verified(Unassessed) is re-verified once the human has
 # answered: back to Delivered (the delivery stands), then WasVerified with
 # the fuller evidence. Any other state is refused -- a settled or disputed
 # contract is not reopened by a late answer.
 fn reverify_after_answer(c :: contract.Contract, criteria :: List[request_bid.Criterion], items :: List[evidence.EvidenceItem]) -> Result[contract.Contract, Str] {
   match c.state {
-    Verified(Ambiguous(_)) => contract.transition(contract.with_state(c, contract.Delivered), contract.WasVerified(evidence.evaluate(criteria, items))),
-    _ => Err("only a contract held Ambiguous takes a human answer"),
+    Verified(Unassessed(_)) => contract.transition(contract.with_state(c, contract.Delivered), contract.WasVerified(evidence.evaluate(criteria, items))),
+    _ => Err("only a contract held Unassessed takes a human answer"),
   }
 }
 
@@ -138,7 +138,7 @@ fn paid_cents_for(price_cents :: Int, v :: contract.Verdict) -> Int {
     Fulfilled => price_cents,
     PartiallyFulfilled(_) => price_cents / 2,
     Rejected(_) => 0,
-    Ambiguous(_) => 0,
+    Unassessed(_) => 0,
   }
 }
 
@@ -163,13 +163,13 @@ fn verdict_of(c :: contract.Contract) -> Option[contract.Verdict] {
   }
 }
 
-# Settle a verified contract by the freeze rule; an Ambiguous verdict is
+# Settle a verified contract by the freeze rule; an Unassessed verdict is
 # left exactly as it is (commitment reserved) for a human to resolve.
 fn settle_if_decided(db :: conn.ConnDb, log :: tlog.Log, c :: contract.Contract, commitment_id :: Str) -> [sql, time] Result[contract.Contract, Str] {
   match verdict_of(c) {
     None => Err("not verified"),
     Some(v) => match v {
-      Ambiguous(_) => Ok(c),
+      Unassessed(_) => Ok(c),
       _ => settlement.settle_contract(db.handle, log, c, commitment_id, paid_cents_for(c.price.cents, v)),
     },
   }

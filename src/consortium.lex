@@ -8,7 +8,7 @@
 # awards, and opens the contract -- which reserves the price on SoftwareCo's
 # treasury through lex-economy's own invariants. `deliver` turns the report
 # gate's output into evidence, one item per checkable criterion; the human
-# criterion gets none, so the verdict is Ambiguous and the commitment is
+# criterion gets none, so the verdict is Unassessed and the commitment is
 # held. `answer` records the founder's answer, re-verifies, and settles by
 # the freeze rule (100 / 50 / 0). `status_text` shows what a reader needs to
 # reconstruct the run without the trail.
@@ -186,7 +186,7 @@ fn operable_request_description() -> Str {
 # through bin/check_launch_delivery.lex -- never a number the supplier wrote
 # down. The human half IS this contract: publishing, sending and creating
 # the paid product are real-world acts a model must not self-certify; each
-# holds Ambiguous until a person answers, as human:would-fund did.
+# holds Unassessed until a person answers, as human:would-fund did.
 fn run2_launch_criteria() -> List[request_bid.Criterion] {
   [crit("checkable:iteration-passed", "an iteration of the company ended with verdict passed"), crit("checkable:channel-plan-present", "an accepted community node: the dated channel plan, the per-channel norms check, the press kit"), crit("checkable:welcome-sequence-present", "an accepted lifecycle node: capture form, double opt-in, welcome sequence, unsubscribe"), crit("checkable:launch-runbook-present", "an accepted release_manager node: the go/no-go runbook whose items point at evidence"), crit("checkable:waitlist-threshold", "Stage 0: at least 100 waitlist signups or 15 would-pay answers, counted by the buyer in the product's own store"), crit("checkable:first-genuine-submission", "the product's own store records a first genuine submission"), crit("checkable:paying-customer", "Stage 2: at least one paying customer in the product's own store -- a settlement, not a claim"), crit(human_publish_attr(), "May the launch posts community drafted be published, as drafted?"), crit(human_send_attr(), "May the welcome sequence lifecycle drafted be sent, as drafted?"), crit(human_product_attr(), "Has a person created the paid product (Stripe or Lemon Squeezy) the finance role priced?")]
 }
@@ -318,7 +318,7 @@ fn verdict_json(v :: contract.Verdict) -> Str {
     Fulfilled => JObj([("kind", JStr("fulfilled")), ("names", JList([]))]),
     PartiallyFulfilled(ns) => JObj([("kind", JStr("partially-fulfilled")), ("names", names_json(ns))]),
     Rejected(ns) => JObj([("kind", JStr("rejected")), ("names", names_json(ns))]),
-    Ambiguous(ns) => JObj([("kind", JStr("ambiguous")), ("names", names_json(ns))]),
+    Unassessed(ns) => JObj([("kind", JStr("ambiguous")), ("names", names_json(ns))]),
   })
 }
 
@@ -337,7 +337,7 @@ fn verdict_of(s :: Str) -> Option[contract.Verdict] {
             Some(contract.Rejected(names_of(j)))
           } else {
             if kind == "ambiguous" {
-              Some(contract.Ambiguous(names_of(j)))
+              Some(contract.Unassessed(names_of(j)))
             } else {
               None
             }
@@ -380,7 +380,7 @@ fn state_of(s :: Str, vj :: Str) -> contract.ContractState {
         if s == "verified" {
           match verdict_of(vj) {
             Some(v) => contract.Verified(v),
-            None => contract.Verified(contract.Ambiguous([])),
+            None => contract.Verified(contract.Unassessed([])),
           }
         } else {
           if s == "settled" {
@@ -698,7 +698,7 @@ type Outcome = { verdict :: contract.Verdict, final :: contract.Contract }
 fn verdict_in(c :: contract.Contract) -> contract.Verdict {
   match c.state {
     Verified(v) => v,
-    _ => contract.Ambiguous([]),
+    _ => contract.Unassessed([]),
   }
 }
 
@@ -752,7 +752,7 @@ fn answer(db :: conn.ConnDb, log :: tlog.Log, contract_id :: Str, yes :: Bool, n
 }
 
 # A contract with several human criteria (launch-delivery/v1 has three) is
-# answered one criterion at a time; it stays Ambiguous until the last one and
+# answered one criterion at a time; it stays Unassessed until the last one and
 # settles then. An attr the contract does not list is refused rather than
 # recorded as a stray item nobody asked for.
 fn answer_attr(db :: conn.ConnDb, log :: tlog.Log, contract_id :: Str, attr :: Str, yes :: Bool, note :: Str, now_ms :: Int) -> [sql, time] Result[Outcome, Str] {
@@ -804,7 +804,7 @@ fn verdict_words(v :: contract.Verdict) -> Str {
     Fulfilled => "fulfilled",
     PartiallyFulfilled(ns) => str.concat("partially fulfilled; unmet: ", str.join(ns, ", ")),
     Rejected(ns) => str.concat("rejected; unmet: ", str.join(ns, ", ")),
-    Ambiguous(ns) => str.concat("ambiguous; awaiting: ", str.join(ns, ", ")),
+    Unassessed(ns) => str.concat("ambiguous; awaiting: ", str.join(ns, ", ")),
   }
 }
 

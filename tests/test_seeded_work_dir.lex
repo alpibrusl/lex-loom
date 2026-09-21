@@ -148,7 +148,7 @@ fn test_the_skeleton_goes_to_its_languages_work_dir() -> Result[Unit, Str] {
 
 # The agent has to be TOLD the files are there, or it writes its own anyway.
 fn test_the_goal_says_the_skeleton_is_on_disk() -> Result[Unit, Str] {
-  let g := company_runner.iteration_goal("Build the thing", 1, "", "main.lex\nlex.toml")
+  let g := company_runner.iteration_goal("Build the thing", 1, "", false, "main.lex\nlex.toml")
   if str.contains(g, "ALREADY HOLDS the vetted skeleton") {
     if str.contains(g, "do not invent your own") {
       Ok(())
@@ -162,7 +162,7 @@ fn test_the_goal_says_the_skeleton_is_on_disk() -> Result[Unit, Str] {
 
 # A carried product still wins: it is the later, verdict-passed truth.
 fn test_a_carried_product_outranks_the_skeleton() -> Result[Unit, Str] {
-  let g := company_runner.iteration_goal("Add a field", 3, "server.lex", "main.lex")
+  let g := company_runner.iteration_goal("Add a field", 3, "server.lex", true, "main.lex")
   if str.contains(g, "previous iteration's product") {
     Ok(())
   } else {

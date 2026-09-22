@@ -16,6 +16,8 @@ import "std.str" as str
 
 import "std.list" as list
 
+import "std.int" as int
+
 import "../src/orchestrator" as orch
 
 fn test_step_exhaustion_is_recognised() -> Result[Unit, Str] {
@@ -76,8 +78,49 @@ fn test_ordinary_output_is_not_infra() -> Result[Unit, Str] {
   }
 }
 
+# A provider 500 is not the agent getting it wrong, so it must not consume the
+# attempts reserved for getting it right (#532). formco4 iteration 23 built a
+# product that passes all of its own tests and the iteration was still recorded
+# as failed: QA spent its shared retry budget on provider errors, and iteration
+# 24's QA was then refused at dispatch because those retries had drained the
+# role's spend envelope.
+fn test_provider_faults_get_more_room_than_content_mistakes() -> Result[Unit, Str] {
+  if orch.max_provider_retries() > orch.max_node_retries() {
+    Ok(())
+  } else {
+    Err(str.join(["a provider fault must not be rationed like a content mistake: provider=", int.to_str(orch.max_provider_retries()), " content=", int.to_str(orch.max_node_retries())], ""))
+  }
+}
+
+# Retrying a 500 three times in immediate succession mostly reproduces the 500.
+fn test_the_first_provider_retry_actually_waits() -> Result[Unit, Str] {
+  if orch.provider_backoff_ms(1) > 0 {
+    Ok(())
+  } else {
+    Err("the first provider retry fires instantly, which usually just reproduces the fault")
+  }
+}
+
+fn test_provider_backoff_grows() -> Result[Unit, Str] {
+  if orch.provider_backoff_ms(3) > orch.provider_backoff_ms(1) {
+    Ok(())
+  } else {
+    Err("the backoff does not grow, so a persistent outage is hammered at a fixed rate")
+  }
+}
+
+# A node that already runs for tens of minutes must not have hours added by its
+# own backoff.
+fn test_provider_backoff_is_capped() -> Result[Unit, Str] {
+  if orch.provider_backoff_ms(1000) <= 30000 {
+    Ok(())
+  } else {
+    Err(str.concat("the backoff is unbounded, got ms=", int.to_str(orch.provider_backoff_ms(1000))))
+  }
+}
+
 fn suite() -> List[Result[Unit, Str]] {
-  [test_step_exhaustion_is_recognised(), test_it_is_recognised_when_not_alone(), test_a_real_answer_is_not_mistaken_for_exhaustion(), test_both_are_infra_but_stay_distinct(), test_ordinary_output_is_not_infra()]
+  [test_step_exhaustion_is_recognised(), test_it_is_recognised_when_not_alone(), test_a_real_answer_is_not_mistaken_for_exhaustion(), test_both_are_infra_but_stay_distinct(), test_ordinary_output_is_not_infra(), test_provider_faults_get_more_room_than_content_mistakes(), test_the_first_provider_retry_actually_waits(), test_provider_backoff_grows(), test_provider_backoff_is_capped()]
 }
 
 fn run_all() -> Unit {

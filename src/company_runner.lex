@@ -222,6 +222,33 @@ fn iteration_issue(db :: conn.ConnDb, store :: Str, company_id :: Str, k :: Int,
   }
 }
 
+# #521 slice 2: the build works FROM the contract. When this iteration runs a
+# backlog item that carries a typed issue, the issue's acceptance — exact
+# signatures and the examples the gate will run — is appended to the sprint
+# request, so the builder targets the definition of done instead of meeting
+# it afterwards as a failed verdict. The goal recorded for the iteration stays
+# the plain goal; only the builder's request carries the contract. No store,
+# no typed item, or a free_form issue: the request is the goal unchanged.
+fn with_issue_contract(db :: conn.ConnDb, company_id :: Str, k :: Int, goal :: Str) -> [sql, fs_write, time, random, crypto, env, proc] Str {
+  match issues.store_dir(company_id) {
+    None => goal,
+    Some(store) => match company.active_backlog_item(db, company_id) {
+      None => goal,
+      Some(item) => if str.is_empty(item.issue_id) {
+        goal
+      } else {
+        let contract := issues.contract_for(store, item.issue_id)
+        if str.is_empty(contract) {
+          goal
+        } else {
+          let __t := tr.trail(db, company_id, "issue_contract_attached", str.join(["{\"iter\":", int.to_str(k), ",\"issue_id\":\"", item.issue_id, "\"}"], ""))
+          str.concat(goal, contract)
+        }
+      },
+    },
+  }
+}
+
 # #521: after a PASSING iteration on a Lex path, the sealed build is published
 # into the company's store as the realization of the iteration's issue (every
 # op carries the issue in its Intent), and the issue's oracle is evaluated at
@@ -772,7 +799,8 @@ fn run_iterations_funded(db :: conn.ConnDb, ccfg :: company.CompanyCfg, k :: Int
   let trail_none :: Option[tlog.Log] := None
   let entry_ctx := { idx: k, last_verdict: prev_ctx.last_verdict, digest_summary: prev_ctx.digest_summary, accepted_count: prev_ctx.accepted_count, bounced_count: prev_ctx.bounced_count, spend_cents: prev_ctx.spend_cents }
   let exec_mode := defaults.resolved_exec_mode()
-  let scfg := { id: sprint_id, request: current_goal, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx), exec_mode: exec_mode, policy_isolation: ccfg.policy_isolation }
+  let request := with_issue_contract(db, ccfg.id, k, current_goal)
+  let scfg := { id: sprint_id, request: request, model: ccfg.model, db: db, api_calls_max: api_max, roster: cast.empty_roster(), trail_log: trail_none, review_transitions: false, depth: 0, iter_ctx: Some(entry_ctx), exec_mode: exec_mode, policy_isolation: ccfg.policy_isolation }
   let result := orch.run_sprint(scfg)
   let drained := tr.drain_sprint_jobs(db, sprint_id)
   let __pd := if drained > 0 {

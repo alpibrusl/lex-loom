@@ -54,11 +54,18 @@ import "std.int" as int
 # `lex check` prints the row the program declares, and that row is IN THE
 # SOURCE, reviewable, and the thing Lex's own effect system enforces. Granting
 # exactly it is narrower than any fixed list wide enough to be useful, and it
-# adapts as a product's imports change. A file that does not compile yields no
-# row and falls back to the old list, so a broken file still runs and still
-# reports its own error rather than an effects error on top.
+# adapts as a product's imports change.
+#
+# No row has two meanings, told apart by the check's exit status. A PURE file
+# checks clean and prints no row: it runs with an empty one. A file whose check
+# FAILS has an unknown row, and is not run at all: the check's own error is
+# returned with a named ##EFFECTS_UNKNOWN line. It used to fall back to a fixed
+# list without `sql` or `env`, so any time the check failed but `lex run` got
+# as far as the effect gate, a SQLite product came back as effect_not_allowed
+# -- an infrastructure gap recorded as the product being wrong (formco4
+# iteration 21, lex-loom#533).
 fn declared_effects_prelude(path :: Str) -> Str {
-  str.join(["EFFECTS=$(${LEX:-lex} check --strict '", path, "' 2>&1 | sed -n 's/^required effects: //p' | tr -d ' ' | head -1)\n", "[ -n \"$EFFECTS\" ] || EFFECTS='io,fs_read,fs_write,time,random,crypto,net'\n"], "")
+  str.join(["CHECK_OUT=$(${LEX:-lex} check --strict '", path, "' 2>&1); CHECK_RC=$?\n", "EFFECTS=$(printf '%s\\n' \"$CHECK_OUT\" | sed -n 's/^required effects: //p' | tr -d ' ' | head -1)\n", "if [ -z \"$EFFECTS\" ] && [ \"$CHECK_RC\" -ne 0 ]; then\n", "  printf '%s\\n' \"$CHECK_OUT\"\n", "  echo \"##EFFECTS_UNKNOWN: lex check failed on ", path, ", so the effects it needs are unknown and it was not run. Fix the error above: it is not an effects problem (lex-loom#533)\"\n", "  echo \"##EXIT:$CHECK_RC\"\n", "  exit 0\n", "fi\n"], "")
 }
 
 fn sanitize_sprint_id(sprint_id :: Str) -> Str {

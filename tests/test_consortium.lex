@@ -108,12 +108,12 @@ fn test_delivery_is_held_ambiguous_until_the_human_answers() -> [sql, fs_read, f
       Ok(_) => match cs.deliver(db, log, cs.research_contract_id(), all_ok(), 2000) {
         Err(e) => Err(e),
         Ok(o) => match o.verdict {
-          Ambiguous(names) => if names == [cs.human_attr()] and buyer(db).committed_cents == 40000 and buyer(db).balance_cents == 200000 {
+          Unassessed(names) => if names == [cs.human_attr()] and buyer(db).committed_cents == 40000 and buyer(db).balance_cents == 200000 {
             Ok(())
           } else {
             Err(str.join(["ambiguous, but on the wrong names or the money moved: ", str.join(names, ","), " committed=", int.to_str(buyer(db).committed_cents)], ""))
           },
-          _ => Err(str.concat("a delivery with the human criterion unanswered was not held Ambiguous: ", cs.state_str(o.final.state))),
+          _ => Err(str.concat("a delivery with the human criterion unanswered was not held Unassessed: ", cs.state_str(o.final.state))),
         },
       },
     }

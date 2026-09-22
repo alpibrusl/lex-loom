@@ -26,7 +26,7 @@ import "std.str" as str
 
 import "std.list" as list
 
-import "std.proc" as proc
+import "std.process" as proc
 
 import "std.int" as int
 

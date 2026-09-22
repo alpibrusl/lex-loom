@@ -162,8 +162,68 @@ fn test_create_realize_verify_round_trip() -> [io, proc, random, crypto, fs_writ
   }
 }
 
+# 3. #521 slice 2: the contract handed to the build. A typed issue renders
+# its exact signature; a free_form issue renders nothing until a human
+# approves a proposed acceptance (lex-lang #956, >= 0.11.68), after which the
+# approved one is the contract. The refine half skips on an older toolchain.
+fn toolchain_has_refine() -> [proc] Bool {
+  match proc.run("bash", ["-c", "${LEX:-lex} issue 2>&1"]) {
+    Err(_) => false,
+    Ok(r) => str.contains(str.concat(r.stdout, r.stderr), "propose"),
+  }
+}
+
+fn lex_line(args :: Str) -> [proc] Str {
+  match issues.run_lex(args) {
+    Err(m) => m,
+    Ok((out, _)) => match list.head(str.split(out, "\n")) {
+      Some(l) => str.trim(l),
+      None => "",
+    },
+  }
+}
+
+fn test_contract_is_handed_to_the_build() -> [io, proc, random, crypto] Result[Unit, Str] {
+  if not toolchain_has_issues() {
+    let __p := io.print("skip: toolchain on PATH has no `lex issue`")
+    Ok(())
+  } else {
+    let store := tmp_dir("contract")
+    let feature := { goal: "add gcd", theme: "math", kind: "feature", example: "", api: ["gcd:(a :: Int, b :: Int) -> Int:added"] }
+    match issues.create_issue(store, "co", feature) {
+      Err(m) => Err(str.concat("create typed_delta: ", m)),
+      Ok(fid) => {
+        let typed := issues.contract_for(store, fid)
+        match check(str.concat("typed issue hands over its exact signature: ", typed), str.contains(typed, "ADD exactly fn gcd(a :: Int, b :: Int) -> Int")) {
+          Err(e) => Err(e),
+          Ok(_) => match issues.create_issue(store, "co", issues.plain_proposal("make gcd total")) {
+            Err(m) => Err(str.concat("create free_form: ", m)),
+            Ok(ffid) => match check("an unrefined free_form issue adds nothing", str.is_empty(issues.contract_for(store, ffid))) {
+              Err(e) => Err(e),
+              Ok(_) => if not toolchain_has_refine() {
+                let __p := io.print("skip: toolchain has no `lex issue propose` (need lex-lang >= 0.11.68)")
+                Ok(())
+              } else {
+                let q := issues.sh_quote(store)
+                let pid := lex_line(str.join(["issue propose ", ffid, " --shape failing_example --example ", issues.sh_quote("gcd(0, 0) => 0"), " --by test --store ", q], ""))
+                let pending := issues.contract_for(store, ffid)
+                let __a := lex_line(str.join(["issue approve ", pid, " --by test --store ", q], ""))
+                let approved := issues.contract_for(store, ffid)
+                match check("a pending proposal is not yet the contract", str.is_empty(pending)) {
+                  Err(e) => Err(e),
+                  Ok(_) => check(str.concat("the approved proposal is the contract: ", approved), str.contains(approved, "gcd(0, 0) => 0") and str.contains(approved, "fails today")),
+                }
+              },
+            },
+          },
+        }
+      },
+    }
+  }
+}
+
 fn suite() -> [sql, fs_write, fs_read, time, random, crypto, vcs, io, env, proc] List[Result[Unit, Str]] {
-  [test_untyped_fallback_queues_the_goal(), test_create_realize_verify_round_trip()]
+  [test_untyped_fallback_queues_the_goal(), test_create_realize_verify_round_trip(), test_contract_is_handed_to_the_build()]
 }
 
 fn run_all() -> [io, random, sql, fs_read, fs_write, time, crypto, vcs, env, proc] Unit {
@@ -181,7 +241,7 @@ fn run_all() -> [io, random, sql, fs_read, fs_write, time, crypto, vcs, env, pro
     }
   })
   if failures == 0 {
-    io.print("ok   2 typed issue tests")
+    io.print("ok   3 typed issue tests")
   } else {
     let __force_fail := 1 / 0
     ()

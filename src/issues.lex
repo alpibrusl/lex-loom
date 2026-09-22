@@ -329,6 +329,94 @@ fn verify(store :: Str, issue_id :: Str) -> [proc] IssueVerdict {
   }
 }
 
+# ── The contract, handed to the build (#521 slice 2) ─────────────────────────
+# Slice 1 checked the issue only AFTER a passing iteration, so the builder
+# worked from the goal text and met the declared signatures and examples for
+# the first time as a failed verdict. This renders the acceptance the gate
+# will judge — the approved proposal's when the issue was refined from
+# free_form (lex-lang #956, `effective_acceptance`), else its own — as a
+# section appended to the sprint request. Only machine-checkable shapes add
+# anything: a free_form issue has no contract to hand over.
+fn acceptance_of(issue :: jv.Json) -> jv.Json {
+  match jv.get_field(issue, "effective_acceptance") {
+    Some(a) => a,
+    None => match jv.get_field(issue, "acceptance") {
+      Some(a) => a,
+      None => JObj([]),
+    },
+  }
+}
+
+fn api_line(entry :: jv.Json) -> Str {
+  let kind := field_str(entry, "kind")
+  let decl := str.join(["fn ", field_str(entry, "name"), field_str(entry, "signature")], "")
+  if kind == "removed" {
+    str.join(["  - REMOVE ", decl], "")
+  } else {
+    if kind == "changed" {
+      str.join(["  - CHANGE to exactly ", decl], "")
+    } else {
+      str.join(["  - ADD exactly ", decl], "")
+    }
+  }
+}
+
+fn bullet_lines(xs :: List[Str]) -> List[Str] {
+  list.map(xs, fn (x :: Str) -> Str {
+    str.concat("  - ", x)
+  })
+}
+
+fn render_contract(issue :: jv.Json) -> Str
+  examples {
+    render_contract(JObj([("issue_id", JStr("abcdef0123456789")), ("acceptance", JObj([("shape", JStr("typed_delta")), ("api", JList([JObj([("name", JStr("wc")), ("signature", JStr("(s :: Str) -> Int")), ("kind", JStr("added"))])])), ("examples", JList([JStr("wc(\"a b\") => 2")]))]))])) => "\n\nACCEPTANCE (typed issue abcdef012345 — after QA the pipeline proves this at head; it is the definition of done):\n  - ADD exactly fn wc(s :: Str) -> Int\nThese examples must hold (put them in the function's examples block):\n  - wc(\"a b\") => 2\n",
+    render_contract(JObj([("issue_id", JStr("abcdef0123456789")), ("acceptance", JObj([("shape", JStr("failing_example")), ("example", JStr("wc(\"\") => 0"))]))])) => "\n\nACCEPTANCE (typed issue abcdef012345 — after QA the pipeline proves this at head; it is the definition of done):\nThis example fails today and must pass:\n  - wc(\"\") => 0\n",
+    render_contract(JObj([("issue_id", JStr("abcdef0123456789")), ("acceptance", JObj([("shape", JStr("free_form"))])), ("effective_acceptance", JObj([("shape", JStr("failing_example")), ("example", JStr("f(1) => 1"))]))])) => "\n\nACCEPTANCE (typed issue abcdef012345 — after QA the pipeline proves this at head; it is the definition of done):\nThis example fails today and must pass:\n  - f(1) => 1\n",
+    render_contract(JObj([("issue_id", JStr("abcdef0123456789")), ("acceptance", JObj([("shape", JStr("free_form"))]))])) => ""
+  }
+{
+  let acc := acceptance_of(issue)
+  let shape := field_str(acc, "shape")
+  let head := str.join(["\n\nACCEPTANCE (typed issue ", str.slice(field_str(issue, "issue_id"), 0, 12), " — after QA the pipeline proves this at head; it is the definition of done):\n"], "")
+  if shape == "typed_delta" {
+    let apis := match jv.get_field(acc, "api") {
+      Some(v) => match jv.as_list(v) {
+        Some(xs) => list.map(xs, api_line),
+        None => [],
+      },
+      None => [],
+    }
+    let exs := field_strs(acc, "examples")
+    str.join([head, str.join(apis, "\n"), "\n", if list.is_empty(exs) {
+      ""
+    } else {
+      str.join(["These examples must hold (put them in the function's examples block):\n", str.join(bullet_lines(exs), "\n"), "\n"], "")
+    }], "")
+  } else {
+    if shape == "failing_example" {
+      str.join([head, "This example fails today and must pass:\n", str.join(bullet_lines([field_str(acc, "example")]), "\n"), "\n"], "")
+    } else {
+      ""
+    }
+  }
+}
+
+# `lex issue show` → the contract section, or "" when there is none to add
+# (free_form, unreadable issue, no toolchain).
+fn contract_for(store :: Str, issue_id :: Str) -> [proc] Str {
+  match run_lex(str.join(["issue show ", sh_quote(issue_id), " --store ", sh_quote(store)], "")) {
+    Err(_) => "",
+    Ok((out, ok)) => if not ok {
+      ""
+    } else {
+      match jv.parse(out) {
+        Err(_) => "",
+        Ok(issue) => render_contract(issue),
+      }
+    },
+  }
+}
+
 fn verdict_name(v :: IssueVerdict) -> Str
   examples {
     verdict_name(IssueVerified) => "verified",

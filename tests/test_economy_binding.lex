@@ -221,12 +221,12 @@ fn test_a_human_criterion_holds_the_contract_ambiguous() -> [sql, fs_read, fs_wr
       Ok(log) => match run_contract(db, log, "amb", [crit("checkable:report-present", "the report exists"), crit("human:would-fund", "would you fund it?")], true) {
         Err(e) => Err(e),
         Ok((c, buyer, supplier)) => match c.state {
-          Verified(Ambiguous(names)) => if names == ["human:would-fund"] and buyer.committed_cents == 40000 and supplier.balance_cents == 0 {
+          Verified(Unassessed(names)) => if names == ["human:would-fund"] and buyer.committed_cents == 40000 and supplier.balance_cents == 0 {
             Ok(())
           } else {
             Err(str.join(["ambiguous, but the funds moved or the wrong criterion was unassessed: committed=", int.to_str(buyer.committed_cents), " supplier=", int.to_str(supplier.balance_cents)], ""))
           },
-          _ => Err("a contract with an unanswered human criterion was not held Ambiguous -- the machine filled in the human's half"),
+          _ => Err("a contract with an unanswered human criterion was not held Unassessed -- the machine filled in the human's half"),
         },
       },
     }

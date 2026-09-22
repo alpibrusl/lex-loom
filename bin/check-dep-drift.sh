@@ -14,12 +14,17 @@
 # services at once, and a 120s timeout in the same package cost a full day of
 # debugging because nothing recorded that the dependency had changed at all.
 #
-# Reads the SHA actually installed into the package cache (not the remote HEAD),
-# so it reports what this build really used.
+# The default check reads the SHA installed into the package cache, so it
+# reports what this build really used. In CI the cache is freshly installed, so
+# that IS upstream. Locally it may not be: a stale cache and a stale lock agree,
+# and the check goes green in exactly the state it exists to catch (#536). So
+# `--update` -- whose whole job is to record the truth -- resolves the UPSTREAM
+# SHA with `git ls-remote`, never the cache, and `--remote` checks against it.
 #
 # Usage:
-#   bin/check-dep-drift.sh            # verify against deps.lock
-#   bin/check-dep-drift.sh --update   # accept current SHAs into deps.lock
+#   bin/check-dep-drift.sh            # verify deps.lock against the cache
+#   bin/check-dep-drift.sh --remote   # verify deps.lock against upstream
+#   bin/check-dep-drift.sh --update   # record upstream SHAs into deps.lock
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,9 +32,14 @@ LOCK="deps.lock"
 CACHE="${LEX_PACKAGES_DIR:-$HOME/.lex/packages}"
 MODE="${1:-check}"
 
-# Resolve the installed SHA for every git dependency named in lex.toml.
+# Every git dependency named in lex.toml, as "name url".
+deps() {
+  sed -n 's/^\([a-z0-9-]*\) *= *{ *git *= *"\([^"]*\)".*/\1 \2/p' lex.toml | sort
+}
+
+# Resolve the installed SHA for every git dependency.
 current() {
-  awk -F'=' '/^[a-z0-9-]+ *= *\{ *git *=/ { gsub(/ /,"",$1); print $1 }' lex.toml | sort | while read -r dep; do
+  deps | while read -r dep _; do
     d="$CACHE/$dep"
     if [ -d "$d/.git" ]; then
       printf '%s %s\n' "$dep" "$(git -C "$d" rev-parse HEAD 2>/dev/null || echo UNKNOWN)"
@@ -39,24 +49,54 @@ current() {
   done
 }
 
+# Resolve the upstream HEAD SHA for every git dependency (one round trip each).
+upstream() {
+  deps | while read -r dep url; do
+    sha="$(git ls-remote "$url" HEAD 2>/dev/null | awk '{print $1; exit}' || true)"
+    printf '%s %s\n' "$dep" "${sha:-UNRESOLVED}"
+  done
+}
+
 if [ "$MODE" = "--update" ]; then
-  current > "$LOCK"
-  echo "[dep-drift] wrote $(wc -l < "$LOCK" | tr -d ' ') dependency SHAs to $LOCK"
+  new="$(mktemp)"; upstream > "$new"
+  if grep -q ' UNRESOLVED$' "$new"; then
+    echo "[dep-drift] could not resolve upstream for:" >&2
+    grep ' UNRESOLVED$' "$new" | sed 's/^/  /' >&2
+    echo "[dep-drift] $LOCK left unchanged" >&2
+    rm -f "$new"; exit 1
+  fi
+  mv "$new" "$LOCK"
+  echo "[dep-drift] wrote $(wc -l < "$LOCK" | tr -d ' ') upstream dependency SHAs to $LOCK"
+  # The lock now names upstream; say where this machine's build is behind it,
+  # because a local green run on that cache did not test what was just locked.
+  cached="$(mktemp)"; current > "$cached"
+  stale="$(join "$LOCK" "$cached" | awk '$2 != $3 {print "  " $1 "  cache " substr($3,1,12) "  upstream " substr($2,1,12)}')"
+  rm -f "$cached"
+  if [ -n "$stale" ]; then
+    echo "[dep-drift] your package cache is behind the lock for:" >&2
+    echo "$stale" >&2
+    echo "[dep-drift] refresh it (lex pkg install --update) before trusting a local run" >&2
+  fi
   exit 0
 fi
+
+SOURCE="package cache ($CACHE)"
+[ "$MODE" = "--remote" ] && SOURCE="upstream (git ls-remote)"
 
 if [ ! -f "$LOCK" ]; then
   echo "[dep-drift] no $LOCK yet — create it with: bin/check-dep-drift.sh --update" >&2
   exit 1
 fi
 
-now="$(mktemp)"; current > "$now"
+now="$(mktemp)"
+if [ "$MODE" = "--remote" ]; then upstream > "$now"; else current > "$now"; fi
 if diff -q "$LOCK" "$now" >/dev/null 2>&1; then
-  echo "[dep-drift] all $(wc -l < "$LOCK" | tr -d ' ') git dependencies match $LOCK"
+  echo "[dep-drift] all $(wc -l < "$LOCK" | tr -d ' ') git dependencies match $LOCK (compared against the $SOURCE)"
+  [ "$MODE" = "--remote" ] || echo "[dep-drift] a stale cache agrees with a stale lock; --remote checks upstream"
   rm -f "$now"; exit 0
 fi
 
-echo "[dep-drift] a git dependency moved since $LOCK was recorded:" >&2
+echo "[dep-drift] a git dependency in the $SOURCE differs from $LOCK:" >&2
 echo >&2
 # Report each dep whose SHA differs, old -> new, so the change is named.
 while read -r dep sha; do

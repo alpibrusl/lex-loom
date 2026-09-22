@@ -10,7 +10,7 @@ jobs:
       - name: Install Lex
         run: |
           set -euo pipefail
-          V=0.11.50; T=x86_64-unknown-linux-gnu
+          V=0.11.69; T=x86_64-unknown-linux-gnu
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
@@ -78,7 +78,7 @@ jobs:
       - name: Install Lex
         run: |
           set -euo pipefail
-          V=0.11.50; T=x86_64-unknown-linux-gnu
+          V=0.11.69; T=x86_64-unknown-linux-gnu
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"
@@ -143,7 +143,7 @@ jobs:
       - name: Install Lex
         run: |
           set -euo pipefail
-          V=0.11.50; T=x86_64-unknown-linux-gnu
+          V=0.11.69; T=x86_64-unknown-linux-gnu
           curl -fsSL "https://github.com/alpibrusl/lex-lang/releases/download/v$V/lex-v$V-$T.tar.gz" -o /tmp/lex.tgz
           tar -xzf /tmp/lex.tgz -C /tmp
           echo "/tmp/lex-v$V-$T" >> "$GITHUB_PATH"

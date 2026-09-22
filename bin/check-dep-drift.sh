@@ -37,11 +37,29 @@ deps() {
   sed -n 's/^\([a-z0-9-]*\) *= *{ *git *= *"\([^"]*\)".*/\1 \2/p' lex.toml | sort
 }
 
+# The cache directory holding a dependency. Since lex 0.11.67 an unpinned
+# git dep is keyed by the commit it resolved to (`name@rev-<sha12>`), and a
+# pinned one by its ref (`name@tag-…`, `name@branch-…`); before that every
+# dep sat in a bare `name`. Both layouts exist on a machine that predates the
+# change, so: the bare directory when it is a checkout, else the most
+# recently written keyed one — which is what the current toolchain resolved.
+dep_dir() {
+  # Most recently written first (`ls -t` is mtime order): on a machine that
+  # has both layouts the bare directory is the stale leftover, so age — not
+  # the name — decides which one the current toolchain is actually using.
+  for d in $(ls -dt "$CACHE/$1" "$CACHE/$1"@* 2>/dev/null); do
+    if [ -d "$d/.git" ]; then
+      printf '%s\n' "$d"
+      return
+    fi
+  done
+}
+
 # Resolve the installed SHA for every git dependency.
 current() {
   deps | while read -r dep _; do
-    d="$CACHE/$dep"
-    if [ -d "$d/.git" ]; then
+    d="$(dep_dir "$dep")"
+    if [ -n "$d" ] && [ -d "$d/.git" ]; then
       printf '%s %s\n' "$dep" "$(git -C "$d" rev-parse HEAD 2>/dev/null || echo UNKNOWN)"
     else
       printf '%s %s\n' "$dep" "NOT_INSTALLED"
